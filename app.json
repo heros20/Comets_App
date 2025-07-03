@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "Comets Honfleur",
+    "slug": "les-comets-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/iconComets.jpeg",
+    "scheme": "lescometsapp",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.lescomets.app"
+    },
+    "android": {
+      "package": "com.lescomets.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/iconComets.jpeg",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/images/favicon.ico"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/iconComets.jpeg",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff"
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "dd9f34e7-245f-4200-9f52-e21709967fb5"
+      }
+    }
+  }
+}
