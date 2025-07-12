@@ -1,27 +1,34 @@
 import React, { useEffect, useState } from 'react'
 import { Image, SafeAreaView, ScrollView, Text, View } from 'react-native'
-import LogoutButton from '../../components/LogoutButton'; // <-- ajoute ça !
+import LogoutButton from '../../components/LogoutButton'
 import { supabase } from '../../supabase'
 
-const colors = ["#FFF4E6", "#E3F6FF", "#F1E9FF"] // Couleurs de fond selon phase
+const colors = ["#FFF4E6", "#E3F6FF", "#F1E9FF"]
 
 export default function ClassementScreen() {
   const [classement, setClassement] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   useEffect(() => {
     const fetchClassement = async () => {
-      const { data, error } = await supabase
-        .from('classement_normandie')
-        .select('data')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single()
+      try {
+        const { data, error } = await supabase
+          .from('classement_normandie')
+          .select('data')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single()
 
-      if (error || !data) {
-        console.error(error)
-      } else {
-        setClassement(data.data)
+        if (error) {
+          setErrorMsg("Erreur de récupération Supabase : " + error.message)
+        } else if (!data) {
+          setErrorMsg("Aucun classement trouvé")
+        } else {
+          setClassement(data.data)
+        }
+      } catch (e: any) {
+        setErrorMsg("Gros crash côté JS : " + (e?.message || e))
       }
       setLoading(false)
     }
@@ -30,6 +37,7 @@ export default function ClassementScreen() {
   }, [])
 
   if (loading) return <Text style={{ textAlign: "center", marginTop: 50 }}>Chargement…</Text>
+  if (errorMsg) return <Text style={{ color: "red", marginTop: 50, textAlign: "center" }}>{errorMsg}</Text>
   if (!classement) return <Text style={{ textAlign: "center", marginTop: 50 }}>Aucun classement trouvé</Text>
 
   return (
@@ -38,7 +46,6 @@ export default function ClassementScreen() {
         <LogoutButton />
       </View>
       <ScrollView contentContainerStyle={{ paddingVertical: 24, paddingHorizontal: 10 }}>
-        {/* Titre principal */}
         <Text style={{
           fontWeight: 'bold',
           fontSize: 28,
@@ -52,7 +59,6 @@ export default function ClassementScreen() {
         }}>
           Classement R1 Normandie
         </Text>
-        {/* Sous-titre année */}
         <Text style={{
           fontSize: 16,
           marginBottom: 18,
@@ -105,7 +111,6 @@ export default function ClassementScreen() {
                   elevation: idx === 0 ? 4 : 2,
                 }}
               >
-                {/* Classement */}
                 <Text style={{
                   width: 28,
                   fontWeight: idx === 0 ? "bold" : "600",
@@ -116,7 +121,6 @@ export default function ClassementScreen() {
                 }}>
                   {team.rank}
                 </Text>
-                {/* Logo */}
                 <Image
                   source={{ uri: team.logo }}
                   style={{

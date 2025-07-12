@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { FlatList, Linking, SafeAreaView, Text, TouchableOpacity, View } from 'react-native'
-import LogoutButton from '../../components/LogoutButton'; // <-- On importe le bouton
+import LogoutButton from '../../components/LogoutButton'
 import { supabase } from '../../supabase'
 
 type Player = {
@@ -18,18 +18,25 @@ type Player = {
 export default function JoueursScreen() {
   const [players, setPlayers] = useState<Player[]>([])
   const [loading, setLoading] = useState(true)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   useEffect(() => {
     const fetchPlayers = async () => {
-      const { data, error } = await supabase
-        .from('players')
-        .select('id, last_name, first_name, number, pos, bt, yob, player_link, team_abbr')
-        .order('number', { ascending: true })
+      try {
+        const { data, error } = await supabase
+          .from('players')
+          .select('id, last_name, first_name, number, pos, bt, yob, player_link, team_abbr')
+          .order('number', { ascending: true })
 
-      if (error) {
-        console.error(error)
-      } else {
-        setPlayers(data as Player[])
+        if (error) {
+          setErrorMsg("Erreur Supabase : " + error.message)
+        } else if (!data) {
+          setErrorMsg("Aucun joueur à afficher.")
+        } else {
+          setPlayers(data as Player[])
+        }
+      } catch (e: any) {
+        setErrorMsg("Gros crash côté JS : " + (e?.message || e))
       }
       setLoading(false)
     }
@@ -40,13 +47,16 @@ export default function JoueursScreen() {
   if (loading)
     return <Text style={{ textAlign: "center", marginTop: 60, fontSize: 18, color: "#999" }}>Chargement…</Text>
 
+  if (errorMsg)
+    return <Text style={{ textAlign: "center", marginTop: 60, fontSize: 16, color: "red" }}>
+      {errorMsg}</Text>
+
   if (!players.length)
     return <Text style={{ textAlign: "center", marginTop: 60, fontSize: 16, color: "#888" }}>
       Aucun joueur à afficher.</Text>
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#F5F7FB" }}>
-      {/* Header avec bouton Déconnexion */}
       <View style={{
         flexDirection: "row",
         justifyContent: "space-between",
@@ -86,18 +96,6 @@ export default function JoueursScreen() {
             borderColor: "#B6E4FC"
           }}>
             <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 5 }}>
-              <Text style={{
-                backgroundColor: "#2196F3",
-                color: "#fff",
-                fontWeight: "bold",
-                fontSize: 19,
-                borderRadius: 9,
-                width: 38, height: 38,
-                textAlign: "center", textAlignVertical: "center",
-                lineHeight: 38, marginRight: 12
-              }}>
-                {item.number}
-              </Text>
               <Text style={{
                 fontWeight: "bold",
                 fontSize: 18,
