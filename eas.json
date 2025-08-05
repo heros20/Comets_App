@@ -1,7 +1,7 @@
 {
   "cli": {
     "version": ">= 16.13.3",
-    "appVersionSource": "remote"
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
@@ -19,8 +19,12 @@
         "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY"
       }
     },
-    "production": {
-      "autoIncrement": true,
+    "release": {
+      "distribution": "store",
+      "android": {
+        "buildType": "app-bundle",
+        "gradleCommand": ":app:bundleRelease"
+      },
       "env": {
         "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
         "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY"
@@ -28,9 +32,9 @@
     }
   },
   "submit": {
-    "production": {
+    "release": {
       "android": {
-        "serviceAccountKeyPath": "./path/to/google-service-account.json"
+        "serviceAccountKeyPath": "./android/app/comets-honfleur-cb1e73453b42.json"
       }
     }
   }

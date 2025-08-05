@@ -37,3 +37,14 @@ yarn-error.*
 *.tsbuildinfo
 
 app-example
+
+# Expo Prebuild
+/android
+/ios
+
+#android
+app/*.jks
+app/*.keystore
+
+#secret
+comets-honfleur-firebase-adminsdk-fbsvc-3b48b34971.json

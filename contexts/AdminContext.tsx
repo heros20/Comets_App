@@ -1,60 +1,110 @@
-// contexts/AdminContext.tsx
-
 import * as SecureStore from 'expo-secure-store';
 import React, { createContext, useContext, useEffect, useState } from 'react';
 
 type AdminContextType = {
   isAdmin: boolean;
-  setIsAdmin: (value: boolean) => void;
+  isMember: boolean;
+  isLoading: boolean;
+  login: (email: string, password: string) => Promise<boolean>;
+  register: (email: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
-  checkAdmin: () => Promise<void>;
+  checkSession: () => Promise<void>;
 };
 
 const AdminContext = createContext<AdminContextType>({
   isAdmin: false,
-  setIsAdmin: () => {},
+  isMember: false,
+  isLoading: true,
+  login: async () => false,
+  register: async () => false,
   logout: async () => {},
-  checkAdmin: async () => {},
+  checkSession: async () => {},
 });
 
 export function AdminProvider({ children }: { children: React.ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isMember, setIsMember] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // On vérifie au premier render si l'utilisateur est admin (async/await dans useEffect)
   useEffect(() => {
-    (async () => {
-      await checkAdmin();
-    })();
-     
+    checkSession();
   }, []);
 
-  // Vérifie le flag stocké localement (admin connecté ?)
-  const checkAdmin = async () => {
-    const flag = await SecureStore.getItemAsync('admin_logged_in');
-    setIsAdmin(flag === 'yes');
+  const checkSession = async () => {
+    setIsLoading(true);
+    try {
+      const sessionStr = await SecureStore.getItemAsync('session');
+      if (sessionStr) {
+        const session = JSON.parse(sessionStr);
+        setIsAdmin(session.role === 'admin');
+        setIsMember(session.role === 'member');
+      } else {
+        setIsAdmin(false);
+        setIsMember(false);
+      }
+    } catch (e) {
+      setIsAdmin(false);
+      setIsMember(false);
+    }
+    setIsLoading(false);
   };
 
-  // Déconnecte l’admin
+  // PATCH : login par email !
+  const login = async (email: string, password: string) => {
+    try {
+      const res = await fetch('https://les-comets-honfleur.vercel.app/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+
+      // Attend une réponse du style : { email, id, role, success }
+      if (!data.success || !data.role) return false;
+
+      await SecureStore.setItemAsync('session', JSON.stringify({
+        email: data.email,
+        id: data.id,
+        role: data.role,
+      }));
+      setIsAdmin(data.role === 'admin');
+      setIsMember(data.role === 'member');
+      return true;
+    } catch (e) {
+      console.error('Login error:', e);
+      return false;
+    }
+  };
+
+  // PATCH : register par email aussi (si besoin)
+  const register = async (email: string, password: string) => {
+    try {
+      const res = await fetch('https://les-comets-honfleur.vercel.app/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error('Register error:', e);
+      return false;
+    }
+  };
+
   const logout = async () => {
-    await SecureStore.deleteItemAsync('admin_logged_in');
+    await SecureStore.deleteItemAsync('session');
     setIsAdmin(false);
+    setIsMember(false);
   };
 
   return (
-    <AdminContext.Provider value={{ isAdmin, setIsAdmin, logout, checkAdmin }}>
+    <AdminContext.Provider value={{ isAdmin, isMember, isLoading, login, register, logout, checkSession }}>
       {children}
     </AdminContext.Provider>
   );
 }
 
-// Hook pour utiliser le contexte
 export function useAdmin() {
   return useContext(AdminContext);
 }
-
-/*
-* Pour utiliser ce context :
-* - Dans ton layout racine (par ex RootLayout), entoure tout par <AdminProvider>...</AdminProvider>
-* - Dans tes pages : const { isAdmin, logout } = useAdmin();
-* - Affiche l’onglet Messages et le bouton Déconnexion seulement si isAdmin === true
-*/

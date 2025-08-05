@@ -3,7 +3,6 @@ import { useFonts } from 'expo-font';
 import { Stack } from "expo-router";
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
-
 import { useColorScheme } from '../hooks/useColorScheme';
 
 // 🟠 Import du provider admin !
@@ -16,19 +15,21 @@ export default function RootLayout() {
   });
 
   if (!loaded) {
-    return null;
+    return null; // On attend que les fonts soient chargées avant de rendre l'app
   }
 
   return (
-    // On englobe toute l'app avec le provider admin
     <AdminProvider>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack>
-          {/* Accueil */}
+        <Stack
+          screenOptions={{
+            headerShown: false,    // Désactive le header partout !
+            title: '',             // Titre vide, pas de breadcrumb
+          }}
+        >
           <Stack.Screen name="index" options={{ headerShown: false }} />
-          {/* Toutes les pages avec tabs */}
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          {/* Page 404 */}
+          <Stack.Screen name="(admin)" options={{ headerShown: false, title: "" }} />
           <Stack.Screen name="+not-found" />
         </Stack>
         <StatusBar style="auto" />

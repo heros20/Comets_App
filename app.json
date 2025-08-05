@@ -10,10 +10,11 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.lescomets.app"
+      "bundleIdentifier": "com.lescomets.app"  
     },
     "android": {
       "package": "com.lescomets.app",
+      "versionCode": 8,        
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/iconComets.png",
         "backgroundColor": "#ffffff"
@@ -36,7 +37,8 @@
           "backgroundColor": "#ffffff"
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true
