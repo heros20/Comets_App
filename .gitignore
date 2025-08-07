@@ -38,10 +38,6 @@ yarn-error.*
 
 app-example
 
-# Expo Prebuild
-/android
-/ios
-
 #android
 app/*.jks
 app/*.keystore

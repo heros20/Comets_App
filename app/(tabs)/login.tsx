@@ -1,6 +1,7 @@
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
+import { getApps, initializeApp } from 'firebase/app';
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
@@ -19,39 +20,81 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useAdmin } from '../../contexts/AdminContext';
-import { supabase } from '../../supabase'; // 👈 importe bien supabase ICI !
+import { supabase } from '../../supabase';
+import { firebaseConfig } from '../../utils/firebaseConfig'; // ajuste le chemin si nécessaire
 
 const logoComets = require("../../assets/images/iconComets.png");
 
-// --- UTILITAIRE : Demander la permission et envoyer le push token ---
-// --- UTILITAIRE : Demander la permission et envoyer le push token ---
-async function registerForPushNotificationsAsync(email: string, access_token?: string) {
-  let token;
-  if (Device.isDevice) {
-    const { status: existingStatus } = await Notifications.getPermissionsAsync();
-    let finalStatus = existingStatus;
-    if (existingStatus !== 'granted') {
-      const { status } = await Notifications.requestPermissionsAsync();
-      finalStatus = status;
+// --- UTILITAIRE DEBUG & PUSH ---
+async function registerForPushNotificationsAsync(
+  email: string,
+  access_token: string | null
+): Promise<string | null> {
+  let token: string | null = null;
+  console.log("🔥 registerForPushNotificationsAsync CALLED");
+
+  try {
+    if (Device.isDevice) {
+      console.log("📱 Appareil réel détecté");
+
+      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+      console.log("🔑 Permission actuelle :", existingStatus);
+
+      let finalStatus = existingStatus;
+      if (existingStatus !== 'granted') {
+        const { status } = await Notifications.requestPermissionsAsync();
+        finalStatus = status;
+        console.log("🔐 Permission demandée, résultat :", finalStatus);
+      }
+
+      if (finalStatus !== 'granted') {
+        console.log("❌ Permission refusée, abandon");
+        return null;
+      }
+
+      // 🔧 Sécurité : on réinitialise Firebase localement si nécessaire
+      if (getApps().length === 0) {
+        initializeApp(firebaseConfig);
+        console.log("✅ Firebase initialisé localement dans registerForPushNotificationsAsync");
+      } else {
+        console.log("ℹ️ Firebase déjà initialisé");
+      }
+
+      console.log("📤 Appel de getExpoPushTokenAsync()");
+      token = (await Notifications.getExpoPushTokenAsync()).data;
+      console.log("📬 ExpoPushToken obtenu :", token);
+
+      if (token && access_token) {
+        console.log("📝 Envoi du token au backend via PATCH");
+        const response = await fetch("https://les-comets-honfleur.vercel.app/api/me", {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${access_token}`,
+          },
+          body: JSON.stringify({ email, expo_push_token: token }),
+        });
+
+        const resJson = await response.json();
+        console.log("📥 Réponse PATCH /api/me :", resJson);
+
+        if (!response.ok) {
+          throw new Error(resJson?.error || "Erreur PATCH /api/me");
+        }
+      } else {
+        console.log("❌ Pas de token ou d'access_token, pas d'envoi");
+      }
+    } else {
+      console.log("🧪 Appareil non compatible push Expo");
     }
-    if (finalStatus !== 'granted') return null;
-    token = (await Notifications.getExpoPushTokenAsync()).data;
-    try {
-      // PATCH le token côté API avec le Bearer token !
-      await fetch("https://les-comets-honfleur.vercel.app/api/me", {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          ...(access_token ? { Authorization: `Bearer ${access_token}` } : {}),
-        },
-        body: JSON.stringify({ email, expo_push_token: token }),
-      });
-    } catch (err) {
-      console.warn("Erreur enregistrement push token", err);
-    }
+  } catch (err) {
+    console.error("🔥 Erreur enregistrement push token :", err);
+    throw err;
   }
+
   return token;
 }
+
 
 
 export default function LoginScreen() {
@@ -60,6 +103,7 @@ export default function LoginScreen() {
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [debug, setDebug] = useState(''); // Pour afficher des infos debug visibles
   const [shakeAnim] = useState(new Animated.Value(0));
   const router = useRouter();
   const { login } = useAdmin();
@@ -67,35 +111,48 @@ export default function LoginScreen() {
   const handleLogin = async () => {
     setLoading(true);
     setError('');
+    setDebug('');
     try {
-      // LOGIN sur route API pour poser le cookie
+      // LOGIN route API (cookie)
+      setDebug('Envoi du login au backend…');
       const res = await fetch('https://les-comets-honfleur.vercel.app/api/login', {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),
       });
       const data = await res.json();
+      setDebug(`Réponse login: ${JSON.stringify(data)}`);
       if (!res.ok) {
         setError(data.error || "Identifiants invalides. Essaie encore !");
+        setDebug(`Erreur login backend: ${data.error || res.status}`);
         shake();
       } else {
-        // LOGIN sur contexte Supabase (côté mobile)
-       const success = await login(email.trim(), password);
+        // LOGIN côté mobile (Supabase context)
+        setDebug('Connexion au contexte mobile…');
+        const success = await login(email.trim(), password);
         if (success) {
-          // Récupère le Bearer token mobile Supabase
           const { data: { session } } = await supabase.auth.getSession();
           const access_token = session?.access_token;
-          // 🔔 Demande permission et envoie le push token AVEC LE TOKEN AUTH
-          await registerForPushNotificationsAsync(email.trim(), access_token);
+          setDebug(`Connexion mobile OK. Token: ${access_token ? access_token.slice(0,12) + '...' : "Aucun"}`);
+          // 🔔 Envoi push token AVEC le token d’accès
+          try {
+            setDebug((d) => d + "\nEnregistrement du token push...");
+            await registerForPushNotificationsAsync(email.trim(), access_token);
+            setDebug((d) => d + "\nToken push enregistré !");
+          } catch (err) {
+            setDebug((d) => d + "\nErreur push: " + err?.message);
+          }
           router.replace("/");
         }
         else {
-          setError("Erreur lors de la connexion.");
+          setError("Erreur lors de la connexion mobile.");
+          setDebug("Echec login côté mobile.");
           shake();
         }
       }
     } catch (e) {
       setError("Erreur réseau. Réessaie plus tard.");
+      setDebug("Erreur réseau: " + e?.message);
       shake();
     }
     setLoading(false);
@@ -127,7 +184,6 @@ export default function LoginScreen() {
         </View>
         <View style={{ width: 38 }} />
       </View>
-
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -177,6 +233,12 @@ export default function LoginScreen() {
             {error ? (
               <Text style={styles.errorText}>{error}</Text>
             ) : null}
+            {/* Debug */}
+            {debug ? (
+              <Text style={{ fontSize: 12, color: "#6b4900", backgroundColor: "#fffbe7", padding: 6, borderRadius: 6, marginBottom: 7 }}>
+                {debug}
+              </Text>
+            ) : null}
             {/* Bouton login */}
             <TouchableOpacity
               style={[styles.loginBtn, loading && { opacity: 0.7 }]}
@@ -199,7 +261,6 @@ export default function LoginScreen() {
 }
 
 //styles
-
 
 const styles = StyleSheet.create({
   headerBox: {

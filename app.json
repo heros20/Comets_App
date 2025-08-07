@@ -10,16 +10,17 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.lescomets.app"  
+      "bundleIdentifier": "com.lescomets.app"
     },
     "android": {
       "package": "com.lescomets.app",
-      "versionCode": 8,        
+      "versionCode": 11,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/iconComets.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "googleServicesFile": "./android/app/google-services.json"
     },
     "web": {
       "bundler": "metro",
