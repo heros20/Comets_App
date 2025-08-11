@@ -10,18 +10,51 @@
       "env": {
         "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
         "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "EXPO_PUBLIC_API_URL": "http://10.0.2.2:3000",
+        "EXPO_DEBUG": "true"
+      }
+    },
+    "dev-device": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "EXPO_PUBLIC_API_URL": "http://192.168.1.42:3000",
         "EXPO_DEBUG": "true"
       }
     },
     "preview": {
+      "developmentClient": true,
       "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
       "env": {
         "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
         "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "EXPO_PUBLIC_API_URL": "http://192.168.1.42:3000",
         "EXPO_DEBUG": "true"
       }
     },
+    "production": {
+      "developmentClient": false,
+      "distribution": "store",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "EXPO_PUBLIC_API_URL": "https://les-comets-honfleur.vercel.app",
+        "EXPO_DEBUG": "false"
+      }
+    },
     "release": {
+      "developmentClient": false,
       "distribution": "store",
       "android": {
         "buildType": "app-bundle",
@@ -30,7 +63,8 @@
       "env": {
         "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
         "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-        "EXPO_DEBUG": "true"
+        "EXPO_PUBLIC_API_URL": "https://les-comets-honfleur.vercel.app",
+        "EXPO_DEBUG": "false"
       }
     },
     "dev-debug": {
@@ -42,6 +76,7 @@
       "env": {
         "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
         "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "EXPO_PUBLIC_API_URL": "http://10.0.2.2:3000",
         "EXPO_DEBUG": "true"
       }
     }

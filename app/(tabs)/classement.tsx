@@ -1,223 +1,258 @@
-import React, { useEffect, useState, useRef } from 'react';
+// app/screens/ClassementScreen.tsx
+"use client";
+
+import React, { useEffect, useRef, useState } from "react";
 import {
-  ScrollView,
   Image,
+  Platform,
   SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
   Text,
   TouchableOpacity,
   View,
-  StyleSheet,
-  StatusBar,
-  Platform,
-} from 'react-native';
-import Icon from 'react-native-vector-icons/Ionicons';
-import LogoutButton from '../../components/LogoutButton';
-import { supabase } from '../../supabase';
-import { useNavigation } from '@react-navigation/native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+} from "react-native";
+import Icon from "react-native-vector-icons/Ionicons";
+import { useNavigation } from "@react-navigation/native";
+import LogoutButton from "../../components/LogoutButton";
+import { supabase } from "../../supabase";
 
 const logoComets = require("../../assets/images/iconComets.png");
 
+// Rang précédent / variation
 function getPrevRank(team: any, tabIdx: number, classement: any) {
-  if (!classement.previous || !classement.previous.standings) return null;
+  if (!classement?.previous?.standings) return null;
   const prevTab = classement.previous.standings[tabIdx];
   if (!prevTab) return null;
-  const prev = prevTab.find(
-    (t: any) => t.abbreviation === team.abbreviation
-  );
+  const prev = prevTab.find((t: any) => t.abbreviation === team.abbreviation);
   return prev ? prev.rank : null;
 }
 function getRankChangeSymbol(prev: number | null, current: number) {
   if (!prev || prev === current) return null;
-  if (prev > current) return { symbol: "▲", color: "#19bf52" };
-  if (prev < current) return { symbol: "▼", color: "#e53935" };
+  if (prev > current) return { symbol: "▲", color: "#10B981" };
+  if (prev < current) return { symbol: "▼", color: "#EF4444" };
   return null;
 }
 
 export default function ClassementScreen() {
+  const navigation = useNavigation();
   const [classement, setClassement] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
-  const navigation = useNavigation();
-  const insets = useSafeAreaInsets();
+  const [activeTab, setActiveTab] = useState(0);
   const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
-    const fetchClassement = async () => {
+    (async () => {
       try {
         const { data, error } = await supabase
-          .from('classement_normandie')
-          .select('data')
-          .order('created_at', { ascending: false })
+          .from("classement_normandie")
+          .select("data")
+          .order("created_at", { ascending: false })
           .limit(1)
           .single();
-
-        if (error) {
-          setErrorMsg('Erreur de récupération Supabase : ' + error.message);
-        } else if (!data) {
-          setErrorMsg('Aucun classement trouvé');
-        } else {
-          setClassement(data.data);
-        }
+        if (error) setErrorMsg("Erreur de récupération Supabase : " + error.message);
+        else if (!data) setErrorMsg("Aucun classement trouvé");
+        else setClassement(data.data);
       } catch (e: any) {
-        setErrorMsg('Gros crash côté JS : ' + (e?.message || e));
+        setErrorMsg("Gros crash côté JS : " + (e?.message || e));
       }
       setLoading(false);
-    };
-
-    fetchClassement();
+    })();
   }, []);
 
   if (loading)
     return (
-      <Text style={{ textAlign: 'center', marginTop: 50, color: '#aaa', fontSize: 18 }}>
-        Chargement…
-      </Text>
+      <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014", alignItems: "center", justifyContent: "center" }}>
+        <StatusBar barStyle="light-content" />
+        <Text style={{ color: "#FF8200", fontWeight: "bold", fontSize: 18 }}>Chargement…</Text>
+      </SafeAreaView>
     );
   if (errorMsg)
     return (
-      <Text style={{ color: 'red', marginTop: 50, textAlign: 'center', fontSize: 16 }}>
-        {errorMsg}
-      </Text>
+      <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014", alignItems: "center", justifyContent: "center" }}>
+        <StatusBar barStyle="light-content" />
+        <Text style={{ color: "tomato", textAlign: "center", paddingHorizontal: 24 }}>{errorMsg}</Text>
+      </SafeAreaView>
     );
   if (!classement)
     return (
-      <Text style={{ textAlign: 'center', marginTop: 50, color: '#888', fontSize: 16 }}>
-        Aucun classement trouvé
-      </Text>
+      <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014", alignItems: "center", justifyContent: "center" }}>
+        <StatusBar barStyle="light-content" />
+        <Text style={{ color: "#9aa0ae" }}>Aucun classement trouvé</Text>
+      </SafeAreaView>
     );
 
+  const tabs: string[] = classement.tabs || [];
+  const tables: any[][] = classement.standings || [];
+  const currentRows = tables[activeTab] || [];
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#101017', paddingTop: insets.top }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
       <StatusBar barStyle="light-content" />
 
-      {/* === Logo Comets, même style que Joueurs === */}
-      <View style={styles.logoBox}>
-        <Image source={logoComets} style={styles.logo} resizeMode="contain" />
-      </View>
+      {/* HERO */}
+      <View
+        style={[
+          styles.hero,
+          { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26 },
+        ]}
+      >
+        <View style={styles.heroStripe} />
 
-      {/* Header : flèche + titre + bouton logout */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={{ marginRight: 14, padding: 4 }}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Icon name="chevron-back" size={28} color="#FF8200" />
-        </TouchableOpacity>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Classement R1 Normandie</Text>
+        <View style={styles.heroRow}>
+          <TouchableOpacity
+            onPress={() =>
+              // @ts-ignore
+              (navigation as any).canGoBack()
+                ? // @ts-ignore
+                  (navigation as any).goBack()
+                : // @ts-ignore
+                  (navigation as any).navigate("Home")
+            }
+            style={styles.backBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Icon name="chevron-back" size={24} color="#FF8200" />
+          </TouchableOpacity>
+
+          <Text style={styles.heroTitle}>Classement R1 Normandie</Text>
+          <LogoutButton />
         </View>
-        <LogoutButton />
+
+        <View style={styles.heroProfileRow}>
+          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroName}>Saison {classement.year}</Text>
+            <Text style={styles.heroSub}>Comets Honfleur — Standings officiels</Text>
+          </View>
+        </View>
+
+        {/* Onglets */}
+        <View style={styles.tabsRow}>
+          {(tabs.length ? tabs : ["Classement"]).map((t: string, i: number) => {
+            const active = i === activeTab;
+            return (
+              <TouchableOpacity
+                key={`${t}-${i}`}
+                onPress={() => {
+                  setActiveTab(i);
+                  scrollRef.current?.scrollTo({ y: 0, animated: true });
+                }}
+                style={[styles.tabBtn, active && styles.tabBtnActive]}
+                activeOpacity={0.9}
+              >
+                <Text style={[styles.tabBtnText, active && styles.tabBtnTextActive]} numberOfLines={1}>
+                  {t}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
 
-      {/* Saison (sous-titre) */}
-      <Text style={styles.seasonSubtitle}>Saison {classement.year}</Text>
-
-      {/* Contenu classement + Scroll to top */}
-      <View style={{ flex: 1, backgroundColor: "#18181C", borderTopLeftRadius: 36, borderTopRightRadius: 36 }}>
+      {/* TABLE ACTIVE – responsive (nom complet + chips) */}
+      <View style={{ flex: 1 }}>
         <ScrollView
           ref={scrollRef}
-          contentContainerStyle={{ paddingVertical: 10, paddingHorizontal: 10, paddingBottom: 70 }}
-          onScroll={e => {
-            const y = e.nativeEvent.contentOffset.y;
-            setShowScrollTop(y > 220);
-          }}
+          contentContainerStyle={{ padding: 14, paddingBottom: 40 }}
+          onScroll={(e) => setShowScrollTop(e.nativeEvent.contentOffset.y > 220)}
           scrollEventThrottle={16}
         >
-          {classement.standings.map((tabStandings: any[], tabIdx: number) => (
-            <View
-              key={tabIdx}
-              style={[
-                styles.tabCard,
-                {
-                  // PlayOff foncé pour le premier tableau
-                  backgroundColor: tabIdx === 0 ? "#262235" : 'rgba(255,244,230,0.96)',
-                  borderColor: '#FF8200',
-                },
-              ]}
-            >
-              <Text style={styles.tabTitle}>
-                {classement.tabs[tabIdx]}
-              </Text>
-              {tabStandings.map((team: any, idx: number) => {
-                const isFirst = idx === 0;
-                const isComets =
-                  team.name?.toLowerCase().includes('honfleur') ||
-                  team.abbreviation === 'HON';
+          <View style={styles.groupCard}>
+            {currentRows.map((team: any, idx: number) => {
+              const isComets =
+                team.name?.toLowerCase().includes("honfleur") || team.abbreviation === "HON";
+              const prevRank = getPrevRank(team, activeTab, classement);
+              const rankChange = getRankChangeSymbol(prevRank, team.rank);
 
-                const prevRank = getPrevRank(team, tabIdx, classement);
-                const rankChange = getRankChangeSymbol(prevRank, team.rank);
-
-                return (
-                  <View
-                    key={idx}
-                    style={[
-                      styles.teamRow,
-                      isFirst && styles.firstRow,
-                      isComets && styles.cometsRow,
-                    ]}
-                  >
-                    {/* Rang + Flèche */}
+              return (
+                <View
+                  key={`${team.abbreviation}-${idx}`}
+                  style={[
+                    styles.teamCard,
+                    isComets && styles.cometsRow,
+                    idx === 0 && styles.firstRow,
+                  ]}
+                >
+                  {/* Ligne 1 : Rang + Logo + Nom (wrap autorisé) */}
+                  <View style={styles.rowTop}>
                     <View style={styles.rankBox}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
-                        <Text
-                          style={[
-                            styles.rankText,
-                            isFirst && styles.rankTextFirst,
-                            isComets && styles.rankTextComets,
-                          ]}
-                        >
-                          {isFirst ? '🥇' : team.rank}
+                      <Text
+                        style={[
+                          styles.rankText,
+                          idx === 0 && styles.rankTextFirst,
+                          isComets && styles.rankTextComets,
+                        ]}
+                      >
+                        {idx === 0 ? "🥇" : team.rank}
+                      </Text>
+                      {!!rankChange && (
+                        <Text style={{ fontSize: 12, marginTop: 1, color: rankChange.color, fontWeight: "900" }}>
+                          {rankChange.symbol}
                         </Text>
-                        {rankChange && (
-                          <Text style={{ fontSize: 15, marginLeft: 3, color: rankChange.color, fontWeight: "bold" }}>
-                            {rankChange.symbol}
-                          </Text>
-                        )}
-                      </View>
+                      )}
                     </View>
-                    {/* Logo club */}
-                    <Image
-                      source={{ uri: team.logo }}
-                      style={[
-                        styles.logoTeam,
-                        isComets && styles.logoComets,
-                        isFirst && styles.logoFirst,
-                      ]}
-                    />
-                    {/* Nom club */}
-                    <View style={{ flex: 1, marginLeft: 2 }}>
+
+                    {!!team.logo && (
+                      <Image
+                        source={{ uri: team.logo }}
+                        style={[styles.teamLogo, isComets && styles.teamLogoComets]}
+                      />
+                    )}
+
+                    <View style={{ flex: 1, minWidth: 0 }}>
                       <Text
                         style={[
                           styles.teamName,
                           isComets && styles.teamNameComets,
-                          isFirst && styles.teamNameFirst,
+                          idx === 0 && styles.teamNameFirst,
                         ]}
-                        numberOfLines={2}
-                        ellipsizeMode="tail"
                       >
-                        {team.name}
-                        <Text style={styles.abbr}> ({team.abbreviation})</Text>
-                      </Text>
-                      <Text style={styles.stats}>
-                        V:{team.W} D:{team.L} T:{team.T} • PCT:{team.PCT} • GB:{team.GB}
+                        {/* pas de numberOfLines → nom COMPLET, wrap ok */}
+                        {team.name} <Text style={styles.abbr}>({team.abbreviation})</Text>
                       </Text>
                     </View>
                   </View>
-                );
-              })}
-            </View>
-          ))}
+
+                  {/* Ligne 2 : Chips stats (wrap en multi-ligne si étroit) */}
+                  <View style={styles.statsRow}>
+                    <View style={styles.chip}>
+                      <Text style={styles.chipLabel}>W</Text>
+                      <Text style={styles.chipValue}>{team.W}</Text>
+                    </View>
+                    <View style={styles.chip}>
+                      <Text style={styles.chipLabel}>L</Text>
+                      <Text style={styles.chipValue}>{team.L}</Text>
+                    </View>
+                    <View style={styles.chip}>
+                      <Text style={styles.chipLabel}>T</Text>
+                      <Text style={styles.chipValue}>{team.T}</Text>
+                    </View>
+                    <View style={styles.chipWide}>
+                      <Text style={styles.chipLabel}>PCT</Text>
+                      <Text style={styles.chipValue}>{team.PCT}</Text>
+                    </View>
+                    <View style={styles.chip}>
+                      <Text style={styles.chipLabel}>GB</Text>
+                      <Text style={styles.chipValue}>{team.GB}</Text>
+                    </View>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
         </ScrollView>
+
         {showScrollTop && (
           <TouchableOpacity
             style={styles.scrollTopBtn}
             onPress={() => scrollRef.current?.scrollTo({ y: 0, animated: true })}
-            activeOpacity={0.7}
+            activeOpacity={0.8}
           >
-            <Icon name="chevron-up" size={31} color="#FF8200" />
+            <Icon name="chevron-up" size={30} color="#FF8200" />
           </TouchableOpacity>
         )}
       </View>
@@ -226,162 +261,179 @@ export default function ClassementScreen() {
 }
 
 const styles = StyleSheet.create({
-  logoBox: {
+  // HERO
+  hero: {
+    backgroundColor: "#11131a",
+    borderBottomWidth: 1,
+    borderBottomColor: "#1f2230",
+    paddingBottom: 12,
+  },
+  heroStripe: {
+    position: "absolute",
+    right: -60,
+    top: -40,
+    width: 240,
+    height: 240,
+    borderRadius: 120,
+    backgroundColor: "rgba(255,130,0,0.10)",
+    transform: [{ rotate: "18deg" }],
+  },
+  heroRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    gap: 10,
+  },
+  backBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#1b1e27",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 12,
-    marginTop: 20,
-    backgroundColor: "#101017",
-    borderRadius: 30,
-    padding: 10,
+    borderWidth: 1,
+    borderColor: "#2a2f3d",
   },
-  logo: {
-    width: 88,
-    height: 88,
-    borderRadius: 24,
-    backgroundColor: "#101017",
-    borderWidth: 4,
+  heroTitle: {
+    flex: 1,
+    textAlign: "center",
+    color: "#FF8200",
+    fontSize: 20,
+    fontWeight: "800",
+    letterSpacing: 1.1,
+  },
+  heroProfileRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    gap: 12,
+  },
+  heroLogo: {
+    width: 56,
+    height: 56,
+    borderRadius: 14,
+    backgroundColor: "#fff",
+    borderWidth: 2,
     borderColor: "#FF8200",
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#101017',
-    borderBottomWidth: 1.5,
-    borderBottomColor: '#FF8200',
-    paddingTop: Platform.OS === "ios" ? 15 : 10,
-    paddingBottom: 10,
-    paddingHorizontal: 10,
-    marginBottom: 3,
+  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
+  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
+
+  // Tabs
+  tabsRow: {
+    flexDirection: "row",
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    gap: 8,
   },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#FF8200',
-    letterSpacing: 1.1,
-    textAlign: 'center',
+  tabBtn: {
+    flex: 1,
+    backgroundColor: "#141821",
+    borderWidth: 1,
+    borderColor: "#252a38",
+    paddingVertical: 10,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  seasonSubtitle: {
-    fontSize: 16,
-    marginTop: 2,
-    marginBottom: 14,
-    color: '#bbb',
-    textAlign: 'center',
-    letterSpacing: 1,
-    fontWeight: '600',
+  tabBtnActive: { backgroundColor: "#FF8200", borderColor: "#FF8200" },
+  tabBtnText: { color: "#FF8200", fontWeight: "900", fontSize: 13.5, letterSpacing: 0.3 },
+  tabBtnTextActive: { color: "#fff" },
+
+  // Group wrapper (glass)
+  groupCard: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderRadius: 18,
+    padding: 10,
+    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.22)",
   },
-  tabCard: {
-    marginBottom: 32,
-    borderRadius: 22,
-    borderWidth: 1.5,
-    padding: 15,
-    shadowColor: '#FF8200',
-    shadowOpacity: 0.10,
-    shadowRadius: 13,
-    elevation: 4,
-  },
-  tabTitle: {
-    fontWeight: 'bold',
-    fontSize: 19,
-    color: '#FF8200',
-    marginBottom: 12,
-    textAlign: 'center',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  teamRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
+
+  // Team card
+  teamCard: {
+    backgroundColor: "rgba(255,255,255,0.04)",
     borderRadius: 14,
     paddingVertical: 10,
-    paddingHorizontal: 8,
-    marginBottom: 9,
-    shadowColor: '#222',
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 1,
-    borderWidth: 0,
+    paddingHorizontal: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.06)",
   },
   firstRow: {
-    backgroundColor: '#FFD197',
-    elevation: 4,
-    shadowOpacity: 0.14,
+    borderColor: "rgba(255,130,0,0.45)",
+    backgroundColor: "rgba(255,130,0,0.09)",
   },
   cometsRow: {
-    borderWidth: 2,
-    borderColor: '#FF8200',
-    backgroundColor: '#FFFAF3',
-    shadowColor: '#FF8200',
-    shadowOpacity: 0.19,
-    elevation: 4,
+    borderColor: "#FF8200",
+    backgroundColor: "rgba(255,130,0,0.13)",
+    shadowColor: "#FF8200",
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 3,
   },
-  rankBox: {
-    width: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rankText: {
-    fontWeight: 'bold',
-    color: '#444',
-    fontSize: 18,
-    textAlign: 'center',
-    letterSpacing: 0.5,
-  },
-  rankTextFirst: {
-    color: '#B86900',
-    fontSize: 21,
-  },
-  rankTextComets: {
-    color: '#FF8200',
-    fontSize: 20,
-  },
-  logoTeam: {
-    width: 40,
-    height: 40,
-    borderRadius: 22,
-    marginRight: 8,
+
+  // Row top
+  rowTop: { flexDirection: "row", alignItems: "center", gap: 10, minWidth: 0 },
+  rankBox: { width: 40, alignItems: "center", justifyContent: "center" },
+  rankText: { color: "#cfd3db", fontWeight: "900", fontSize: 16, letterSpacing: 0.6 },
+  rankTextFirst: { color: "#f4b26a", fontSize: 18 },
+  rankTextComets: { color: "#FF8200" },
+  teamLogo: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: "#fff",
     borderWidth: 1.5,
-    borderColor: '#ECECEC',
-    backgroundColor: '#fff',
+    borderColor: "#e6e8ee",
   },
-  logoFirst: {
-    borderColor: '#FF8200',
-  },
-  logoComets: {
-    borderColor: '#FF8200',
-    borderWidth: 2.5,
-  },
+  teamLogoComets: { borderColor: "#FF8200" },
   teamName: {
-    fontWeight: 'bold',
-    fontSize: 15.5,
-    color: '#292E3A',
-    flexWrap: 'wrap',
-    maxWidth: 190,
-    marginBottom: 1,
+    color: "#eaeef7",
+    fontWeight: "900",
+    fontSize: 15,
+    flexWrap: "wrap", // ← affiche tout le nom
   },
-  teamNameFirst: {
-    color: '#B86900',
-    fontSize: 17,
+  teamNameFirst: { color: "#f4b26a" },
+  teamNameComets: { color: "#FF8200" },
+  abbr: { color: "#9aa0ae", fontWeight: "700", fontSize: 13 },
+
+  // Stats chips
+  statsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 8,
   },
-  teamNameComets: {
-    color: '#FF8200',
-    fontWeight: '900',
-    fontSize: 17,
+  chip: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(20,24,33,0.9)",
+    borderWidth: 1,
+    borderColor: "#252a38",
+    borderRadius: 10,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
   },
-  abbr: {
-    color: '#aaa',
-    fontWeight: 'normal',
-    fontSize: 14,
+  chipWide: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(20,24,33,0.9)",
+    borderWidth: 1,
+    borderColor: "#252a38",
+    borderRadius: 10,
+    paddingVertical: 5,
+    paddingHorizontal: 12,
   },
-  stats: {
-    color: '#444',
-    fontSize: 13,
-    marginTop: 1,
-    fontWeight: '600',
-    letterSpacing: 0.1,
-  },
+  chipLabel: { color: "#9aa0ae", fontWeight: "900", marginRight: 6, fontSize: 12.5, letterSpacing: 0.4 },
+  chipValue: { color: "#eaeef7", fontWeight: "900", fontSize: 13.5 },
+
+  // Scroll to top
   scrollTopBtn: {
     position: "absolute",
     right: 18,

@@ -1,4 +1,7 @@
-import React, { useEffect, useRef, useState } from "react";
+// app/screens/ActusScreen.tsx
+"use client";
+
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -14,7 +17,6 @@ import {
 import { useNavigation } from "@react-navigation/native";
 import Icon from "react-native-vector-icons/Ionicons";
 
-// Mets à jour le chemin selon ton arbo !
 const logoComets = require("../../assets/images/iconComets.png");
 
 type Article = {
@@ -25,27 +27,26 @@ type Article = {
   created_at: string;
 };
 
-const TEAM_CATEGORIES = ["12U", "15U", "Seniors"];
+const TEAM_CATEGORIES = ["12U", "15U", "Seniors"] as const;
 
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
-  return d.toLocaleDateString("fr-FR", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("fr-FR", { year: "numeric", month: "long", day: "numeric" });
 }
-
+function stripHtml(html: string) {
+  return (html || "").replace(/(<([^>]+)>)/gi, "").replace(/&nbsp;/g, " ");
+}
 function excerpt(text: string, n = 200) {
-  return text.length > n ? text.slice(0, n) + "…" : text;
+  const t = stripHtml(text).trim();
+  return t.length > n ? t.slice(0, n) + "…" : t;
 }
-
 function getYear(str: string) {
-  return new Date(str).getFullYear();
+  const y = new Date(str).getFullYear();
+  return Number.isFinite(y) ? y : new Date().getFullYear();
 }
-
-function getTeamCat(title: string) {
-  const norm = title.trim().toUpperCase();
+function getTeamCat(title: string): string {
+  const norm = (title || "").trim().toUpperCase();
   for (const cat of TEAM_CATEGORIES) {
     if (norm.startsWith(cat.toUpperCase())) return cat;
   }
@@ -57,10 +58,10 @@ export default function ActusScreen() {
   const [articles, setArticles] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Scroll to top logic
+  // Scroll to top
   const scrollRef = useRef<ScrollView>(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
-  const fadeAnim = useRef(new Animated.Value(0)).current; // For fade-in/out button
+  const fadeAnim = useRef(new Animated.Value(0)).current;
 
   // Filtres
   const [selectedSeason, setSelectedSeason] = useState<string>("ALL");
@@ -69,225 +70,217 @@ export default function ActusScreen() {
   const PAGE_SIZE = 20;
 
   useEffect(() => {
-    fetch("https://les-comets-honfleur.vercel.app/api/news")
-      .then((r) => r.json())
-      .then((data) => {
-        setArticles(
-          Array.isArray(data)
-            ? data.sort(
-                (a, b) =>
-                  new Date(b.created_at).getTime() -
-                  new Date(a.created_at).getTime()
-              )
-            : []
-        );
-      })
-      .finally(() => setLoading(false));
+    (async () => {
+      try {
+        const r = await fetch("https://les-comets-honfleur.vercel.app/api/news");
+        const data = await r.json();
+        const sorted = Array.isArray(data)
+          ? data.sort(
+              (a, b) =>
+                new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            )
+          : [];
+        setArticles(sorted);
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
-  // Gère la pagination & années
-  const allYears = Array.from(
-    new Set(articles.map((a) => getYear(a.created_at)))
-  ).sort((a, b) => b - a);
-  const thisYear = new Date().getFullYear();
-  const years = allYears.length ? allYears : [thisYear];
-  const seasonTabs = ["ALL", ...years.map(String)];
-  const categories = ["ALL", ...TEAM_CATEGORIES];
+  // Années & onglets
+  const years = useMemo(() => {
+    const coll = Array.from(new Set(articles.map((a) => getYear(a.created_at)))).sort((a, b) => b - a);
+    return coll.length ? coll : [new Date().getFullYear()];
+  }, [articles]);
+  const seasonTabs = useMemo(() => ["ALL", ...years.map(String)], [years]);
+  const categories = useMemo(() => ["ALL", ...TEAM_CATEGORIES, "Autres"], []);
 
   useEffect(() => {
     setPage(1);
     setSelectedCat("ALL");
   }, [selectedSeason]);
 
-  const catLabel = (cat: string) =>
-    cat === "ALL" ? "Toutes les catégories" : cat;
+  const catLabel = (cat: string) => (cat === "ALL" ? "Toutes les catégories" : cat);
 
-  // Filtrage des articles
-  const articlesToShow = articles.filter((a) => {
-    const cat = getTeamCat(a.title);
-    const yearStr = String(getYear(a.created_at));
-    if (selectedSeason === "ALL") {
-      if (selectedCat === "ALL") return true;
-      return cat === selectedCat;
-    }
-    if (selectedCat === "ALL") return yearStr === selectedSeason;
-    return yearStr === selectedSeason && cat === selectedCat;
-  });
+  // Filtrage
+  const filtered = useMemo(() => {
+    return articles.filter((a) => {
+      const cat = getTeamCat(a.title);
+      const y = String(getYear(a.created_at));
+      const seasonOk = selectedSeason === "ALL" ? true : y === selectedSeason;
+      const catOk = selectedCat === "ALL" ? true : cat === selectedCat;
+      return seasonOk && catOk;
+    });
+  }, [articles, selectedSeason, selectedCat]);
 
-  const pageCount = Math.ceil(articlesToShow.length / PAGE_SIZE);
+  const pageCount = Math.ceil(filtered.length / PAGE_SIZE) || 1;
   const start = (page - 1) * PAGE_SIZE;
   const end = page * PAGE_SIZE;
 
-  // Scroll handler for scroll to top btn
-  const handleScroll = (event) => {
+  // Scroll handler
+  const handleScroll = (event: any) => {
     const y = event.nativeEvent.contentOffset.y;
     if (y > 300 && !showScrollTop) {
       setShowScrollTop(true);
-      Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+      Animated.timing(fadeAnim, { toValue: 1, duration: 180, useNativeDriver: true }).start();
     } else if (y <= 300 && showScrollTop) {
       setShowScrollTop(false);
-      Animated.timing(fadeAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start();
+      Animated.timing(fadeAnim, { toValue: 0, duration: 180, useNativeDriver: true }).start();
     }
   };
 
-  const scrollToTop = () => {
-    scrollRef.current?.scrollTo({ y: 0, animated: true });
-  };
+  const scrollToTop = () => scrollRef.current?.scrollTo({ y: 0, animated: true });
+
+  const FilterTab = ({
+    label,
+    active,
+    onPress,
+  }: {
+    label: string;
+    active: boolean;
+    onPress: () => void;
+  }) => (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.9} style={[styles.tabBtn, active && styles.tabBtnActive]}>
+      <Text style={[styles.tabBtnText, active && styles.tabBtnTextActive]} numberOfLines={1}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
 
   return (
-    <View style={styles.container}>
+    <View style={{ flex: 1, backgroundColor: "#0f1014" }}>
       <StatusBar barStyle="light-content" />
 
-      {/* HEADER LOGO + TITRE + RETOUR */}
-      <View style={styles.headerRow}>
-        {/* Bouton retour */}
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backBtn}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Icon name="chevron-back" size={30} color="#FF8200" />
-        </TouchableOpacity>
+      {/* HERO */}
+      <View
+        style={[
+          styles.hero,
+          { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26 },
+        ]}
+      >
+        <View style={styles.heroStripe} />
 
-        {/* Logo + titres */}
-        <View style={{ flex: 1, alignItems: "center" }}>
-          <View style={styles.logoWrap}>
-            <Image
-              source={logoComets}
-              style={styles.logo}
-              resizeMode="contain"
-            />
+        {/* Ligne top : back + titre */}
+        <View style={styles.heroRow}>
+          <TouchableOpacity
+            onPress={() =>
+              // @ts-ignore
+              (navigation as any).canGoBack()
+                ? // @ts-ignore
+                  (navigation as any).goBack()
+                : // @ts-ignore
+                  (navigation as any).navigate("Home")
+            }
+            style={styles.backBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Icon name="chevron-back" size={24} color="#FF8200" />
+          </TouchableOpacity>
+
+          <Text style={styles.heroTitle}>Actualités des Comets</Text>
+
+          {/* espace symétrique */}
+          <View style={{ width: 36 }} />
+        </View>
+
+        {/* Logo + sous-titres */}
+        <View style={styles.heroProfileRow}>
+          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroName}>Toute l’actu du club</Text>
+            <Text style={styles.heroSub}>Saisons, catégories — filtre en un clin d’œil</Text>
           </View>
-          <Text style={styles.title}>Actualités des Comets</Text>
-          <Text style={styles.subTitle}>
-            Toute l’actualité du club, filtrée en un clin d’œil !
-          </Text>
         </View>
-        {/* (Un View vide pour occuper la même largeur que le bouton retour, centrer le titre) */}
-        <View style={{ width: 38 }} />
+
+        {/* Onglets Saisons */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={[styles.tabsRow, { paddingRight: 12 }]}
+        >
+          {seasonTabs.map((s) => (
+            <FilterTab
+              key={s}
+              label={s === "ALL" ? "Toutes les saisons" : `Saison ${s}`}
+              active={selectedSeason === s}
+              onPress={() => setSelectedSeason(s)}
+            />
+          ))}
+        </ScrollView>
+
+        {/* Onglets Catégories */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={[styles.tabsRow, { paddingTop: 8, paddingRight: 12 }]}
+        >
+          {categories.map((c) => (
+            <FilterTab key={c} label={catLabel(c)} active={selectedCat === c} onPress={() => setSelectedCat(c)} />
+          ))}
+        </ScrollView>
       </View>
 
-      {/* FILTRES : saisons + catégories */}
-      <View style={styles.filtersContainer}>
-        <View style={styles.filterRowWrap}>
-          {seasonTabs.map((tab) => (
-            <TouchableOpacity
-              key={tab}
-              style={[
-                styles.filterBtn,
-                selectedSeason === tab && styles.filterBtnActive,
-              ]}
-              onPress={() => setSelectedSeason(tab)}
-              activeOpacity={0.8}
-            >
-              <Text
-                style={[
-                  styles.filterBtnText,
-                  selectedSeason === tab && styles.filterBtnTextActive,
-                ]}
-              >
-                {tab === "ALL" ? "Toutes les saisons" : `Saison ${tab}`}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-        <View style={[styles.filterRowWrap, { marginTop: 6 }]}>
-          {categories.map((cat) => (
-            <TouchableOpacity
-              key={cat}
-              style={[
-                styles.filterBtn,
-                selectedCat === cat && styles.filterBtnActive,
-              ]}
-              onPress={() => setSelectedCat(cat)}
-              activeOpacity={0.8}
-            >
-              <Text
-                style={[
-                  styles.filterBtnText,
-                  selectedCat === cat && styles.filterBtnTextActive,
-                ]}
-              >
-                {catLabel(cat)}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-
-      {/* LISTE DES ARTICLES */}
+      {/* CONTENU */}
       {loading ? (
-        <View
-          style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
-        >
+        <View style={styles.loaderBox}>
           <ActivityIndicator size="large" color="#FF8200" />
-          <Text
-            style={{
-              color: "#FF8200",
-              marginTop: 18,
-              fontWeight: "bold",
-            }}
-          >
-            Chargement…
-          </Text>
+          <Text style={styles.loaderTxt}>Chargement…</Text>
         </View>
-      ) : articlesToShow.length === 0 ? (
-        <View
-          style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
-        >
-          <Text
-            style={{
-              color: "#FF8200",
-              fontWeight: "bold",
-              fontSize: 17,
-            }}
-          >
-            Aucun article à afficher (pour l’instant…)
-          </Text>
+      ) : filtered.length === 0 ? (
+        <View style={styles.loaderBox}>
+          <Text style={styles.emptyTxt}>Aucun article à afficher (pour l’instant…)</Text>
         </View>
       ) : (
         <ScrollView
           ref={scrollRef}
           onScroll={handleScroll}
           scrollEventThrottle={16}
-          contentContainerStyle={styles.articlesList}
+          contentContainerStyle={styles.listContainer}
         >
-          {articlesToShow.slice(start, end).map((a) => (
+          {filtered.slice(start, end).map((a) => (
             <TouchableOpacity
               key={a.id}
-              style={styles.card}
               activeOpacity={0.94}
-              onPress={() =>
-                navigation.navigate("ActuDetail", { articleId: a.id })
-              }
+              style={styles.card}
+              // @ts-ignore
+              onPress={() => (navigation as any).navigate("ActuDetail", { articleId: a.id })}
             >
-              {a.image_url && (
+              {a.image_url ? (
                 <Image source={{ uri: a.image_url }} style={styles.cardImage} />
+              ) : (
+                <View style={[styles.cardImage, { backgroundColor: "#141821" }]} />
               )}
-              <View style={styles.cardContent}>
-                <Text style={styles.cardCat}>{getTeamCat(a.title)}</Text>
+
+              <View style={styles.cardBody}>
+                <View style={styles.chipsRow}>
+                  <View style={styles.chip}>
+                    <Text style={styles.chipTxt}>{getTeamCat(a.title)}</Text>
+                  </View>
+                  <View style={[styles.chip, { backgroundColor: "rgba(255,255,255,0.06)", borderColor: "#2b3141" }]}>
+                    <Icon name="time-outline" size={13} color="#cfd3db" />
+                    <Text style={[styles.chipTxt, { color: "#cfd3db" }]}>{formatDate(a.created_at)}</Text>
+                  </View>
+                </View>
+
                 <Text style={styles.cardTitle}>{a.title}</Text>
-                <Text style={styles.cardDate}>{formatDate(a.created_at)}</Text>
-                <Text style={styles.cardExcerpt}>
-                  {excerpt(a.content, 160)}
-                </Text>
-                <View style={styles.readBtnWrap}>
-                  <Text style={styles.readBtn}>Lire l’article</Text>
+                <Text style={styles.cardExcerpt}>{excerpt(a.content, 180)}</Text>
+
+                <View style={styles.readRow}>
+                  <Text style={styles.readBtnTxt}>Lire l’article</Text>
+                  <Icon name="chevron-forward" size={18} color="#fff" />
                 </View>
               </View>
             </TouchableOpacity>
           ))}
 
-          {/* PAGINATION */}
+          {/* Pagination */}
           {pageCount > 1 && (
             <View style={styles.pagination}>
               <TouchableOpacity
                 onPress={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page === 1}
-                style={[
-                  styles.pagBtn,
-                  page === 1 && styles.pagBtnDisabled,
-                ]}
+                style={[styles.pagBtn, page === 1 && styles.pagBtnDisabled]}
+                activeOpacity={0.85}
               >
                 <Text style={styles.pagBtnTxt}>Précédent</Text>
               </TouchableOpacity>
@@ -297,10 +290,8 @@ export default function ActusScreen() {
               <TouchableOpacity
                 onPress={() => setPage((p) => Math.min(pageCount, p + 1))}
                 disabled={page === pageCount}
-                style={[
-                  styles.pagBtn,
-                  page === pageCount && styles.pagBtnDisabled,
-                ]}
+                style={[styles.pagBtn, page === pageCount && styles.pagBtnDisabled]}
+                activeOpacity={0.85}
               >
                 <Text style={styles.pagBtnTxt}>Suivant</Text>
               </TouchableOpacity>
@@ -309,20 +300,10 @@ export default function ActusScreen() {
         </ScrollView>
       )}
 
-      {/* SCROLL TO TOP BUTTON */}
-      <Animated.View
-        pointerEvents={showScrollTop ? "auto" : "none"}
-        style={[
-          styles.scrollTopBtnWrap,
-          { opacity: fadeAnim },
-        ]}
-      >
-        <TouchableOpacity
-          style={styles.scrollTopBtn}
-          onPress={scrollToTop}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.scrollTopBtnTxt}> ↑ </Text>
+      {/* Scroll-to-top */}
+      <Animated.View pointerEvents={showScrollTop ? "auto" : "none"} style={[styles.scrollTopWrap, { opacity: fadeAnim }]}>
+        <TouchableOpacity style={styles.scrollTopBtn} onPress={scrollToTop} activeOpacity={0.85}>
+          <Icon name="chevron-up" size={26} color="#fff" />
         </TouchableOpacity>
       </Animated.View>
     </View>
@@ -330,235 +311,186 @@ export default function ActusScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#18181C",
-    paddingTop: Platform.OS === "ios" ? 20 : 0,
+  // HERO
+  hero: {
+    backgroundColor: "#11131a",
+    borderBottomWidth: 1,
+    borderBottomColor: "#1f2230",
+    paddingBottom: 10,
   },
-  header: {
-    alignItems: "center",
-    paddingTop: 44,
-    paddingBottom: 20,
-    marginBottom: 12,
-    backgroundColor: "transparent",
+  heroStripe: {
+    position: "absolute",
+    right: -60,
+    top: -40,
+    width: 240,
+    height: 240,
+    borderRadius: 120,
+    backgroundColor: "rgba(255,130,0,0.10)",
+    transform: [{ rotate: "18deg" }],
   },
-  headerRow: {
+  heroRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingTop: 34,
-    paddingBottom: 8,
-    backgroundColor: "transparent",
-    marginBottom: 6,
-    paddingHorizontal: 2,
+    paddingHorizontal: 12,
+    gap: 10,
   },
   backBtn: {
-    padding: 4,
-    paddingRight: 2,
-    marginLeft: 2,
-    zIndex: 2,
-  },
-  logoWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#1b1e27",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "#2a2f3d",
   },
-  logo: {
-    width: 75,
-    height: 75,
-    borderRadius: 18,
-    borderWidth: 2.1,
-    borderColor: "#FF8200",
-    backgroundColor: "#fff",
-  },
-  title: {
-    fontSize: 29,
-    fontWeight: "bold",
+  heroTitle: {
+    flex: 1,
+    textAlign: "center",
     color: "#FF8200",
-    letterSpacing: 1,
-    textAlign: "center",
-    textShadowColor: "#FFE3B7",
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 4,
-    marginBottom: 2,
+    fontSize: 20,
+    fontWeight: "800",
+    letterSpacing: 1.1,
   },
-  subTitle: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#FFD197",
-    letterSpacing: 0.7,
-    textAlign: "center",
-    marginBottom: 8,
-  },
-  filtersContainer: {
-    paddingHorizontal: 12,
-    marginBottom: 12,
-    marginTop: 4,
-  },
-  filterRowWrap: {
+  heroProfileRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 9,
     alignItems: "center",
-    justifyContent: "flex-start",
-    minHeight: 46,
-    marginBottom: 0,
-    rowGap: 7,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    gap: 12,
   },
-  filterBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    backgroundColor: "#18181C",
-    borderRadius: 20,
+  heroLogo: {
+    width: 56,
+    height: 56,
+    borderRadius: 14,
+    backgroundColor: "#fff",
     borderWidth: 2,
     borderColor: "#FF8200",
-    marginRight: 0,
-    marginBottom: 0,
-    minWidth: 50,
-    marginTop: 5,
   },
-  filterBtnActive: {
-    backgroundColor: "#FF8200",
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.17,
-    shadowRadius: 8,
-    elevation: 2,
+  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
+  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
+
+  // Tabs (recyclés style Comets)
+  tabsRow: {
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingTop: 10,
   },
-  filterBtnText: {
-    color: "#FF8200",
-    fontWeight: "bold",
-    fontSize: 15,
-  },
-  filterBtnTextActive: {
-    color: "#fff",
-  },
-  articlesList: {
-    paddingHorizontal: 10,
-    paddingBottom: 35,
+  tabBtn: {
+    backgroundColor: "#141821",
+    borderWidth: 1,
+    borderColor: "#252a38",
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderRadius: 12,
     alignItems: "center",
+    justifyContent: "center",
   },
+  tabBtnActive: { backgroundColor: "#FF8200", borderColor: "#FF8200" },
+  tabBtnText: { color: "#FF8200", fontWeight: "900", fontSize: 13.5, letterSpacing: 0.3 },
+  tabBtnTextActive: { color: "#fff" },
+
+  // Loader / Empty
+  loaderBox: { flex: 1, alignItems: "center", justifyContent: "center" },
+  loaderTxt: { color: "#FF8200", marginTop: 14, fontWeight: "bold", fontSize: 16 },
+  emptyTxt: { color: "#9aa0ae", fontSize: 15, textAlign: "center" },
+
+  // List
+  listContainer: { paddingHorizontal: 12, paddingBottom: 38 },
+
+  // Card (glass)
   card: {
-    backgroundColor: "#fff",
+    backgroundColor: "rgba(255,255,255,0.06)",
     borderRadius: 18,
-    marginBottom: 18,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.22)",
     overflow: "hidden",
-    borderWidth: 2,
-    borderColor: "#FFD197",
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.07,
-    shadowRadius: 13,
-    elevation: 4,
-    width: "100%",
-    maxWidth: 420,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 3,
   },
   cardImage: {
     width: "100%",
-    height: 150,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    backgroundColor: "#FFF4E6",
+    height: 170,
+    backgroundColor: "#141821",
   },
-  cardContent: {
-    padding: 15,
-    paddingTop: 10,
-    gap: 2,
+  cardBody: { padding: 14 },
+  chipsRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
+  chip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(255,130,0,0.12)",
+    borderColor: "rgba(255,130,0,0.35)",
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
-  cardCat: {
-    fontSize: 13,
-    color: "#FF8200",
-    fontWeight: "bold",
-    marginBottom: 2,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
+  chipTxt: { color: "#FF8200", fontWeight: "900", fontSize: 12.5 },
+
   cardTitle: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: "#191410",
-    marginBottom: 1,
-    lineHeight: 24,
+    color: "#eaeef7",
+    fontWeight: "900",
+    fontSize: 18,
+    lineHeight: 22,
+    marginBottom: 6,
   },
-  cardDate: {
-    fontSize: 13,
-    color: "#B06E18",
-    fontWeight: "600",
-    marginBottom: 5,
-  },
-  cardExcerpt: {
-    color: "#1A2636",
-    fontSize: 15,
-    lineHeight: 20,
-    marginBottom: 8,
-  },
-  readBtnWrap: {
-    marginTop: 6,
-    alignItems: "flex-start",
-  },
-  readBtn: {
+  cardExcerpt: { color: "#cfd3db", fontSize: 14.5, lineHeight: 20 },
+
+  readRow: {
+    marginTop: 12,
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
     backgroundColor: "#FF8200",
-    color: "#fff",
-    paddingHorizontal: 16,
-    paddingVertical: 7,
-    borderRadius: 13,
-    fontWeight: "bold",
-    fontSize: 15,
-    overflow: "hidden",
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.09,
-    shadowRadius: 8,
-    elevation: 2,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
+  readBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 13.5 },
+
+  // Pagination
   pagination: {
     flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",
-    marginTop: 18,
     gap: 12,
+    marginTop: 12,
   },
   pagBtn: {
-    backgroundColor: "#FFD197",
-    borderRadius: 14,
-    paddingHorizontal: 17,
+    backgroundColor: "#FF8200",
+    borderRadius: 12,
+    paddingHorizontal: 16,
     paddingVertical: 9,
-    minWidth: 80,
-    alignItems: "center",
   },
-  pagBtnDisabled: {
-    opacity: 0.5,
-  },
-  pagBtnTxt: {
-    color: "#FF8200",
-    fontWeight: "bold",
-    fontSize: 15,
-  },
-  pagIndicator: {
-    fontWeight: "bold",
-    color: "#FF8200",
-    fontSize: 15,
-  },
-  // -------- Scroll to top ---------
-  scrollTopBtnWrap: {
+  pagBtnDisabled: { opacity: 0.5 },
+  pagBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 14 },
+  pagIndicator: { color: "#FF8200", fontWeight: "900", fontSize: 14 },
+
+  // Scroll to top
+  scrollTopWrap: {
     position: "absolute",
-    bottom: 30,
-    right: 20,
-    zIndex: 99,
-    shadowColor: "#000",
-    shadowOffset: { width: 1, height: 2 },
-    shadowOpacity: 0.22,
-    shadowRadius: 4,
-    elevation: 8,
+    right: 18,
+    bottom: 25,
+    zIndex: 50,
   },
   scrollTopBtn: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     backgroundColor: "#FF8200",
-    borderRadius: 30,
-    paddingHorizontal: 20,
-    paddingVertical: 13,
     alignItems: "center",
     justifyContent: "center",
-  },
-  scrollTopBtnTxt: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 18,
-    letterSpacing: 1,
+    shadowColor: "#FF8200",
+    shadowOpacity: 0.17,
+    shadowRadius: 8,
+    elevation: 3,
+    borderWidth: 2,
+    borderColor: "#FF8200",
   },
 });

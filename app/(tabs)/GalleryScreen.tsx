@@ -1,12 +1,16 @@
+// app/screens/GalleryScreen.tsx
+"use client";
+
 import { useNavigation } from "@react-navigation/native";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Dimensions,
   Image,
   Modal,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   Platform,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -15,379 +19,410 @@ import {
   View,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
-const logoComets = require("../../assets/images/iconComets.png");
 
+const logoComets = require("../../assets/images/iconComets.png");
 const GALLERY_API = "https://les-comets-honfleur.vercel.app/api/gallery";
 
+type GalleryItem = {
+  id?: number | string;
+  url: string;
+  legend?: string | null;
+  created_at?: string;
+};
+
 export default function GalleryScreen() {
-  const [gallery, setGallery] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [modalImgIdx, setModalImgIdx] = useState<number | null>(null);
-  const [showAll, setShowAll] = useState(false);
   const navigation = useNavigation();
+  const [gallery, setGallery] = useState<GalleryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Voir plus / pagination simple
+  const [showAll, setShowAll] = useState(false);
+
+  // Modal & swipe
+  const [modalIdx, setModalIdx] = useState<number | null>(null);
+  const pagerRef = useRef<ScrollView>(null);
+
+  // Grille responsive
+  const window = Dimensions.get("window");
+  const colCount = window.width >= 680 ? 3 : 2;
+  const gap = 10;
+  const horizontalPadding = 12 * 2; // listContainer paddingHorizontal = 12
+  const cardW = useMemo(
+    () => (window.width - horizontalPadding - gap * (colCount - 1)) / colCount,
+    [window.width, colCount]
+  );
+  const cardH = Math.round(cardW * 1.15);
 
   useEffect(() => {
-    fetch(GALLERY_API)
-      .then(res => res.json())
-      .then(data => setGallery(Array.isArray(data) ? data : []))
-      .finally(() => setLoading(false));
+    (async () => {
+      try {
+        const r = await fetch(GALLERY_API);
+        const data = await r.json();
+        setGallery(Array.isArray(data) ? data : []);
+      } catch (e) {
+        setGallery([]);
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
-  const windowWidth = Dimensions.get("window").width;
-  const colCount = windowWidth > 600 ? 3 : 2;
-  const imgWidth = (windowWidth - 48 - (colCount - 1) * 10) / colCount;
+  // Liste visible
+  const visible = showAll ? gallery : gallery.slice(0, 12);
+
+  // Helpers modal
+  const openModalAt = (idx: number) => {
+    setModalIdx(idx);
+    // léger délai pour laisser le Modal s'ouvrir avant le scroll initial
+    setTimeout(() => {
+      pagerRef.current?.scrollTo({ x: idx * window.width, animated: false });
+    }, 10);
+  };
+  const onMomentumEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const page = Math.round(e.nativeEvent.contentOffset.x / window.width);
+    setModalIdx(page);
+  };
+  const goPrev = () => {
+    if (modalIdx === null) return;
+    const next = Math.max(0, modalIdx - 1);
+    pagerRef.current?.scrollTo({ x: next * window.width, animated: true });
+    setModalIdx(next);
+  };
+  const goNext = () => {
+    if (modalIdx === null) return;
+    const next = Math.min(gallery.length - 1, modalIdx + 1);
+    pagerRef.current?.scrollTo({ x: next * window.width, animated: true });
+    setModalIdx(next);
+  };
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.bgWrapper}>
+      <View style={{ flex: 1, backgroundColor: "#0f1014", alignItems: "center", justifyContent: "center" }}>
         <StatusBar barStyle="light-content" />
-        <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-          <ActivityIndicator size="large" color="#FF8200" />
-          <Text style={{ color: "#FF8200", fontWeight: "bold", marginTop: 22 }}>Chargement…</Text>
-        </View>
-      </SafeAreaView>
+        <ActivityIndicator size="large" color="#FF8200" />
+        <Text style={{ color: "#FF8200", marginTop: 16, fontWeight: "bold" }}>Chargement…</Text>
+      </View>
     );
   }
 
-  if (!gallery.length) {
-    return (
-      <SafeAreaView style={styles.bgWrapper}>
-        <StatusBar barStyle="light-content" />
-        {/* Header */}
-        <Header navigation={navigation} />
-        <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-          <Text style={{ color: "#aaa", fontSize: 20, fontWeight: "bold", marginTop: 30 }}>
+  return (
+    <View style={{ flex: 1, backgroundColor: "#0f1014" }}>
+      <StatusBar barStyle="light-content" />
+
+      {/* HERO (mêmes codes que ActusScreen) */}
+      <View
+        style={[
+          styles.hero,
+          { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26 },
+        ]}
+      >
+        <View style={styles.heroStripe} />
+
+        <View style={styles.heroRow}>
+          <TouchableOpacity
+            onPress={() =>
+              // @ts-ignore
+              (navigation as any).canGoBack()
+                ? // @ts-ignore
+                  (navigation as any).goBack()
+                : // @ts-ignore
+                  (navigation as any).navigate("Home")
+            }
+            style={styles.backBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Icon name="chevron-back" size={24} color="#FF8200" />
+          </TouchableOpacity>
+
+          <Text style={styles.heroTitle}>Galerie des Comets</Text>
+
+          {/* espace symétrique */}
+          <View style={{ width: 36 }} />
+        </View>
+
+        <View style={styles.heroProfileRow}>
+          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroName}>Moments forts & souvenirs</Text>
+            <Text style={styles.heroSub}>Matchs, entraînements, vie du club — en images</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* CONTENU */}
+      {!gallery.length ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 }}>
+          <Text style={{ color: "#9aa0ae", fontSize: 16, textAlign: "center" }}>
             Aucune image n’a encore été publiée.
           </Text>
         </View>
-      </SafeAreaView>
-    );
-  }
+      ) : (
+        <ScrollView contentContainerStyle={styles.listContainer}>
+          {/* Intro card (glass) */}
+          <View style={styles.introCard}>
+            <Text style={styles.introTxt}>
+              Plonge dans la galerie officielle des Comets : moments clés, sourires d’équipe,
+              et l’âme du baseball normand capturée en images.
+            </Text>
+          </View>
 
-  const visibleImages = showAll ? gallery : gallery.slice(0, 8);
+          {/* Grille */}
+          <View style={[styles.grid, { gap }]}>
+            {visible.map((img, i) => (
+              <TouchableOpacity
+                key={(img.id ?? i).toString()}
+                style={[styles.card, { width: cardW, height: cardH }]}
+                activeOpacity={0.92}
+                onPress={() => openModalAt(showAll ? i : i)}
+                onLongPress={() => openModalAt(showAll ? i : i)}
+              >
+                <Image source={{ uri: img.url }} style={styles.cardImg} />
+                {!!img.legend && (
+                  <View style={styles.legendBar}>
+                    <Text style={styles.legendTxt} numberOfLines={2}>
+                      {img.legend}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
 
-  // PATCH : composant header stylé réutilisable
-  function Header({ navigation }: { navigation: any }) {
-    return (
-      <>
-      <View style={styles.logoBox}>
-          <Image source={logoComets} style={styles.logo} resizeMode="contain" />
-        </View>
-        <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate('Home')}
-            style={styles.backBtn}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Icon name="chevron-back" size={28} color="#FF8200" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Galerie</Text>
-          <View style={{ width: 32 }} />
-        </View>
-        
-      </>
-    );
-  }
+          {/* Voir plus */}
+          {gallery.length > 12 && (
+            <TouchableOpacity style={styles.moreBtn} onPress={() => setShowAll((v) => !v)} activeOpacity={0.9}>
+              <Text style={styles.moreBtnTxt}>{showAll ? "Voir moins" : "Voir plus"}</Text>
+              <Icon
+                name={showAll ? "chevron-up" : "chevron-down"}
+                size={18}
+                color="#fff"
+                style={{ marginLeft: 6 }}
+              />
+            </TouchableOpacity>
+          )}
+        </ScrollView>
+      )}
 
-  // PATCH : swipe entre les images dans la modal
-  function ModalImageGallery() {
-    if (modalImgIdx === null) return null;
-    const img = gallery[modalImgIdx];
-    if (!img) return null;
-    return (
+      {/* MODAL SWIPE VIEWER */}
       <Modal
-        visible={true}
+        visible={modalIdx !== null}
         transparent
         animationType="fade"
-        onRequestClose={() => setModalImgIdx(null)}
+        onRequestClose={() => setModalIdx(null)}
       >
         <View style={styles.modalOverlay}>
-          <TouchableOpacity style={styles.modalBg} activeOpacity={1} onPress={() => setModalImgIdx(null)} />
-          <View style={styles.modalContent}>
-            <Image
-              source={{ uri: img.url }}
-              style={styles.modalImg}
-              resizeMode="contain"
-            />
-            {img.legend ? (
-              <Text style={styles.modalLegend}>{img.legend}</Text>
-            ) : null}
-            <TouchableOpacity style={styles.closeBtn} onPress={() => setModalImgIdx(null)}>
-              <Text style={styles.closeBtnText}>✕</Text>
+          <TouchableOpacity style={styles.modalBg} activeOpacity={1} onPress={() => setModalIdx(null)} />
+          <View style={styles.modalShell}>
+            {/* Close */}
+            <TouchableOpacity style={styles.closeBtn} onPress={() => setModalIdx(null)} activeOpacity={0.9}>
+              <Icon name="close" size={22} color="#FF8200" />
             </TouchableOpacity>
-            {/* Flèches navigation */}
-            {modalImgIdx > 0 && (
-              <TouchableOpacity
-                style={[styles.navArrow, { left: 10 }]}
-                onPress={() => setModalImgIdx(idx => (idx! > 0 ? idx! - 1 : idx))}
-              >
-                <Icon name="chevron-back" size={32} color="#FF8200" />
+
+            {/* Pager */}
+            <ScrollView
+              ref={pagerRef}
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              onMomentumScrollEnd={onMomentumEnd}
+              contentOffset={{ x: Math.max(0, (modalIdx ?? 0) * window.width), y: 0 }}
+            >
+              {gallery.map((img, idx) => (
+                <View key={(img.id ?? idx).toString()} style={{ width: window.width, alignItems: "center" }}>
+                  <Image
+                    source={{ uri: img.url }}
+                    style={[styles.modalImg, { width: window.width * 0.92, height: window.height * 0.6 }]}
+                    resizeMode="contain"
+                  />
+                  {!!img.legend && <Text style={styles.modalLegend}>{img.legend}</Text>}
+                </View>
+              ))}
+            </ScrollView>
+
+            {/* Arrows */}
+            {modalIdx !== null && modalIdx > 0 && (
+              <TouchableOpacity style={[styles.navArrow, { left: 12 }]} onPress={goPrev} activeOpacity={0.9}>
+                <Icon name="chevron-back" size={34} color="#FF8200" />
               </TouchableOpacity>
             )}
-            {modalImgIdx < gallery.length - 1 && (
-              <TouchableOpacity
-                style={[styles.navArrow, { right: 10 }]}
-                onPress={() => setModalImgIdx(idx => (idx! < gallery.length - 1 ? idx! + 1 : idx))}
-              >
-                <Icon name="chevron-forward" size={32} color="#FF8200" />
+            {modalIdx !== null && modalIdx < gallery.length - 1 && (
+              <TouchableOpacity style={[styles.navArrow, { right: 12 }]} onPress={goNext} activeOpacity={0.9}>
+                <Icon name="chevron-forward" size={34} color="#FF8200" />
               </TouchableOpacity>
             )}
           </View>
         </View>
       </Modal>
-    );
-  }
-
-  return (
-    <SafeAreaView style={styles.bgWrapper}>
-      <StatusBar barStyle="light-content" />
-      <Header navigation={navigation} />
-
-      <ScrollView contentContainerStyle={styles.container}>
-        {/* Intro */}
-        <Text style={styles.intro}>
-          Plonge dans la galerie officielle des Comets :{"\n"}
-          matchs, moments forts, souvenirs…{"\n"}
-          L’âme du baseball normand, capturée en images.
-        </Text>
-
-        {/* Grille Images */}
-        <View style={[styles.grid, { gap: 10 }]}>
-          {visibleImages.map((img, i) => (
-            <TouchableOpacity
-              key={img.id || i}
-              style={[styles.imgCard, { width: imgWidth, height: imgWidth * 1.13 }]}
-              activeOpacity={0.88}
-              onPress={() => setModalImgIdx(showAll ? i : i)}
-              onLongPress={() => setModalImgIdx(showAll ? i : i)}
-            >
-              <Image
-                source={{ uri: img.url }}
-                style={styles.img}
-                resizeMode="cover"
-              />
-              {img.legend ? (
-                <View style={styles.legendBox}>
-                  <Text style={styles.legend}>{img.legend}</Text>
-                </View>
-              ) : null}
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* Voir plus/moins */}
-        {gallery.length > 8 && (
-          <TouchableOpacity
-            style={styles.moreBtn}
-            onPress={() => setShowAll((v) => !v)}
-          >
-            <Text style={styles.moreBtnText}>{showAll ? "Voir moins" : "Voir plus"}</Text>
-          </TouchableOpacity>
-        )}
-
-        <ModalImageGallery />
-      </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  bgWrapper: {
-    flex: 1,
-    backgroundColor: "#18181C",
+  // === HERO (identiques au style Actus) ===
+  hero: {
+    backgroundColor: "#11131a",
+    borderBottomWidth: 1,
+    borderBottomColor: "#1f2230",
+    paddingBottom: 10,
   },
-  header: {
+  heroStripe: {
+    position: "absolute",
+    right: -60,
+    top: -40,
+    width: 240,
+    height: 240,
+    borderRadius: 120,
+    backgroundColor: "rgba(255,130,0,0.10)",
+    transform: [{ rotate: "18deg" }],
+  },
+  heroRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#18181C",
-    borderBottomColor: "#FF8200",
-    borderBottomWidth: 1.2,
-    paddingTop: Platform.OS === "ios" ? 15 : 10,
-    paddingBottom: 10,
-    paddingHorizontal: 10,
-    marginBottom: 0,
+    paddingHorizontal: 12,
+    gap: 10,
   },
   backBtn: {
-    padding: 4,
-    borderRadius: 30,
-    marginRight: 10,
-    backgroundColor: "#222",
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#1b1e27",
     alignItems: "center",
     justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#2a2f3d",
   },
-  headerTitle: {
+  heroTitle: {
     flex: 1,
-    fontSize: 23,
-    fontWeight: "bold",
-    color: "#FF8200",
     textAlign: "center",
-    letterSpacing: 1.2,
+    color: "#FF8200",
+    fontSize: 20,
+    fontWeight: "800",
+    letterSpacing: 1.1,
   },
-  logoBox: {
+  heroProfileRow: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 10,
-    marginTop: 16,
-    backgroundColor: "#18181C",
-    borderRadius: 26,
-    padding: 8,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    gap: 12,
   },
-  logo: {
-    width: 70,
-    height: 70,
-    borderRadius: 22,
+  heroLogo: {
+    width: 56,
+    height: 56,
+    borderRadius: 14,
     backgroundColor: "#fff",
     borderWidth: 2,
     borderColor: "#FF8200",
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.14,
-    shadowRadius: 7,
-    elevation: 2,
   },
-  container: {
-    alignItems: "center",
-    paddingVertical: 30,
-    paddingHorizontal: 12,
-    minHeight: Dimensions.get("window").height - 60,
+  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
+  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
+
+  // === LISTE / INTRO ===
+  listContainer: { paddingHorizontal: 12, paddingBottom: 34, paddingTop: 12 },
+  introCard: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.22)",
+    padding: 14,
+    marginBottom: 12,
   },
-  intro: {
-    color: "#FFE2C1",
-    backgroundColor: "#292E3A",
-    borderRadius: 16,
-    padding: 16,
-    textAlign: "center",
-    fontSize: 16.5,
-    fontWeight: "600",
-    marginBottom: 16,
-    marginTop: 6,
-    lineHeight: 23,
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.10,
-    shadowRadius: 4,
-    elevation: 1,
-    width: "100%",
-    maxWidth: 500,
-  },
+  introTxt: { color: "#cfd3db", fontSize: 14.5, lineHeight: 20, textAlign: "center" },
+
+  // === GRID ===
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "center",
-    marginBottom: 15,
-    width: "100%",
-    minHeight: 80,
   },
-  imgCard: {
-    backgroundColor: "#fff",
+
+  // Card image (glass + bord orange soft)
+  card: {
+    backgroundColor: "rgba(255,255,255,0.06)",
     borderRadius: 18,
     marginBottom: 10,
     overflow: "hidden",
-    borderWidth: 1.5,
-    borderColor: "#FF8200",
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.10,
-    shadowRadius: 7,
-    elevation: 2,
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.22)",
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 3,
     position: "relative",
   },
-  img: {
-    width: "100%",
-    height: "100%",
-  },
-  legendBox: {
+  cardImg: { width: "100%", height: "100%", backgroundColor: "#141821" },
+
+  legendBar: {
     position: "absolute",
-    bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: "rgba(255,130,0,0.84)",
-    paddingVertical: 7,
+    bottom: 0,
     paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: "rgba(15,16,20,0.72)",
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,130,0,0.22)",
   },
-  legend: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 15,
-    textAlign: "center",
-    textShadowColor: "#1a1926",
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 4,
-  },
+  legendTxt: { color: "#eaeef7", fontWeight: "700", fontSize: 12.5, textAlign: "center" },
+
+  // Voir plus
   moreBtn: {
-    backgroundColor: "#FF8200",
-    borderRadius: 21,
-    paddingVertical: 14,
-    paddingHorizontal: 44,
+    alignSelf: "center",
+    flexDirection: "row",
     alignItems: "center",
-    marginTop: 8,
-    marginBottom: 20,
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.18,
-    shadowRadius: 5,
-    elevation: 2,
+    backgroundColor: "#FF8200",
+    borderRadius: 14,
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    marginTop: 6,
   },
-  moreBtnText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 17.5,
-    letterSpacing: 0.8,
-  },
+  moreBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 14.5 },
+
+  // === MODAL ===
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(22, 22, 32, 0.97)",
+    backgroundColor: "rgba(12,12,18,0.96)",
     justifyContent: "center",
     alignItems: "center",
   },
-  modalBg: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  modalContent: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 30,
-    position: "relative",
+  modalBg: { ...StyleSheet.absoluteFillObject },
+  modalShell: {
     width: "100%",
     height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingTop: 22,
   },
   modalImg: {
-    width: Dimensions.get("window").width - 40,
-    height: Dimensions.get("window").height * 0.58,
-    borderRadius: 14,
-    backgroundColor: "#fff",
-    marginBottom: 10,
+    borderRadius: 16,
+    backgroundColor: "#0f1014",
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.22)",
   },
   modalLegend: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 18,
+    marginTop: 10,
+    color: "#eaeef7",
+    fontWeight: "800",
+    fontSize: 14,
     textAlign: "center",
-    marginTop: 6,
-    textShadowColor: "#FF8200",
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 4,
+    paddingHorizontal: 18,
   },
   closeBtn: {
     position: "absolute",
-    top: 15,
-    right: 18,
-    backgroundColor: "#18181C",
-    borderRadius: 19,
-    padding: 9,
-    zIndex: 4,
-    borderWidth: 1.5,
-    borderColor: "#FF8200",
-  },
-  closeBtnText: {
-    color: "#FF8200",
-    fontWeight: "bold",
-    fontSize: 23,
-    textAlign: "center",
+    top: 18,
+    right: 16,
+    backgroundColor: "#1b1e27",
+    borderWidth: 1,
+    borderColor: "#2a2f3d",
+    borderRadius: 18,
+    padding: 8,
+    zIndex: 10,
   },
   navArrow: {
     position: "absolute",
     top: "45%",
-    padding: 12,
-    backgroundColor: "#23222bAA",
-    borderRadius: 23,
-    zIndex: 10,
+    backgroundColor: "rgba(35,34,43,0.72)",
+    borderRadius: 24,
+    padding: 10,
   },
 });

@@ -1,5 +1,8 @@
-import { useNavigation } from '@react-navigation/native';
-import React, { useEffect, useRef, useState } from 'react';
+// app/screens/JoueursScreen.tsx
+"use client";
+
+import { useNavigation } from "@react-navigation/native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
   Image,
@@ -9,12 +12,13 @@ import {
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
-} from 'react-native';
-import Icon from 'react-native-vector-icons/Ionicons';
-import LogoutButton from '../../components/LogoutButton';
-import { supabase } from '../../supabase';
+} from "react-native";
+import Icon from "react-native-vector-icons/Ionicons";
+import LogoutButton from "../../components/LogoutButton";
+import { supabase } from "../../supabase";
 
 const logoComets = require("../../assets/images/iconComets.png");
 
@@ -36,41 +40,46 @@ type Player = {
   team_abbr: string | null;
 };
 
-const CATEGORIES = ["Senior", "15U", "12U"];
+const CATEGORIES = ["Senior", "15U", "12U"] as const;
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
 export default function JoueursScreen() {
+  const navigation = useNavigation();
   const [admins, setAdmins] = useState<Admin[]>([]);
   const [players, setPlayers] = useState<Player[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [selectedCat, setSelectedCat] = useState<string>("Senior");
+
+  const [selectedCat, setSelectedCat] = useState<(typeof CATEGORIES)[number]>("Senior");
+  const [activeLetter, setActiveLetter] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+
   const [showScrollTop, setShowScrollTop] = useState(false);
-  const [activeLetter, setActiveLetter] = useState<string | null>(null); // Lettre filtrée
-  const navigation = useNavigation();
+  const [showFilter, setShowFilter] = useState(false); // <<< nouveau : pliable
   const flatListRef = useRef<FlatList>(null);
 
   useEffect(() => {
     const fetchAll = async () => {
       setLoading(true);
+      setErrorMsg(null);
       try {
         const { data: adminsData, error: errorAdmins } = await supabase
-          .from('admins')
-          .select('id, first_name, last_name, age, categorie, email');
+          .from("admins")
+          .select("id, first_name, last_name, age, categorie, email");
         const { data: playersData, error: errorPlayers } = await supabase
-          .from('players')
-          .select('id, last_name, first_name, number, yob, player_link, team_abbr');
+          .from("players")
+          .select("id, last_name, first_name, number, yob, player_link, team_abbr");
 
         if (errorAdmins) {
-          setErrorMsg('Erreur Supabase Admins : ' + errorAdmins.message);
+          setErrorMsg("Erreur Supabase Admins : " + errorAdmins.message);
         } else if (errorPlayers) {
-          setErrorMsg('Erreur Supabase Players : ' + errorPlayers.message);
+          setErrorMsg("Erreur Supabase Players : " + errorPlayers.message);
         } else {
-          setAdmins(adminsData as Admin[]);
-          setPlayers(playersData as Player[]);
+          setAdmins((adminsData || []) as Admin[]);
+          setPlayers((playersData || []) as Player[]);
         }
       } catch (e: any) {
-        setErrorMsg('Gros crash côté JS : ' + (e?.message || e));
+        setErrorMsg("Gros crash côté JS : " + (e?.message || e));
       }
       setLoading(false);
     };
@@ -78,188 +87,318 @@ export default function JoueursScreen() {
     fetchAll();
   }, []);
 
-  // On prépare la data globale, avant filtrage alphabétique
-  const allData = (() => {
+  // Data de base (catégorie)
+  const allData = useMemo(() => {
     if (selectedCat === "Senior") {
-      return players
-        .sort((a, b) =>
-          a.last_name.localeCompare(b.last_name) ||
-          a.first_name.localeCompare(b.first_name)
+      return [...players]
+        .sort(
+          (a, b) =>
+            a.last_name.localeCompare(b.last_name) ||
+            a.first_name.localeCompare(b.first_name)
         )
-        .map(p => ({
+        .map((p) => ({
           id: p.id,
           first_name: p.first_name,
           last_name: p.last_name,
           year: p.yob || "--",
           link: p.player_link || "",
-        }));
-    } else {
-      return admins
-        .filter(
-          a =>
-            a.categorie &&
-            a.categorie.toUpperCase() === selectedCat.toUpperCase()
-        )
-        .sort((a, b) =>
-          (a.last_name || '').localeCompare(b.last_name || '') ||
-          (a.first_name || '').localeCompare(b.first_name || '')
-        )
-        .map(a => ({
-          id: a.id,
-          first_name: a.first_name,
-          last_name: a.last_name,
-          year: a.age ? new Date().getFullYear() - a.age : "--",
-          link: "",
+          number: p.number,
+          team: p.team_abbr || "",
         }));
     }
-  })();
+    // 15U / 12U — depuis admins
+    return admins
+      .filter(
+        (a) =>
+          a.categorie &&
+          a.categorie.toUpperCase() === selectedCat.toUpperCase()
+      )
+      .sort(
+        (a, b) =>
+          (a.last_name || "").localeCompare(b.last_name || "") ||
+          (a.first_name || "").localeCompare(b.first_name || "")
+      )
+      .map((a) => ({
+        id: a.id,
+        first_name: a.first_name,
+        last_name: a.last_name,
+        year: a.age ? new Date().getFullYear() - a.age : "--",
+        link: "",
+        number: undefined as number | undefined,
+        team: "",
+      }));
+  }, [admins, players, selectedCat]);
 
-  // Puis on filtre par lettre si besoin
-const dataToShow = activeLetter
-  ? allData.filter(item =>
-      (item.last_name || "").toUpperCase().startsWith(activeLetter) ||
-      (item.first_name || "").toUpperCase().startsWith(activeLetter)
-    )
-  : allData;
+  // Filtre texte + alphabet
+  const dataToShow = useMemo(() => {
+    const q = query.trim().toUpperCase();
+    let base = allData;
+    if (q) {
+      base = base.filter(
+        (it) =>
+          (it.first_name || "").toUpperCase().includes(q) ||
+          (it.last_name || "").toUpperCase().includes(q)
+      );
+    }
+    if (activeLetter) {
+      base = base.filter(
+        (it) =>
+          (it.last_name || "").toUpperCase().startsWith(activeLetter) ||
+          (it.first_name || "").toUpperCase().startsWith(activeLetter)
+      );
+    }
+    return base;
+  }, [allData, query, activeLetter]);
 
+  // Compteurs pour onglets
+  const counts = useMemo(() => {
+    const senior = players.length;
+    const u15 = admins.filter((a) => (a.categorie || "").toUpperCase() === "15U").length;
+    const u12 = admins.filter((a) => (a.categorie || "").toUpperCase() === "12U").length;
+    return { Senior: senior, "15U": u15, "12U": u12 } as Record<(typeof CATEGORIES)[number], number>;
+  }, [players, admins]);
 
-  // --- UI ---
-  return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#101017' }}>
-      <StatusBar barStyle="light-content" />
-      {/* Logo Comets bien centré, espacé du top */}
-      <View style={styles.logoBox}>
-        <Image source={logoComets} style={styles.logo} resizeMode="contain" />
-      </View>
-      {/* Header : flèche + titre + bouton logout */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={{ marginRight: 14, padding: 4 }}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Icon name="chevron-back" size={28} color="#FF8200" />
-        </TouchableOpacity>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Les Comets – Effectif</Text>
-          <Text style={styles.headerSubtitle}>Joueurs 2025</Text>
+  // UI
+  const CategoryTab = ({ cat, icon }: { cat: (typeof CATEGORIES)[number]; icon: string }) => {
+    const active = selectedCat === cat;
+    return (
+      <TouchableOpacity
+        onPress={() => {
+          setSelectedCat(cat);
+          setActiveLetter(null);
+          setQuery("");
+          setShowFilter(false); // on replie le filtre si on change d'onglet
+          flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+        }}
+        style={[styles.tabBtn, active && styles.tabBtnActive]}
+        activeOpacity={0.9}
+      >
+        <Text style={[styles.tabIcon, active && { color: "#fff" }]}>{icon}</Text>
+        <Text style={[styles.tabBtnText, active && styles.tabBtnTextActive]}>
+          {cat} · {counts[cat] ?? 0}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
+
+  const Card = ({
+    first_name,
+    last_name,
+    year,
+    link,
+    number,
+    team,
+  }: {
+    first_name: string;
+    last_name: string;
+    year: number | string;
+    link: string;
+    number?: number;
+    team?: string;
+  }) => (
+    <View style={styles.card}>
+      <View style={styles.cardHeader}>
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>
+            {(first_name?.[0] || "").toUpperCase()}
+            {(last_name?.[0] || "").toUpperCase()}
+          </Text>
         </View>
-        <LogoutButton />
-      </View>
-      {/* Onglets catégories */}
-      <View style={styles.tabRow}>
-        {CATEGORIES.map(cat => (
-          <TouchableOpacity
-            key={cat}
-            style={[
-              styles.tabBtn,
-              selectedCat === cat && styles.tabBtnActive
-            ]}
-            onPress={() => {
-              setSelectedCat(cat);
-              setActiveLetter(null); // Reset filtre sur changement catégorie
-            }}
-            activeOpacity={0.8}
-          >
-            <Text
-              style={[
-                styles.tabBtnText,
-                selectedCat === cat && styles.tabBtnTextActive
-              ]}
-            >
-              {cat}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        <View style={styles.infoCol}>
+          <Text style={styles.nameText} numberOfLines={1} ellipsizeMode="tail">
+            {first_name} {last_name}
+          </Text>
+          <View style={styles.metaRow}>
+            {typeof number === "number" ? (
+              <View style={[styles.metaPill, { backgroundColor: "#FFD7A1" }]}>
+                <Text style={[styles.metaTxt, { color: "#7C2D12" }]}>#{number}</Text>
+              </View>
+            ) : null}
+            {team ? (
+              <View style={[styles.metaPill, { backgroundColor: "#D1F3FF" }]}>
+                <Text style={[styles.metaTxt, { color: "#0C7499" }]}>{team}</Text>
+              </View>
+            ) : null}
+            <View style={[styles.metaPill, { backgroundColor: "#FFE66D" }]}>
+              <Text style={[styles.metaTxt, { color: "#8a6a08" }]}>{year}</Text>
+            </View>
+          </View>
+        </View>
       </View>
 
-      {/* Bandeau alphabétique */}
-      <View style={styles.alphaRow}>
+      {!!link && (
         <TouchableOpacity
-          style={[
-            styles.alphaBtn,
-            !activeLetter && styles.alphaBtnActive
-          ]}
-          onPress={() => setActiveLetter(null)}
-          activeOpacity={0.7}
+          onPress={() => Linking.openURL(link)}
+          style={styles.ffbsBtn}
+          activeOpacity={0.88}
         >
-          <Text style={[styles.alphaBtnText, !activeLetter && styles.alphaBtnTextActive]}>TOUT</Text>
+          <Text style={styles.ffbsBtnText}>Fiche FFBS</Text>
+          <Icon name="open-outline" size={17} color="#fff" style={{ marginLeft: 4 }} />
         </TouchableOpacity>
-        {ALPHABET.map(letter => (
+      )}
+    </View>
+  );
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
+      <StatusBar barStyle="light-content" />
+
+      {/* HÉRO */}
+      <View style={styles.hero}>
+        <View style={styles.heroStripe} />
+
+        <View style={styles.heroRow}>
           <TouchableOpacity
-            key={letter}
-            style={[
-              styles.alphaBtn,
-              activeLetter === letter && styles.alphaBtnActive
-            ]}
-            onPress={() => setActiveLetter(letter)}
-            activeOpacity={0.7}
+            onPress={() =>
+              // @ts-ignore
+              (navigation as any).canGoBack()
+                ? // @ts-ignore
+                  (navigation as any).goBack()
+                : // @ts-ignore
+                  (navigation as any).navigate("Home")
+            }
+            style={styles.backBtnHero}
           >
-            <Text style={[styles.alphaBtnText, activeLetter === letter && styles.alphaBtnTextActive]}>{letter}</Text>
+            <Icon name="chevron-back" size={26} color="#FF8200" />
           </TouchableOpacity>
-        ))}
+          <Text style={styles.heroTitle}>Les Comets — Effectif</Text>
+          <LogoutButton />
+        </View>
+
+        <View style={styles.heroProfileRow}>
+          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroName}>Joueurs 2025</Text>
+            <Text style={styles.heroSub}>Roster & jeunes catégories</Text>
+          </View>
+        </View>
+
+        {/* Onglets catégories */}
+        <View style={styles.tabs}>
+          <CategoryTab cat="Senior" icon="⚾️" />
+          <CategoryTab cat="15U" icon="🧢" />
+          <CategoryTab cat="12U" icon="⭐️" />
+        </View>
+
+        {/* Recherche */}
+        <View style={styles.searchWrap}>
+          <Icon name="search" size={18} color="#FF8200" />
+          <TextInput
+            value={query}
+            onChangeText={(t) => setQuery(t)}
+            placeholder="Rechercher un joueur…"
+            placeholderTextColor="#a6acb8"
+            style={styles.searchInput}
+            autoCorrect={false}
+            autoCapitalize="none"
+            returnKeyType="search"
+          />
+          {!!query && (
+            <TouchableOpacity
+              onPress={() => setQuery("")}
+              style={styles.clearBtn}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            >
+              <Icon name="close" size={18} color="#a6acb8" />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Filtrer (A‑Z) — pliable */}
+        <View style={{ marginHorizontal: 14, marginTop: 8, marginBottom: 10 }}>
+          <TouchableOpacity
+            onPress={() => setShowFilter((s) => !s)}
+            activeOpacity={0.85}
+            style={styles.filterHeader}
+          >
+            <Text style={styles.filterTitle}>Filtrer</Text>
+            <Icon
+              name={showFilter ? "chevron-up" : "chevron-down"}
+              size={18}
+              color="#FF8200"
+            />
+          </TouchableOpacity>
+
+          {showFilter && (
+            <View style={styles.alphaRow}>
+              <TouchableOpacity
+                style={[styles.alphaBtn, !activeLetter && styles.alphaBtnActive]}
+                onPress={() => {
+                  setActiveLetter(null);
+                  setShowFilter(false); // se replie après choix
+                }}
+                activeOpacity={0.75}
+              >
+                <Text
+                  style={[
+                    styles.alphaBtnText,
+                    !activeLetter && styles.alphaBtnTextActive,
+                  ]}
+                >
+                  TOUT
+                </Text>
+              </TouchableOpacity>
+              {ALPHABET.map((letter) => (
+                <TouchableOpacity
+                  key={letter}
+                  style={[
+                    styles.alphaBtn,
+                    activeLetter === letter && styles.alphaBtnActive,
+                  ]}
+                  onPress={() => {
+                    setActiveLetter(letter);
+                    setShowFilter(false); // se replie après choix
+                  }}
+                  activeOpacity={0.75}
+                >
+                  <Text
+                    style={[
+                      styles.alphaBtnText,
+                      activeLetter === letter && styles.alphaBtnTextActive,
+                    ]}
+                  >
+                    {letter}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </View>
       </View>
 
-      <View style={{ flex: 1, backgroundColor: "#18181C", borderTopLeftRadius: 36, borderTopRightRadius: 36 }}>
+      {/* LISTE */}
+      <View style={{ flex: 1 }}>
         {loading ? (
-          <Text style={{ textAlign: 'center', marginTop: 60, fontSize: 18, color: '#999' }}>
-            Chargement…
-          </Text>
+          <View style={styles.loaderBox}>
+            <Text style={styles.loaderTxt}>Chargement…</Text>
+          </View>
         ) : errorMsg ? (
-          <Text style={{ textAlign: 'center', marginTop: 60, fontSize: 16, color: 'red' }}>
-            {errorMsg}
-          </Text>
+          <View style={styles.loaderBox}>
+            <Text style={styles.errorTxt}>{errorMsg}</Text>
+          </View>
         ) : (
           <>
             <FlatList
               ref={flatListRef}
               data={dataToShow}
-              keyExtractor={item => item.id.toString()}
-              getItemLayout={(_, index) => ({
-                length: 105,
-                offset: 105 * index,
-                index,
-              })}
+              keyExtractor={(item) => item.id.toString()}
+              contentContainerStyle={{ padding: 14, paddingBottom: 36 }}
               ListEmptyComponent={
-                <Text style={{ textAlign: 'center', marginTop: 60, fontSize: 16, color: '#888' }}>
+                <Text style={styles.emptyTxt}>
                   Aucun joueur à afficher dans cette catégorie.
                 </Text>
               }
-              contentContainerStyle={{ padding: 14, paddingBottom: 24 }}
               renderItem={({ item }) => (
-                <View style={styles.card}>
-                  <View style={styles.cardHeader}>
-                    <View style={styles.avatar}>
-                      <Text style={styles.avatarText}>
-                        {item.first_name?.[0] || ""}
-                        {item.last_name?.[0] || ""}
-                      </Text>
-                    </View>
-                    <View style={styles.infoCol}>
-                      <Text
-                        style={styles.nameText}
-                        numberOfLines={2}
-                        ellipsizeMode="tail"
-                      >
-                        {`${item.first_name || ""} ${item.last_name || ""}`}
-                      </Text>
-                      <Text style={styles.yearText}>
-                        {item.year}
-                      </Text>
-                    </View>
-                  </View>
-                  {item.link ? (
-                    <TouchableOpacity
-                      onPress={() => item.link && Linking.openURL(item.link)}
-                      style={styles.ffbsBtn}
-                    >
-                      <Text style={styles.ffbsBtnText}>Fiche FFBS</Text>
-                      <Icon name="open-outline" size={17} color="#fff" style={{ marginLeft: 2 }} />
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
+                <Card
+                  first_name={item.first_name}
+                  last_name={item.last_name}
+                  year={item.year}
+                  link={item.link}
+                  number={item.number}
+                  team={item.team}
+                />
               )}
-              onScroll={e => {
+              onScroll={(e) => {
                 const y = e.nativeEvent.contentOffset.y;
                 setShowScrollTop(y > 240);
               }}
@@ -269,10 +408,12 @@ const dataToShow = activeLetter
             {showScrollTop && (
               <TouchableOpacity
                 style={styles.scrollTopBtn}
-                onPress={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: true })}
-                activeOpacity={0.7}
+                onPress={() =>
+                  flatListRef.current?.scrollToOffset({ offset: 0, animated: true })
+                }
+                activeOpacity={0.75}
               >
-                <Icon name="chevron-up" size={31} color="#FF8200" />
+                <Icon name="chevron-up" size={30} color="#FF8200" />
               </TouchableOpacity>
             )}
           </>
@@ -283,197 +424,234 @@ const dataToShow = activeLetter
 }
 
 const styles = StyleSheet.create({
-  logoBox: {
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 12,
-    marginTop: 20,
-    backgroundColor: "#101017",
-    borderRadius: 30,
-    padding: 10,
+  // HÉRO
+  hero: {
+    backgroundColor: "#11131a",
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#1f2230",
+    paddingTop:
+      Platform.OS === "android"
+        ? (StatusBar.currentHeight || 0) + 12 // espace dynamique Android
+        : 22, // petit espace iOS
   },
-  logo: {
-    width: 88,
-    height: 88,
-    borderRadius: 24,
-    backgroundColor: "#101017",
-    borderWidth: 4,
-    borderColor: "#FF8200",
+  heroStripe: {
+    position: "absolute",
+    right: -60,
+    top: -40,
+    width: 240,
+    height: 240,
+    borderRadius: 120,
+    backgroundColor: "rgba(255,130,0,0.10)",
+    transform: [{ rotate: "18deg" }],
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#101017',
-    borderBottomWidth: 1.5,
-    borderBottomColor: '#FF8200',
-    paddingTop: Platform.OS === "ios" ? 15 : 10,
-    paddingBottom: 10,
-    paddingHorizontal: 10,
-    marginBottom: 3,
-  },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#FF8200',
-    letterSpacing: 1.1,
-    textAlign: 'center',
-  },
-  headerSubtitle: {
-    color: '#bbb',
-    fontSize: 13,
-    textAlign: 'center',
-    fontWeight: '700',
-  },
-  tabRow: {
+  heroRow: {
     flexDirection: "row",
-    justifyContent: "center",
     alignItems: "center",
-    gap: 13,
-    marginBottom: 10,
-    marginTop: 7,
+    paddingHorizontal: 12,
+    paddingTop: 4, // ↓ avant c'était 10 sur iOS, 6 sur Android
+    gap: 10,
   },
-  tabBtn: {
-    paddingHorizontal: 21,
-    paddingVertical: 7,
-    backgroundColor: "#18181C",
-    borderRadius: 15,
+  backBtnHero: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#1b1e27",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#2a2f3d",
+  },
+  heroTitle: {
+    flex: 1,
+    textAlign: "center",
+    color: "#FF8200",
+    fontSize: 20,
+    fontWeight: "800",
+    letterSpacing: 1.1,
+  },
+  heroProfileRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    gap: 12,
+  },
+  heroLogo: {
+    width: 56,
+    height: 56,
+    borderRadius: 14,
+    backgroundColor: "#fff",
     borderWidth: 2,
     borderColor: "#FF8200",
-    marginHorizontal: 2,
   },
-  tabBtnActive: {
-    backgroundColor: "#FF8200",
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.17,
-    shadowRadius: 8,
-    elevation: 2,
+  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
+  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
+
+  // Onglets catégories
+  tabs: {
+    flexDirection: "row",
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    gap: 8,
   },
+  tabBtn: {
+    flex: 1,
+    backgroundColor: "#141821",
+    borderWidth: 1,
+    borderColor: "#252a38",
+    paddingVertical: 9,
+    borderRadius: 12,
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 6,
+  },
+  tabIcon: { color: "#FF8200", fontSize: 14 },
   tabBtnText: {
     color: "#FF8200",
-    fontWeight: "bold",
-    fontSize: 16,
-    letterSpacing: 1,
+    fontWeight: "900",
+    fontSize: 13.5,
+    letterSpacing: 0.3,
   },
-  tabBtnTextActive: {
+  tabBtnActive: { backgroundColor: "#FF8200", borderColor: "#FF8200" },
+  tabBtnTextActive: { color: "#fff" },
+
+  // Recherche
+  searchWrap: {
+    marginTop: 10,
+    marginHorizontal: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: "#141821",
+    borderWidth: 1,
+    borderColor: "#252a38",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
     color: "#fff",
+    fontWeight: "700",
+    fontSize: 14.5,
   },
-  // ===== A-Z row =====
+  clearBtn: {
+    padding: 2,
+    borderRadius: 12,
+    backgroundColor: "transparent",
+  },
+
+  // Filtrer (header)
+  filterHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#141821",
+    borderWidth: 1,
+    borderColor: "#252a38",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  filterTitle: {
+    color: "#FF8200",
+    fontWeight: "900",
+    fontSize: 16,
+    letterSpacing: 0.5,
+  },
+
+  // Alphabet
   alphaRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 9,
-    marginTop: 2,
-    gap: 3,
+    gap: 4,
+    paddingTop: 10,
   },
   alphaBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 7,
-    marginHorizontal: 2,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 8,
     backgroundColor: "#fff6ee",
     borderWidth: 1.3,
     borderColor: "#FF8200",
-    marginBottom: 2,
-    marginTop: 2,
-    minWidth: 23,
+    minWidth: 28,
     alignItems: "center",
+    marginBottom: 4,
   },
-  alphaBtnActive: {
-    backgroundColor: "#FF8200",
-  },
-  alphaBtnText: {
-    color: "#FF8200",
-    fontWeight: "bold",
-    fontSize: 15,
-    letterSpacing: 0.3,
-  },
-  alphaBtnTextActive: {
-    color: "#fff",
-  },
-  // ==== Cartes joueurs ====
+  alphaBtnActive: { backgroundColor: "#FF8200" },
+  alphaBtnText: { color: "#FF8200", fontWeight: "900", fontSize: 13.5 },
+  alphaBtnTextActive: { color: "#fff" },
+
+  // Liste & états
+  loaderBox: { flex: 1, alignItems: "center", justifyContent: "center" },
+  loaderTxt: { color: "#FF8200", fontWeight: "bold", fontSize: 18 },
+  errorTxt: { color: "tomato", fontSize: 15, textAlign: "center", paddingHorizontal: 20 },
+  emptyTxt: { color: "#9aa0ae", fontSize: 15, textAlign: "center", marginTop: 40 },
+
+  // Cartes
   card: {
-    backgroundColor: 'rgba(255,244,230,0.97)',
-    borderRadius: 30,
-    padding: 20,
-    marginBottom: 18,
-    shadowColor: '#FF8200',
-    shadowOpacity: 0.11,
-    shadowRadius: 14,
-    elevation: 4,
-    borderWidth: 1.8,
-    borderColor: '#FF8200',
-    flexDirection: 'column',
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.22)",
   },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 2,
-  },
+  cardHeader: { flexDirection: "row", alignItems: "center" },
   avatar: {
-    width: 60,
-    height: 60,
-    borderRadius: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#18181C',
-    borderWidth: 2.5,
-    borderColor: '#FF8200',
-    marginRight: 14,
-    shadowColor: '#FF8200',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#18181C",
+    borderWidth: 2,
+    borderColor: "#FF8200",
+    marginRight: 12,
+    shadowColor: "#FF8200",
     shadowOpacity: 0.18,
     shadowRadius: 8,
     elevation: 3,
   },
-  avatarText: {
-    color: '#FF8200',
-    fontWeight: '900',
-    fontSize: 27,
-    letterSpacing: 2,
-  },
-  infoCol: {
-    flex: 1,
-    flexDirection: 'column',
-    justifyContent: 'center',
-    minWidth: 0,
-  },
+  avatarText: { color: "#FF8200", fontWeight: "900", fontSize: 22, letterSpacing: 1 },
+  infoCol: { flex: 1, minWidth: 0 },
   nameText: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#18181C',
-    letterSpacing: 0.7,
-    marginBottom: 1,
-    flexWrap: 'wrap',
-    maxWidth: 230,
-  },
-  yearText: {
-    color: '#FF8200',
-    fontWeight: 'bold',
-    fontSize: 16,
+    color: "#fff",
+    fontSize: 16.5,
+    fontWeight: "900",
     letterSpacing: 0.3,
-    marginTop: 1,
   },
+  metaRow: { flexDirection: "row", gap: 6, marginTop: 6, flexWrap: "wrap" },
+  metaPill: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
+  metaTxt: { fontWeight: "800", fontSize: 12 },
+
+  // Bouton FFBS
   ffbsBtn: {
-    marginTop: 14,
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FF8200',
-    borderRadius: 9,
-    paddingHorizontal: 17,
+    marginTop: 12,
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FF8200",
+    borderRadius: 10,
+    paddingHorizontal: 14,
     paddingVertical: 8,
-    shadowColor: '#FF8200',
+    shadowColor: "#FF8200",
     shadowOpacity: 0.12,
     shadowRadius: 5,
     elevation: 2,
+    maxWidth: "100%",
   },
-  ffbsBtnText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  // === Scroll-to-top ===
+  ffbsBtnText: { color: "#fff", fontWeight: "900", fontSize: 13.5, flexShrink: 1 },
+
+  // Scroll-to-top
   scrollTopBtn: {
     position: "absolute",
     right: 18,

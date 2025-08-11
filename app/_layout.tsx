@@ -11,7 +11,6 @@ import { AdminProvider } from '../contexts/AdminContext';
 // ✅ Initialisation Firebase (ajouté)
 import { initFirebase } from '../utils/firebaseConfig';
 initFirebase(); // 🔥 on initialise Firebase dès le chargement
-console.log("🔥 Firebase initialisé depuis _layout.tsx");
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();

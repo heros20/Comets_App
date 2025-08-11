@@ -1,7 +1,13 @@
-import * as Device from 'expo-device';
-import * as Notifications from 'expo-notifications';
+// app/screens/LoginScreen.tsx
+"use client";
+
+// 🔕 Notifications push désactivées temporairement
+// import * as Device from 'expo-device';
+// import * as Notifications from 'expo-notifications';
+// import { getApps, initializeApp } from 'firebase/app';
+// import { firebaseConfig } from '../../utils/firebaseConfig';
+
 import { useRouter } from 'expo-router';
-import { getApps, initializeApp } from 'firebase/app';
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
@@ -21,81 +27,11 @@ import {
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useAdmin } from '../../contexts/AdminContext';
 import { supabase } from '../../supabase';
-import { firebaseConfig } from '../../utils/firebaseConfig'; // ajuste le chemin si nécessaire
 
 const logoComets = require("../../assets/images/iconComets.png");
 
-// --- UTILITAIRE DEBUG & PUSH ---
-async function registerForPushNotificationsAsync(
-  email: string,
-  access_token: string | null
-): Promise<string | null> {
-  let token: string | null = null;
-  console.log("🔥 registerForPushNotificationsAsync CALLED");
-
-  try {
-    if (Device.isDevice) {
-      console.log("📱 Appareil réel détecté");
-
-      const { status: existingStatus } = await Notifications.getPermissionsAsync();
-      console.log("🔑 Permission actuelle :", existingStatus);
-
-      let finalStatus = existingStatus;
-      if (existingStatus !== 'granted') {
-        const { status } = await Notifications.requestPermissionsAsync();
-        finalStatus = status;
-        console.log("🔐 Permission demandée, résultat :", finalStatus);
-      }
-
-      if (finalStatus !== 'granted') {
-        console.log("❌ Permission refusée, abandon");
-        return null;
-      }
-
-      // 🔧 Sécurité : on réinitialise Firebase localement si nécessaire
-      if (getApps().length === 0) {
-        initializeApp(firebaseConfig);
-        console.log("✅ Firebase initialisé localement dans registerForPushNotificationsAsync");
-      } else {
-        console.log("ℹ️ Firebase déjà initialisé");
-      }
-
-      console.log("📤 Appel de getExpoPushTokenAsync()");
-      token = (await Notifications.getExpoPushTokenAsync()).data;
-      console.log("📬 ExpoPushToken obtenu :", token);
-
-      if (token && access_token) {
-        console.log("📝 Envoi du token au backend via PATCH");
-        const response = await fetch("https://les-comets-honfleur.vercel.app/api/me", {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${access_token}`,
-          },
-          body: JSON.stringify({ email, expo_push_token: token }),
-        });
-
-        const resJson = await response.json();
-        console.log("📥 Réponse PATCH /api/me :", resJson);
-
-        if (!response.ok) {
-          throw new Error(resJson?.error || "Erreur PATCH /api/me");
-        }
-      } else {
-        console.log("❌ Pas de token ou d'access_token, pas d'envoi");
-      }
-    } else {
-      console.log("🧪 Appareil non compatible push Expo");
-    }
-  } catch (err) {
-    console.error("🔥 Erreur enregistrement push token :", err);
-    throw err;
-  }
-
-  return token;
-}
-
-
+// 🔕 Notifications — util désactivé temporairement
+// async function registerForPushNotificationsAsync(...) { /* ... */ }
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -103,7 +39,7 @@ export default function LoginScreen() {
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [debug, setDebug] = useState(''); // Pour afficher des infos debug visibles
+  const [debug, setDebug] = useState('');
   const [shakeAnim] = useState(new Animated.Value(0));
   const router = useRouter();
   const { login } = useAdmin();
@@ -113,46 +49,38 @@ export default function LoginScreen() {
     setError('');
     setDebug('');
     try {
-      // LOGIN route API (cookie)
-      setDebug('Envoi du login au backend…');
+      // 1) Login backend (cookie)
       const res = await fetch('https://les-comets-honfleur.vercel.app/api/login', {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),
       });
       const data = await res.json();
-      setDebug(`Réponse login: ${JSON.stringify(data)}`);
+    //  setDebug(`Réponse login: ${JSON.stringify(data)}`);
+
       if (!res.ok) {
         setError(data.error || "Identifiants invalides. Essaie encore !");
-        setDebug(`Erreur login backend: ${data.error || res.status}`);
         shake();
       } else {
-        // LOGIN côté mobile (Supabase context)
-        setDebug('Connexion au contexte mobile…');
+        // 2) Connexion contexte mobile (membre)
         const success = await login(email.trim(), password);
         if (success) {
           const { data: { session } } = await supabase.auth.getSession();
           const access_token = session?.access_token;
-          setDebug(`Connexion mobile OK. Token: ${access_token ? access_token.slice(0,12) + '...' : "Aucun"}`);
-          // 🔔 Envoi push token AVEC le token d’accès
-          try {
-            setDebug((d) => d + "\nEnregistrement du token push...");
-            await registerForPushNotificationsAsync(email.trim(), access_token);
-            setDebug((d) => d + "\nToken push enregistré !");
-          } catch (err) {
-            setDebug((d) => d + "\nErreur push: " + err?.message);
-          }
+       //   setDebug(`Connexion OK. Token: ${access_token ? access_token.slice(0,12) + '...' : "Aucun"}`);
+
+          // 🔕 PUSH désactivé pour le moment
+          // await registerForPushNotificationsAsync(email.trim(), access_token);
+
           router.replace("/");
-        }
-        else {
+        } else {
           setError("Erreur lors de la connexion mobile.");
-          setDebug("Echec login côté mobile.");
           shake();
         }
       }
-    } catch (e) {
+    } catch (e: any) {
       setError("Erreur réseau. Réessaie plus tard.");
-      setDebug("Erreur réseau: " + e?.message);
+      setDebug("Erreur réseau: " + (e?.message || "inconnue"));
       shake();
     }
     setLoading(false);
@@ -169,212 +97,190 @@ export default function LoginScreen() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#191A23" }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
       <StatusBar barStyle="light-content" />
-      <View style={styles.headerBox}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          style={{ marginRight: 7 }}
-        >
-          <Icon name="chevron-back" size={29} color="#FF8200" />
-        </TouchableOpacity>
-        <View style={styles.logoBox}>
-          <Image source={logoComets} style={styles.logo} resizeMode="contain" />
+
+      {/* HERO (style Comets) */}
+      <View
+        style={[
+          styles.hero,
+          { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26 },
+        ]}
+      >
+        <View style={styles.heroStripe} />
+
+        <View style={styles.heroRow}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            activeOpacity={0.9}
+          >
+            <Icon name="chevron-back" size={24} color="#FF8200" />
+          </TouchableOpacity>
+
+        {/* ⬇️ titre adapté */}
+          <Text style={styles.heroTitle}>Connexion membre</Text>
+
+          <View style={{ width: 36 }} />
         </View>
-        <View style={{ width: 38 }} />
+
+        <View style={styles.heroProfileRow}>
+          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
+          <View style={{ flex: 1 }}>
+            {/* ⬇️ sous‑titre adapté */}
+            <Text style={styles.heroName}>Comets</Text>
+            <Text style={styles.heroSub}>Connecte‑toi pour accéder à ton compte.</Text>
+          </View>
+        </View>
       </View>
+
+      {/* FORM */}
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 25}
       >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-        >
-          <Text style={styles.title}>Connexion Admin</Text>
-          <Animated.View style={[styles.formCard, { transform: [{ translateX: shakeAnim }] }]}>
+        <ScrollView contentContainerStyle={styles.listContainer} keyboardShouldPersistTaps="handled">
+          <Animated.View style={[styles.card, { transform: [{ translateX: shakeAnim }] }]}>
+            <Text style={styles.cardTitle}>Se connecter</Text>
+
             {/* Email */}
             <View style={styles.inputWrap}>
+              <Text style={styles.inputLabel}>Adresse email</Text>
               <TextInput
-                placeholder="Adresse email"
+                placeholder="email@requis.fr"
                 value={email}
                 onChangeText={setEmail}
                 autoCapitalize="none"
                 keyboardType="email-address"
-                placeholderTextColor="#FFB870"
+                placeholderTextColor="#9aa0ae"
                 style={styles.input}
                 returnKeyType="next"
               />
             </View>
-            {/* Mot de passe + bouton eye */}
+
+            {/* Mot de passe */}
             <View style={styles.inputWrap}>
+              <Text style={styles.inputLabel}>Mot de passe</Text>
               <TextInput
-                placeholder="Mot de passe"
+                placeholder="••••••••"
                 value={password}
                 onChangeText={setPassword}
                 secureTextEntry={!showPwd}
                 autoCapitalize="none"
-                placeholderTextColor="#FFB870"
+                placeholderTextColor="#9aa0ae"
                 style={styles.input}
                 onSubmitEditing={handleLogin}
                 returnKeyType="done"
               />
-              <TouchableOpacity
-                style={styles.eyeBtn}
-                onPress={() => setShowPwd(v => !v)}
-                activeOpacity={0.7}
-              >
-                <Icon name={showPwd ? "eye-off" : "eye"} size={22} color="#FF8200" />
+              <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowPwd((v) => !v)} activeOpacity={0.7}>
+                <Icon name={showPwd ? "eye-off" : "eye"} size={20} color="#FF8200" />
               </TouchableOpacity>
             </View>
+
             {/* Erreur */}
-            {error ? (
-              <Text style={styles.errorText}>{error}</Text>
-            ) : null}
-            {/* Debug */}
-            {debug ? (
-              <Text style={{ fontSize: 12, color: "#6b4900", backgroundColor: "#fffbe7", padding: 6, borderRadius: 6, marginBottom: 7 }}>
-                {debug}
-              </Text>
-            ) : null}
-            {/* Bouton login */}
+            {!!error && <Text style={styles.errorText}>{error}</Text>}
+
+            {/* Debug (visible) */}
+            {!!debug && <Text style={styles.debugText}>{debug}</Text>}
+
+            {/* CTA connexion */}
             <TouchableOpacity
-              style={[styles.loginBtn, loading && { opacity: 0.7 }]}
+              style={[styles.primaryBtn, loading && { opacity: 0.7 }]}
               disabled={loading}
               onPress={handleLogin}
+              activeOpacity={0.9}
             >
-              {loading ? (
-                <ActivityIndicator color="#FFF" />
-              ) : (
-                <Text style={styles.loginBtnText}>
-                  Se connecter
-                </Text>
+              {loading ? <ActivityIndicator color="#FFF" /> : (
+                <>
+                  <Icon name="log-in-outline" size={18} color="#fff" />
+                  <Text style={styles.primaryBtnTxt}>Se connecter</Text>
+                </>
               )}
             </TouchableOpacity>
           </Animated.View>
+
+          {/* Lien vers Inscription */}
+          <TouchableOpacity onPress={() => router.push("/(tabs)/Register")} activeOpacity={0.8} style={styles.helpBox}>
+            <Text style={styles.helpTxt}>Pas de compte ? C’est par ici !</Text>
+          </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-//styles
-
 const styles = StyleSheet.create({
-  headerBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#101017",
-    borderBottomWidth: 1.5,
-    borderBottomColor: "#FF8200",
-    paddingTop: 24,
-    paddingBottom: 14,
-    paddingHorizontal: 10,
-    marginBottom: 0,
-    gap: 12,
-    justifyContent: "space-between",
+  // === HERO ===
+  hero: {
+    backgroundColor: "#11131a",
+    borderBottomWidth: 1,
+    borderBottomColor: "#1f2230",
+    paddingBottom: 10,
   },
-  logoBox: {
+  heroStripe: {
+    position: "absolute",
+    right: -60,
+    top: -40,
+    width: 240,
+    height: 240,
+    borderRadius: 120,
+    backgroundColor: "rgba(255,130,0,0.10)",
+    transform: [{ rotate: "18deg" }],
+  },
+  heroRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, gap: 10 },
+  backBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#1b1e27",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#101017",
-    borderRadius: 30,
-    padding: 10,
-    marginHorizontal: 5,
-  },
-  logo: {
-    width: 60,
-    height: 60,
-    borderRadius: 19,
-    backgroundColor: "#101017",
-    borderWidth: 4,
-    borderColor: "#FF8200",
-  },
-  scrollContent: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 44,
-    paddingHorizontal: 8,
-  },
-  title: {
-    fontSize: 25,
-    fontWeight: "900",
-    color: "#FF8200",
-    marginBottom: 38,
-    textAlign: "center",
-    letterSpacing: 1.2,
-    textShadowColor: "#FFE3B7",
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 5,
-  },
-  formCard: {
-    width: 320,
-    backgroundColor: "rgba(255,244,230,0.98)",
-    borderRadius: 27,
-    padding: 26,
-    marginBottom: 12,
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.13,
-    shadowRadius: 12,
-    elevation: 3,
-    borderWidth: 1.7,
-    borderColor: "#FF8200",
-    alignItems: "center",
-  },
-  inputWrap: {
-    width: "100%",
-    position: "relative",
-    marginBottom: 18,
-  },
-  input: {
-    width: "100%",
-    backgroundColor: "#fff",
-    padding: 15,
-    borderRadius: 13,
     borderWidth: 1,
-    borderColor: "#FFD7A1",
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "#FF8200",
-    shadowColor: "#F6B98C",
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 2,
-    letterSpacing: 0.3,
-    paddingRight: 44, // Espace pour l'œil
+    borderColor: "#2a2f3d",
   },
-  eyeBtn: {
-    position: "absolute",
-    right: 11,
-    top: 12,
-    padding: 2,
-    zIndex: 10,
+  heroTitle: { flex: 1, textAlign: "center", color: "#FF8200", fontSize: 20, fontWeight: "800", letterSpacing: 1.1 },
+  heroProfileRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 10, gap: 12 },
+  heroLogo: {
+    width: 56, height: 56, borderRadius: 14, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200",
   },
-  errorText: {
-    color: "#E53935",
-    fontWeight: "bold",
-    fontSize: 14,
-    marginBottom: 8,
-    textAlign: "center"
+  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
+  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
+
+  // === CONTENU ===
+  listContainer: { paddingHorizontal: 12, paddingBottom: 34, paddingTop: 14 },
+  card: {
+    width: "100%", maxWidth: 460, alignSelf: "center",
+    backgroundColor: "rgba(255,255,255,0.06)", borderRadius: 18, padding: 16,
+    shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 12, elevation: 3,
+    borderWidth: 1, borderColor: "rgba(255,130,0,0.22)",
   },
-  loginBtn: {
-    backgroundColor: "#FF8200",
-    paddingVertical: 15,
-    paddingHorizontal: 58,
-    borderRadius: 18,
-    marginTop: 6,
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.18,
-    shadowRadius: 8,
-    elevation: 2,
+  cardTitle: { color: "#eaeef7", fontWeight: "900", fontSize: 18, marginBottom: 10, textAlign: "center" },
+
+  inputWrap: { marginBottom: 12, position: "relative" },
+  inputLabel: { color: "#c7cad1", fontWeight: "700", marginBottom: 6, fontSize: 13 },
+  input: {
+    backgroundColor: "#fff", borderColor: "#FFD197", borderWidth: 1.2, borderRadius: 12,
+    padding: 13, fontSize: 16, color: "#1c1c1c", fontWeight: "700", paddingRight: 40,
   },
-  loginBtnText: {
-    color: "#FFF",
-    fontWeight: "bold",
-    fontSize: 18,
-    letterSpacing: 1.2,
-  }
+  eyeBtn: { position: "absolute", right: 10, top: 34, padding: 4 },
+
+  errorText: { color: "#E53935", fontWeight: "bold", fontSize: 14, marginTop: 2, marginBottom: 6, textAlign: "center" },
+  debugText: { fontSize: 12, color: "#6b4900", backgroundColor: "#fffbe7", padding: 6, borderRadius: 6, marginBottom: 7 },
+
+  primaryBtn: {
+    marginTop: 4, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 8,
+    backgroundColor: "#FF8200", borderRadius: 12, paddingHorizontal: 18, paddingVertical: 12,
+  },
+  primaryBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 15 },
+
+  // Lien register
+  helpBox: {
+    alignSelf: "center",
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  helpTxt: { color: "#FF8200", fontSize: 14, fontWeight: "700", textAlign: "center", textDecorationLine: "underline" },
 });

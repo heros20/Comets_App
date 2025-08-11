@@ -1,15 +1,20 @@
+// app/screens/Accueil.tsx
+"use client";
+
 import { router } from "expo-router";
+import React from "react";
 import {
-  Alert,
+  Dimensions,
   Image,
+  Platform,
   ScrollView,
+  StatusBar,
+  StyleSheet,
   Text,
   TouchableOpacity,
   View,
-  StyleSheet,
-  StatusBar,
-  Dimensions,
 } from "react-native";
+import Icon from "react-native-vector-icons/Ionicons";
 import { useAdmin } from "../contexts/AdminContext";
 
 const logoComets = require("../assets/images/iconComets.png");
@@ -21,65 +26,96 @@ export default function Accueil() {
 
   // 1 colonne sous 400px, sinon 2 colonnes.
   const isNarrow = windowWidth < 400;
-  const cardWidth = isNarrow
-    ? windowWidth - 34
-    : Math.max((windowWidth - 48) / 2, 155);
+  const cardWidth = isNarrow ? windowWidth - 34 : Math.max((windowWidth - 48) / 2, 155);
 
-  // **Nav classique SANS l’admin**
+  // Navigation principale
   const navItems = [
-    { label: "Joueurs", icon: "⚾️", route: "/joueurs" },
-    { label: "Matchs", icon: "🗓️", route: "/matchs" },
-    { label: "Classement", icon: "🏆", route: "/classement" },
-    { label: "Actualités", icon: "📰", route: "/actus" },
-    { label: "Galerie", icon: "🖼️", route: "/GalleryScreen" },
-    ...(isLoggedIn ? [{ label: "Profil", icon: "👤", route: "/profil" }] : []),
+    { label: "Joueurs", icon: "person-outline" as const, route: "/joueurs" },
+    { label: "Matchs", icon: "calendar-outline" as const, route: "/matchs" },
+    { label: "Classement", icon: "trophy-outline" as const, route: "/classement" },
+    { label: "Actualités", icon: "newspaper-outline" as const, route: "/actus" },
+    { label: "Galerie", icon: "images-outline" as const, route: "/GalleryScreen" },
+    // 👉 Nouveau: accès direct au runner
+    { label: "Comets Run", icon: "game-controller-outline" as const, route: "/(tabs)/CometsRunScreen" },
+    ...(isLoggedIn ? [{ label: "Profil", icon: "person-circle-outline" as const, route: "/profil" }] : []),
   ];
 
   const handleLogout = async () => {
-    Alert.alert(
-      "Déconnexion",
-      "Tu veux vraiment te déconnecter ?",
-      [
-        { text: "Annuler", style: "cancel" },
-        {
-          text: "Déconnexion",
-          style: "destructive",
-          onPress: async () => {
-            await logout();
-            router.replace("/");
-          },
-        },
-      ]
-    );
+    await logout();
+    router.replace("/");
   };
 
   return (
-    <View style={styles.container}>
+    <View style={{ flex: 1, backgroundColor: "#0f1014" }}>
       <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
-        <View style={styles.logoWrap}>
-          <Image source={logoComets} style={styles.logo} resizeMode="contain" />
-        </View>
-        <Text style={styles.title}>Les Comets Honfleur</Text>
-        <Text style={styles.subTitle}>Club Officiel • Baseball R1 • 2025</Text>
 
-        <View style={styles.authBtns}>
+      {/* HERO */}
+      <View
+        style={[
+          styles.hero,
+          { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26 },
+        ]}
+      >
+        <View style={styles.heroStripe} />
+
+        {/* Titre centré */}
+        <View style={styles.heroRow}>
+          <View style={{ width: 36 }} />
+          <Text style={styles.heroTitle}>Comets d’Honfleur</Text>
+          <View style={{ width: 36 }} />
+        </View>
+
+        {/* Logo + sous-titres */}
+        <View style={styles.heroProfileRow}>
+          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroName}>Les Comets Honfleur</Text>
+            <Text style={styles.heroSub}>Club Officiel • Baseball</Text>
+          </View>
+        </View>
+
+        {/* Boutons Connexion / Inscription / Déconnexion */}
+        <View style={styles.authRow}>
           {isLoggedIn ? (
-            <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-              <Text style={styles.logoutBtnText}>Déconnexion</Text>
+            <TouchableOpacity style={[styles.btn, styles.btnLight]} onPress={handleLogout} activeOpacity={0.9}>
+              <Icon name="log-out-outline" size={16} color="#D63908" />
+              <Text style={[styles.btnLightTxt, { color: "#D63908" }]}>Déconnexion</Text>
             </TouchableOpacity>
           ) : (
             <>
-              <TouchableOpacity style={styles.loginBtn} onPress={() => router.push("/login")}>
-                <Text style={styles.loginBtnText}>Connexion</Text>
+              <TouchableOpacity
+                style={[styles.btn, styles.btnLight]}
+                onPress={() => router.push("/login")}
+                activeOpacity={0.9}
+              >
+                <Icon name="log-in-outline" size={16} color="#FF8200" />
+                <Text style={styles.btnLightTxt}>Connexion</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.registerBtn} onPress={() => router.push("/(tabs)/Register")}>
-                <Text style={styles.registerBtnText}>Inscription</Text>
+              <TouchableOpacity
+                style={[styles.btn, styles.btnPrimary]}
+                onPress={() => router.push("/(tabs)/Register")}
+                activeOpacity={0.9}
+              >
+                <Icon name="person-add-outline" size={16} color="#fff" />
+                <Text style={styles.btnPrimaryTxt}>Inscription</Text>
               </TouchableOpacity>
             </>
           )}
         </View>
+      </View>
 
+      {/* CONTENU */}
+      <ScrollView contentContainerStyle={styles.listContainer}>
+        {/* Intro card */}
+        <View style={styles.introCard}>
+          <Text style={styles.introTxt}>
+            Bienvenue dans l’app officielle des Comets. Actus, matchs, galerie, profil…
+            tout le club au bout des doigts. ⚾
+
+          </Text>
+        </View>
+
+        {/* Grille menu */}
         <View style={styles.menuGrid}>
           {navItems.map(({ label, icon, route }, idx) => (
             <TouchableOpacity
@@ -93,209 +129,193 @@ export default function Accueil() {
                 },
               ]}
               onPress={() => router.push(route)}
-              activeOpacity={0.87}
+              activeOpacity={0.92}
             >
-              <Text style={styles.cardIcon}>{icon}</Text>
-              <Text
-                style={styles.cardText}
-                numberOfLines={1}
-                ellipsizeMode="tail"
-              >
+              <View style={styles.cardIconWrap}>
+                <Icon name={icon} size={20} color="#FF8200" />
+              </View>
+              <Text style={styles.cardText} numberOfLines={1}>
                 {label}
               </Text>
+              <Icon name="chevron-forward" size={18} color="#cfd3db" />
             </TouchableOpacity>
           ))}
         </View>
 
-        {/* --- ADMIN BUTTON distinct en bas --- */}
+        {/* ADMIN distinct */}
         {isAdmin && (
           <TouchableOpacity
             style={styles.adminBtn}
             onPress={() => router.push("/admin")}
-            activeOpacity={0.88}
+            activeOpacity={0.92}
           >
-            <Text style={styles.adminBtnIcon}>🛠️</Text>
-            <Text style={styles.adminBtnText}>Espace Admin</Text>
+            <Icon name="construct-outline" size={18} color="#fff" />
+            <Text style={styles.adminBtnTxt}>Espace Admin</Text>
           </TouchableOpacity>
         )}
 
-        <Text style={styles.footNote}>Made by Kevin – powered by Comets Honfleur 🟠</Text>
+        <Text style={styles.footNote}>Made by Kevin — powered by Comets Honfleur 🟠</Text>
       </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  // === HERO (aligné sur Actus/Galerie) ===
+  hero: {
+    backgroundColor: "#11131a",
+    borderBottomWidth: 1,
+    borderBottomColor: "#1f2230",
+    paddingBottom: 12,
+  },
+  heroStripe: {
+    position: "absolute",
+    right: -60,
+    top: -40,
+    width: 240,
+    height: 240,
+    borderRadius: 120,
+    backgroundColor: "rgba(255,130,0,0.10)",
+    transform: [{ rotate: "18deg" }],
+  },
+  heroRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    gap: 10,
+  },
+  heroTitle: {
     flex: 1,
-    backgroundColor: "#18181C",
+    textAlign: "center",
+    color: "#FF8200",
+    fontSize: 20,
+    fontWeight: "800",
+    letterSpacing: 1.1,
   },
-  scrollContainer: {
+  heroProfileRow: {
+    flexDirection: "row",
     alignItems: "center",
-    paddingTop: 34,
-    paddingBottom: 26,
-    paddingHorizontal: 8,
-    minHeight: "100%",
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    gap: 12,
   },
-  logoWrap: {
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 10,
-  },
-  logo: {
-    width: 88,
-    height: 88,
-    marginBottom: 0,
-    borderRadius: 22,
+  heroLogo: {
+    width: 56,
+    height: 56,
+    borderRadius: 14,
+    backgroundColor: "#fff",
     borderWidth: 2,
     borderColor: "#FF8200",
-    backgroundColor: "#fff",
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.16,
-    shadowRadius: 13,
-    elevation: 4,
   },
-  title: {
-    fontSize: 27,
-    fontWeight: "bold",
-    color: "#FF8200",
-    letterSpacing: 1.2,
-    textAlign: "center",
-    textShadowColor: "#FFE3B7",
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 4,
-    marginBottom: 2,
-  },
-  subTitle: {
-    fontSize: 14.5,
-    fontWeight: "700",
-    color: "#f3b981",
-    letterSpacing: 0.7,
-    textAlign: "center",
-    marginBottom: 18,
-  },
-  authBtns: {
+  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
+  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
+
+  // Boutons d’auth
+  authRow: {
     flexDirection: "row",
-    justifyContent: "center",
     gap: 10,
-    marginBottom: 27,
-    marginTop: 4,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 10,
   },
-  loginBtn: {
-    backgroundColor: "#FFD08D",
+  btn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 12,
+    paddingHorizontal: 14,
     paddingVertical: 9,
-    paddingHorizontal: 19,
-    borderRadius: 11,
-    marginRight: 6,
   },
-  loginBtnText: {
-    fontSize: 15,
-    color: "#FF8200",
-    fontWeight: "bold",
-    letterSpacing: 0.7,
+  btnLight: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "#2b3141",
   },
-  registerBtn: {
+  btnLightTxt: { color: "#FF8200", fontWeight: "900", fontSize: 13.5 },
+  btnPrimary: {
     backgroundColor: "#FF8200",
-    paddingVertical: 9,
-    paddingHorizontal: 19,
-    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: "#FF8200",
   },
-  registerBtnText: {
-    fontSize: 15,
-    color: "#FFF",
-    fontWeight: "bold",
-    letterSpacing: 0.7,
+  btnPrimaryTxt: { color: "#fff", fontWeight: "900", fontSize: 13.5 },
+
+  // === CONTENU LISTE ===
+  listContainer: { paddingHorizontal: 12, paddingBottom: 34, paddingTop: 14 },
+
+  introCard: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.22)",
+    padding: 14,
+    marginBottom: 12,
   },
-  logoutBtn: {
-    backgroundColor: "#FFD08D",
-    paddingVertical: 9,
-    paddingHorizontal: 24,
-    borderRadius: 11,
-  },
-  logoutBtnText: {
-    fontSize: 15,
-    color: "#D63908",
-    fontWeight: "bold",
-    letterSpacing: 0.7,
-  },
+  introTxt: { color: "#cfd3db", fontSize: 14.5, lineHeight: 20, textAlign: "center" },
+
   // Grille du menu
   menuGrid: {
     width: "100%",
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "center",
-    marginBottom: 13,
-    marginTop: 0,
+    marginBottom: 8,
   },
   card: {
-    backgroundColor: "rgba(255,250,245,0.98)",
-    borderRadius: 17,
-    marginBottom: 13,
-    paddingVertical: 17,
-    paddingHorizontal: 10,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderRadius: 18,
+    marginBottom: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
     alignItems: "center",
     flexDirection: "row",
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.11,
-    shadowRadius: 9,
-    elevation: 1,
-    borderWidth: 2,
-    borderColor: "#FF8200",
-    gap: 13,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.22)",
+    gap: 12,
     minWidth: 138,
-    maxWidth: 210,
+    maxWidth: 240,
     flex: 1,
   },
-  cardIcon: {
-    fontSize: 25,
-    marginRight: 7,
-  },
-  cardText: {
-    fontSize: 16,
-    color: "#FF8200",
-    fontWeight: "bold",
-    letterSpacing: 0.5,
-    flex: 1,
-  },
-  // --- Admin button style distinct ---
-  adminBtn: {
-    flexDirection: "row",
+  cardIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#141821",
     alignItems: "center",
     justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#252a38",
+  },
+  cardText: { fontSize: 15.5, color: "#eaeef7", fontWeight: "800", letterSpacing: 0.3, flex: 1 },
+
+  // Admin
+  adminBtn: {
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
     backgroundColor: "#FF8200",
     borderRadius: 16,
-    paddingVertical: 17,
-    paddingHorizontal: 37,
-    marginTop: 19,
-    marginBottom: 15,
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.12,
-    shadowRadius: 14,
-    elevation: 2,
-    borderWidth: 2.2,
-    borderColor: "#FFD08D",
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: "#FF8200",
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 3,
   },
-  adminBtnIcon: {
-    fontSize: 25,
-    color: "#FFF",
-    marginRight: 13,
-  },
-  adminBtnText: {
-    fontSize: 17.5,
-    color: "#FFF",
-    fontWeight: "900",
-    letterSpacing: 1,
-    textTransform: "uppercase",
-    textShadowColor: "#FFD08D",
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 3,
-  },
+  adminBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 14.5, letterSpacing: 0.5, textTransform: "uppercase" },
+
+  // Footnote
   footNote: {
-    color: "#666",
-    fontSize: 11,
+    color: "#9aa0ae",
+    fontSize: 11.5,
     textAlign: "center",
-    marginTop: 32,
-    marginBottom: 0,
-    fontStyle: "italic",
+    marginTop: 22,
   },
 });
