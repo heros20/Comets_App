@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "445465366863",
-    "project_id": "les-comets-honfleur",
-    "storage_bucket": "les-comets-honfleur.firebasestorage.app"
+    "project_number": "1007830330657",
+    "project_id": "new-comets-app",
+    "storage_bucket": "new-comets-app.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:445465366863:android:864f354b377397748db53a",
+        "mobilesdk_app_id": "1:1007830330657:android:69ab61dc94415b7ba56260",
         "android_client_info": {
           "package_name": "com.lescomets.app"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyCgrZpjqjXwiv2VUczSTi6UD733FYdIwvE"
+          "current_key": "AIzaSyBNLqmpJAtml_V9Jp7qViqobdS30-k8a3Y"
         }
       ],
       "services": {

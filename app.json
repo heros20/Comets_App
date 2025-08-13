@@ -12,29 +12,32 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.lescomets.app",
-      "googleServicesFile": "./GoogleService-Info.plist"
     },
 
     "android": {
       "package": "com.lescomets.app",
-      "versionCode": 14,
+      "versionCode": 15,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/iconComets.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "permissions": [
+        "NOTIFICATIONS"
+      ]
     },
 
-"androidStatusBar": {
-  "translucent": false,
-  "backgroundColor": "#FFFFFF",
-  "barStyle": "dark-content"
-},
-"androidNavigationBar": {
-  "visible": "immersive",
-  "backgroundColor": "#FFFFFF",
-  "barStyle": "dark-content"
-},
+    "androidStatusBar": {
+      "translucent": false,
+      "backgroundColor": "#FFFFFF",
+      "barStyle": "dark-content"
+    },
+
+    "androidNavigationBar": {
+      "visible": "immersive",
+      "backgroundColor": "#FFFFFF",
+      "barStyle": "dark-content"
+    },
 
     "web": {
       "bundler": "metro",
@@ -68,7 +71,8 @@
         "projectId": "dd9f34e7-245f-4200-9f52-e21709967fb5"
       },
       "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
-      "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY"
+      "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY",
+      "EXPO_PUBLIC_PROJECT_ID": "dd9f34e7-245f-4200-9f52-e21709967fb5"
     }
   }
 }

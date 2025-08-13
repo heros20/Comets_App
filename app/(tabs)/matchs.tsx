@@ -1,11 +1,14 @@
 // app/screens/MatchsScreen.tsx
-"use client";
 
-import { useNavigation, useFocusEffect } from "@react-navigation/native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import * as Calendar from "expo-calendar";
+import * as Notifications from "expo-notifications";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  Animated,
+  Easing,
   FlatList,
   Image,
   Linking,
@@ -16,10 +19,7 @@ import {
   Text,
   TouchableOpacity,
   View,
-  Animated,
-  Easing,
 } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import Icon from "react-native-vector-icons/Ionicons";
 import LogoutButton from "../../components/LogoutButton";
 import { useAdmin } from "../../contexts/AdminContext";
@@ -45,7 +45,9 @@ async function apiTry<T>(base: string, path: string, init?: RequestInit): Promis
   const url = `${base}${path}`;
   const res = await fetchWithTimeout(url, init);
   let json: any = null;
-  try { json = await res.json(); } catch {}
+  try {
+    json = await res.json();
+  } catch {}
   if (!res.ok) {
     const msg = json?.error ?? `HTTP ${res.status}`;
     throw new Error(msg);
@@ -75,6 +77,7 @@ const LOGO_MAP: Record<string, any> = {
   Caen: require("../../assets/images/Caen.png"),
   Cherbourg: require("../../assets/images/Cherbourg.jpg"),
   "Les Andelys": require("../../assets/images/les_Andelys.png"),
+  Andelys: require("../../assets/images/les_Andelys.png"),
   Louviers: require("../../assets/images/Louviers.png"),
   "Le Havre": require("../../assets/images/Le_Havre.png"),
   Rouen: require("../../assets/images/Rouen.jpg"),
@@ -91,18 +94,19 @@ const BADGE_ASSETS = {
 } as const;
 
 const TIERS = [
-  { min: 7, key: "allstar",  label: "All-Star",  color: "#EF4444" }, // rouge
-  { min: 5,  key: "confirme", label: "Confirmé", color: "#8B5CF6" }, // violet
-  { min: 3,  key: "initie",   label: "Initié",   color: "#22C55E" }, // vert
-  { min: 1,  key: "novice",   label: "Novice",   color: "#60A5FA" }, // bleu
-  { min: 0,  key: "rookie",   label: "Rookie",   color: "#9CA3AF" }, // gris
+  { min: 7, key: "allstar", label: "All-Star", color: "#EF4444" }, // rouge
+  { min: 5, key: "confirme", label: "Confirmé", color: "#8B5CF6" }, // violet
+  { min: 3, key: "initie", label: "Initié", color: "#22C55E" }, // vert
+  { min: 1, key: "novice", label: "Novice", color: "#60A5FA" }, // bleu
+  { min: 0, key: "rookie", label: "Rookie", color: "#9CA3AF" }, // gris
 ] as const;
 
 type TierKey = keyof typeof BADGE_ASSETS;
 
+// ================== Utils ==================
 function computeBadgeFromCount(count: number) {
-  const tier = TIERS.find(t => count >= t.min) ?? TIERS[TIERS.length - 1];
-  const idx = TIERS.findIndex(t => t.key === tier.key);
+  const tier = TIERS.find((t) => count >= t.min) ?? TIERS[TIERS.length - 1];
+  const idx = TIERS.findIndex((t) => t.key === tier.key);
   const next = idx > 0 ? TIERS[idx - 1] : null;
   let progress = 1;
   if (next) {
@@ -119,9 +123,29 @@ function computeBadgeFromCount(count: number) {
   };
 }
 
+function hexToRgba(hex: string, alpha = 0.33) {
+  const m = hex.replace("#", "").match(/^([0-9a-f]{6})$/i);
+  if (!m) return `rgba(255,255,255,${alpha})`;
+  const int = parseInt(m[1], 16);
+  const r = (int >> 16) & 255,
+    g = (int >> 8) & 255,
+    b = int & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function normalizeName(name: string) {
+  return name.replace(/^Les\s+/i, "").trim();
+}
+
 // ================== Types ==================
 const TEAM_NAMES: Record<string, string> = {
-  HON: "Honfleur", LHA: "Le Havre", ROU: "Rouen", CAE: "Caen", CHE: "Cherbourg", WAL: "Louviers", AND: "Andelys",
+  HON: "Honfleur",
+  LHA: "Le Havre",
+  ROU: "Rouen",
+  CAE: "Caen",
+  CHE: "Cherbourg",
+  WAL: "Louviers",
+  AND: "Les Andelys",
 };
 
 type Game = {
@@ -228,10 +252,6 @@ function BadgeCoin({ size, borderColor, source }: { size: number; borderColor: s
         alignItems: "center",
         justifyContent: "center",
         overflow: "hidden",
-        shadowColor: borderColor,
-        shadowOpacity: Platform.OS === "ios" ? 0.18 : 0.12,
-        shadowRadius: 8,
-        elevation: 3,
       }}
     >
       {source ? (
@@ -274,30 +294,31 @@ function CometsToast({
   if (!visible || !data) return null;
 
   return (
-    <View pointerEvents="box-none" style={styles.toastOverlay}>
+    <View pointerEvents="box-none" style={{ position: "absolute", left: 0, right: 0, bottom: 0, alignItems: "center", paddingBottom: 18, paddingHorizontal: 12 }}>
       <Animated.View
-        style={[
-          styles.toastCard,
-          {
-            transform: [{ translateY }],
-            opacity,
-            borderColor: data.badgeColor + "55",
-          },
-        ]}
+        style={{
+          width: "100%",
+          maxWidth: 520,
+          backgroundColor: "rgba(17,19,26,0.98)",
+          borderWidth: 1.5,
+          borderRadius: 16,
+          padding: 12,
+          transform: [{ translateY }],
+          opacity,
+          borderColor: hexToRgba(data.badgeColor || "#ffffff", 0.33),
+        }}
       >
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
           <BadgeCoin size={58} borderColor={data.badgeColor} source={BADGE_ASSETS[data.badgeKey]} />
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.toastTitle, { color: data.badgeColor }]}>
-              {data.badgeLabel}
-            </Text>
-            <Text style={styles.toastSub}>
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={{ fontWeight: "900", fontSize: 16, color: data.badgeColor }}>{data.badgeLabel}</Text>
+            <Text style={{ color: "#eaeef7", fontWeight: "700", fontSize: 13, marginTop: 2 }}>
               {data.participations} participation{data.participations > 1 ? "s" : ""} enregistrée{data.participations > 1 ? "s" : ""} 🎉
             </Text>
-            <View style={styles.toastBarBg}>
-              <View style={[styles.toastBarFg, { width: `${Math.round(data.progress * 100)}%`, backgroundColor: data.badgeColor }]} />
+            <View style={{ height: 8, borderRadius: 6, backgroundColor: "#242937", marginTop: 8, overflow: "hidden" }}>
+              <View style={{ height: "100%", borderRadius: 6, width: `${Math.round(data.progress * 100)}%`, backgroundColor: data.badgeColor }} />
             </View>
-            <Text style={styles.toastNext}>
+            <Text style={{ color: "#9aa0ae", fontWeight: "700", fontSize: 11.5, marginTop: 6 }}>
               {data.nextAt === null ? "Palier max atteint" : `Prochain titre à ${data.nextAt} participations`}
             </Text>
           </View>
@@ -333,14 +354,21 @@ export default function MatchsScreen() {
 
   const flatListRef = useRef<FlatList>(null);
 
+  // INIT NOTIFS: pas d'await en top-level → faire dans un effet
+  useEffect(() => {
+    if (Platform.OS === "android") {
+      Notifications.setNotificationChannelAsync("default", {
+        name: "default",
+        importance: Notifications.AndroidImportance.MAX,
+      }).catch(() => {});
+    }
+  }, []);
+
   // Load games played
   useEffect(() => {
     (async () => {
       try {
-        const { data, error } = await supabase
-          .from("games")
-          .select("*")
-          .order("date", { ascending: true });
+        const { data, error } = await supabase.from("games").select("*").order("date", { ascending: true });
         if (error) setErrorMsg("Erreur Supabase (joués) : " + error.message);
         else setGames((data as Game[]) ?? []);
       } catch (e: any) {
@@ -354,10 +382,7 @@ export default function MatchsScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const { data, error } = await supabase
-          .from("matches_planned")
-          .select("*")
-          .order("date", { ascending: true });
+        const { data, error } = await supabase.from("matches_planned").select("*").order("date", { ascending: true });
         if (error) setErrorMsg("Erreur Supabase (à venir) : " + error.message);
         else setPlannedGames((data as PlannedGame[]) ?? []);
       } catch (e: any) {
@@ -384,7 +409,9 @@ export default function MatchsScreen() {
       let apiMap: Record<string, boolean> = {};
       try {
         const res = await apiGet<ParticipationsGET>(`/api/matches/participations?adminId=${admin.id}`);
-        (res.matchIds || []).forEach((mid) => { apiMap[String(mid)] = true; });
+        (res.matchIds || []).forEach((mid) => {
+          apiMap[String(mid)] = true;
+        });
       } catch {
         // silencieux : on reste sur le local si l’API timeoute
       }
@@ -407,8 +434,12 @@ export default function MatchsScreen() {
   );
 
   // Data filtering
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const playedGames = useMemo(() => games.filter((g) => g.result), [games]);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const playedGames = useMemo(
+    () => games.filter((g) => g.result === "W" || g.result === "L" || g.result === "T"),
+    [games]
+  );
   const upcomingGames = useMemo(() => plannedGames.filter((pg) => new Date(pg.date) >= today), [plannedGames]);
   const dataToShow = selectedTab === "played" ? playedGames : upcomingGames;
 
@@ -456,7 +487,6 @@ export default function MatchsScreen() {
     setPosting((p) => ({ ...p, [mid]: true }));
     try {
       const res = await apiPost<ParticipatePOST>(`/api/matches/${mid}/participate`, { adminId: admin.id });
-      console.log("[participate] mid=%s ->", mid, res);
       // Mark local (optimiste)
       setJoined((j) => {
         const upd = { ...j, [mid]: true };
@@ -490,66 +520,51 @@ export default function MatchsScreen() {
   }
 
   function getOpponentLogo(opponent: string): any {
-    return LOGO_MAP[opponent] || null;
+    return LOGO_MAP[opponent] || LOGO_MAP[normalizeName(opponent)] || null;
   }
 
   // ================== UI Components ==================
-  const TabBtn = ({ tab }: { tab: (typeof TABS)[number] }) => {
-    const active = selectedTab === tab.key;
-    return (
-      <TouchableOpacity
-        onPress={() => {
-          setSelectedTab(tab.key);
-          flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-        }}
-        style={[styles.tabBtn, active && styles.tabBtnActive]}
-        activeOpacity={0.9}
-      >
-        <Icon name={tab.icon as any} size={16} color={active ? "#fff" : "#FF8200"} />
-        <Text style={[styles.tabBtnText, active && styles.tabBtnTextActive]}>{tab.label}</Text>
-      </TouchableOpacity>
-    );
-  };
-
   const UpcomingCard = ({ item }: { item: PlannedGame }) => {
     const mid = String(item.id);
     const isJoined = !!joined[mid];
     const isPosting = !!posting[mid];
 
     return (
-      <View style={[styles.card, { borderColor: "rgba(82,182,250,0.5)" }]}>
-        <View style={styles.cardTopRow}>
-          <Text style={styles.matchBadgeUpcoming}>À venir</Text>
-          <Text style={styles.matchDate}>{formatDate(item.date)}</Text>
+      <View style={{ backgroundColor: "rgba(255,255,255,0.06)", borderRadius: 18, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: "rgba(255,130,0,0.22)" }}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          <Text style={{ color: "#52b6fa", backgroundColor: "rgba(82,182,250,0.15)", borderColor: "rgba(82,182,250,0.4)", borderWidth: 1, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, fontWeight: "900", fontSize: 12.5 }}>
+            À venir
+          </Text>
+          <Text style={{ color: "#d5d8df", fontWeight: "700", fontSize: 13.5 }}>{formatDate(item.date)}</Text>
         </View>
 
-        <View style={styles.venueRow}>
+        <View style={{ flexDirection: "row", alignItems: "center", marginTop: 8 }}>
           <Icon name={item.is_home ? "home" : "airplane-outline"} size={18} color={item.is_home ? "#FF8200" : "#52b6fa"} />
-          <Text style={styles.venueTxt}>{item.is_home ? "À domicile" : "Extérieur"}</Text>
+          <Text style={{ color: "#cfd3db", fontWeight: "700", fontSize: 13.5, marginLeft: 6 }}>{item.is_home ? "À domicile" : "Extérieur"}</Text>
         </View>
 
-        <View style={styles.vsRow}>
-          <View style={styles.teamCol}>
-            <Image source={LOGO_MAP["Honfleur"]} style={styles.logoTeam} />
-            <Text style={[styles.teamName, { color: "#FF8200" }]}>Honfleur</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
+          <View style={{ flex: 1, alignItems: "center" }}>
+            <Image source={LOGO_MAP["Honfleur"]} style={{ width: 48, height: 48, borderRadius: 10, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200" }} />
+            <Text style={{ color: "#FF8200", fontWeight: "900", fontSize: 15, marginTop: 6 }}>Honfleur</Text>
           </View>
-          <Text style={styles.vs}>VS</Text>
-          <View style={styles.teamCol}>
+          <Text style={{ color: "#FF8200", fontWeight: "900", fontSize: 16, marginHorizontal: 10 }}>VS</Text>
+          <View style={{ flex: 1, alignItems: "center" }}>
             {getOpponentLogo(item.opponent) ? (
-              <Image source={getOpponentLogo(item.opponent)} style={styles.logoTeam} />
+              <Image source={getOpponentLogo(item.opponent)} style={{ width: 48, height: 48, borderRadius: 10, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200" }} />
             ) : (
-              <View style={[styles.logoTeam, { backgroundColor: "#fff" }]} />
+              <View style={{ width: 48, height: 48, borderRadius: 10, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200" }} />
             )}
-            <Text style={[styles.teamName, { color: "#52b6fa" }]} numberOfLines={1}>
+            <Text style={{ color: "#52b6fa", fontWeight: "900", fontSize: 15, marginTop: 6 }} numberOfLines={1}>
               {item.opponent}
             </Text>
           </View>
         </View>
 
-        {!!item.note && <Text style={styles.noteTxt}>{item.note}</Text>}
+        {!!item.note && <Text style={{ color: "#FF8200", fontWeight: "bold", fontSize: 13, marginTop: 8, textAlign: "center" }}>{item.note}</Text>}
 
         <TouchableOpacity
-          style={styles.calBtn}
+          style={{ marginTop: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#FF8200", borderRadius: 12, paddingVertical: 10 }}
           activeOpacity={0.88}
           onPress={() =>
             Alert.alert("Ajouter au calendrier", "Ajouter ce match à votre calendrier ?", [
@@ -559,32 +574,33 @@ export default function MatchsScreen() {
           }
         >
           <Icon name="calendar-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
-          <Text style={styles.calBtnTxt}>Ajouter au calendrier</Text>
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14.5 }}>Ajouter au calendrier</Text>
         </TouchableOpacity>
 
         {!admin?.id ? (
-          <TouchableOpacity disabled style={[styles.joinBtn, { backgroundColor: "#6b7280" }]} activeOpacity={0.9}>
+          <TouchableOpacity disabled style={{ marginTop: 10, flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#6b7280", borderRadius: 12, paddingVertical: 10 }} activeOpacity={0.9}>
             <Icon name="lock-closed-outline" size={18} color="#fff" style={{ marginRight: 7 }} />
-            <Text style={styles.joinBtnTxt}>Connecte-toi pour participer</Text>
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14.5 }}>Connecte-toi pour participer</Text>
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
-            disabled={isJoined || isPosting} // ⬅️ plus de blocage pendant hydratingJoined
+            disabled={isJoined || isPosting}
+            accessibilityState={{ disabled: isJoined || isPosting }}
             onPress={() => handleParticipate(item)}
-            style={[
-              styles.joinBtn,
-              isJoined && { backgroundColor: "#334155" },
-              isPosting && { opacity: 0.7 },
-            ]}
+            style={{
+              marginTop: 10,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: isJoined ? "#334155" : "#0ea5e9",
+              borderRadius: 12,
+              paddingVertical: 10,
+              opacity: isPosting ? 0.7 : 1,
+            }}
             activeOpacity={0.9}
           >
-            <Icon
-              name={isJoined ? "checkmark-circle-outline" : "baseball-outline"}
-              size={18}
-              color="#fff"
-              style={{ marginRight: 7 }}
-            />
-            <Text style={styles.joinBtnTxt}>
+            <Icon name={isJoined ? "checkmark-circle-outline" : "baseball-outline"} size={18} color="#fff" style={{ marginRight: 7 }} />
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14.5 }}>
               {isJoined ? "Inscrit" : isPosting ? "Inscription…" : "Je participe"}
             </Text>
           </TouchableOpacity>
@@ -609,44 +625,46 @@ export default function MatchsScreen() {
     const rightScore = g.is_home ? g.opponent_score ?? "--" : g.team_score ?? "--";
 
     return (
-      <View style={styles.card}>
-        <View style={styles.cardTopRow}>
-          <Text style={styles.matchBadgePlayed}>Match #{g.game_number}</Text>
-          <Text style={styles.matchDate}>{formatDate(g.date)}</Text>
+      <View style={{ backgroundColor: "rgba(255,255,255,0.06)", borderRadius: 18, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: "rgba(255,130,0,0.22)" }}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          <Text style={{ color: "#FF8200", backgroundColor: "rgba(255,130,0,0.12)", borderColor: "rgba(255,130,0,0.35)", borderWidth: 1, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, fontWeight: "900", fontSize: 12.5 }}>
+            Match #{g.game_number}
+          </Text>
+          <Text style={{ color: "#d5d8df", fontWeight: "700", fontSize: 13.5 }}>{formatDate(g.date)}</Text>
         </View>
 
-        <View style={styles.venueRow}>
+        <View style={{ flexDirection: "row", alignItems: "center", marginTop: 8 }}>
           <Icon name={g.is_home ? "home" : "airplane-outline"} size={18} color={g.is_home ? "#FF8200" : "#52b6fa"} />
-          <Text style={styles.venueTxt}>{g.is_home ? "À domicile" : "Extérieur"}</Text>
+          <Text style={{ color: "#cfd3db", fontWeight: "700", fontSize: 13.5, marginLeft: 6 }}>{g.is_home ? "À domicile" : "Extérieur"}</Text>
         </View>
 
-        <View style={styles.scoresRow}>
-          <View style={styles.teamScoreCol}>
-            {leftLogo && <Image source={leftLogo} style={styles.logoTeam} />}
-            <Text style={[styles.teamName, { color: homeIsHonfleur ? "#FF8200" : "#52b6fa" }]} numberOfLines={1}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
+          <View style={{ flex: 1, alignItems: "center" }}>
+            {leftLogo && <Image source={leftLogo} style={{ width: 48, height: 48, borderRadius: 10, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200" }} />}
+            <Text style={{ color: homeIsHonfleur ? "#FF8200" : "#52b6fa", fontWeight: "900", fontSize: 15, marginTop: 6 }} numberOfLines={1}>
               {leftName}
             </Text>
-            <Text style={styles.scoreTxt}>{leftScore}</Text>
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 22, marginTop: 2 }}>{leftScore}</Text>
           </View>
 
-          <Text style={styles.vsDash}>—</Text>
+          <Text style={{ color: "#FF8200", fontWeight: "900", fontSize: 20, marginHorizontal: 10 }}>—</Text>
 
-          <View style={styles.teamScoreCol}>
-            {rightLogo && <Image source={rightLogo} style={styles.logoTeam} />}
-            <Text style={[styles.teamName, { color: !homeIsHonfleur ? "#FF8200" : "#52b6fa" }]} numberOfLines={1}>
+          <View style={{ flex: 1, alignItems: "center" }}>
+            {rightLogo && <Image source={rightLogo} style={{ width: 48, height: 48, borderRadius: 10, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200" }} />}
+            <Text style={{ color: !homeIsHonfleur ? "#FF8200" : "#52b6fa", fontWeight: "900", fontSize: 15, marginTop: 6 }} numberOfLines={1}>
               {rightName}
             </Text>
-            <Text style={styles.scoreTxt}>{rightScore}</Text>
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 22, marginTop: 2 }}>{rightScore}</Text>
           </View>
         </View>
 
-        <View style={styles.resultRow}>
-          <View style={[styles.resultBadge, { backgroundColor: resultColor(g.result) }]}>
-            <Text style={styles.resultBadgeTxt}>{resultLabel(g.result)}</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", marginTop: 12 }}>
+          <View style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 10, backgroundColor: resultColor(g.result) }}>
+            <Text style={{ color: "#fff", fontWeight: "900", letterSpacing: 0.6, fontSize: 13.5 }}>{resultLabel(g.result)}</Text>
           </View>
           {!!g.boxscore_link && (
-            <TouchableOpacity style={styles.boxscoreBtn} onPress={() => Linking.openURL(g.boxscore_link)} activeOpacity={0.9}>
-              <Text style={styles.boxscoreBtnTxt}>Boxscore FFBS</Text>
+            <TouchableOpacity style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#FF8200", borderRadius: 10, paddingHorizontal: 12, paddingVertical: 7, marginLeft: 10 }} onPress={() => Linking.openURL(g.boxscore_link)} activeOpacity={0.9}>
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 13.5 }}>Boxscore FFBS</Text>
               <Icon name="open-outline" size={18} color="#fff" style={{ marginLeft: 4 }} />
             </TouchableOpacity>
           )}
@@ -655,7 +673,7 @@ export default function MatchsScreen() {
     );
   };
 
-  const isLoading = (selectedTab === "played" && loading) || (selectedTab === "upcoming" && loadingPlanned);
+  const isLoadingList = (selectedTab === "played" && loading) || (selectedTab === "upcoming" && loadingPlanned);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
@@ -663,14 +681,15 @@ export default function MatchsScreen() {
 
       {/* HERO */}
       <View
-        style={[
-          styles.hero,
-          { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26 },
-        ]}
+        style={{
+          backgroundColor: "#11131a",
+          borderBottomWidth: 1,
+          borderBottomColor: "#1f2230",
+          paddingBottom: 10,
+          paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26,
+        }}
       >
-        <View style={styles.heroStripe} />
-
-        <View style={styles.heroRow}>
+        <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12 }}>
           <TouchableOpacity
             onPress={() =>
               // @ts-ignore
@@ -680,25 +699,27 @@ export default function MatchsScreen() {
                 : // @ts-ignore
                   (navigation as any).navigate("Home")
             }
-            style={styles.backBtn}
+            style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: "#1b1e27", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#2a2f3d" }}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <Icon name="chevron-back" size={24} color="#FF8200" />
           </TouchableOpacity>
 
-          <Text style={styles.heroTitle}>Calendrier & Résultats</Text>
+          <Text style={{ flex: 1, textAlign: "center", color: "#FF8200", fontSize: 20, fontWeight: "800", letterSpacing: 1.1 }}>
+            Calendrier & Résultats
+          </Text>
           <LogoutButton />
         </View>
 
-        <View style={styles.heroProfileRow}>
-          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.heroName}>Saison 2025 — Comets</Text>
-            <Text style={styles.heroSub}>Matchs officiels & amicaux</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 10 }}>
+          <Image source={logoComets} style={{ width: 56, height: 56, borderRadius: 14, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200" }} resizeMode="contain" />
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={{ color: "#fff", fontSize: 18, fontWeight: "900" }}>Saison 2025 — Comets</Text>
+            <Text style={{ color: "#c7cad1", fontSize: 12.5, marginTop: 2 }}>Matchs officiels & amicaux</Text>
           </View>
         </View>
 
-        <View style={styles.tabsRow}>
+        <View style={{ flexDirection: "row", paddingHorizontal: 12, paddingTop: 10 }}>
           {TABS.map((tab) => (
             <TouchableOpacity
               key={tab.key}
@@ -706,17 +727,21 @@ export default function MatchsScreen() {
                 setSelectedTab(tab.key);
                 flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
               }}
-              style={[styles.tabBtn, selectedTab === tab.key && styles.tabBtnActive]}
+              style={{
+                flex: 1,
+                backgroundColor: selectedTab === tab.key ? "#FF8200" : "#141821",
+                borderWidth: 1,
+                borderColor: selectedTab === tab.key ? "#FF8200" : "#252a38",
+                paddingVertical: 10,
+                borderRadius: 12,
+                alignItems: "center",
+                flexDirection: "row",
+                justifyContent: "center",
+              }}
               activeOpacity={0.9}
             >
-              <Icon
-                name={tab.icon as any}
-                size={16}
-                color={selectedTab === tab.key ? "#fff" : "#FF8200"}
-              />
-              <Text
-                style={[styles.tabBtnText, selectedTab === tab.key && styles.tabBtnTextActive]}
-              >
+              <Icon name={tab.icon as any} size={16} color={selectedTab === tab.key ? "#fff" : "#FF8200"} />
+              <Text style={{ color: selectedTab === tab.key ? "#fff" : "#FF8200", fontWeight: "900", fontSize: 13.5, letterSpacing: 0.3, marginLeft: 8 }}>
                 {tab.label}
               </Text>
             </TouchableOpacity>
@@ -726,13 +751,13 @@ export default function MatchsScreen() {
 
       {/* LISTE */}
       <View style={{ flex: 1 }}>
-        {isLoading ? (
-          <View style={styles.loaderBox}>
-            <Text style={styles.loaderTxt}>Chargement…</Text>
+        {isLoadingList ? (
+          <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+            <Text style={{ color: "#FF8200", fontWeight: "bold", fontSize: 18 }}>Chargement…</Text>
           </View>
         ) : errorMsg ? (
-          <View style={styles.loaderBox}>
-            <Text style={styles.errorTxt}>{errorMsg}</Text>
+          <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+            <Text style={{ color: "tomato", fontSize: 15, textAlign: "center", paddingHorizontal: 20 }}>{errorMsg}</Text>
           </View>
         ) : (
           <>
@@ -741,20 +766,26 @@ export default function MatchsScreen() {
               data={dataToShow}
               keyExtractor={(it: any) => String(it.id)}
               contentContainerStyle={{ padding: 14, paddingBottom: 36 }}
-              ListEmptyComponent={<Text style={styles.emptyTxt}>Aucun match à afficher.</Text>}
-              renderItem={({ item }) =>
-                selectedTab === "upcoming" ? (
-                  <UpcomingCard item={item as PlannedGame} />
-                ) : (
-                  <PlayedCard g={item as Game} />
-                )
-              }
+              ListEmptyComponent={<Text style={{ color: "#9aa0ae", fontSize: 15, textAlign: "center", marginTop: 40 }}>Aucun match à afficher.</Text>}
+              renderItem={({ item }) => (selectedTab === "upcoming" ? <UpcomingCard item={item as PlannedGame} /> : <PlayedCard g={item as Game} />)}
               onScroll={(e) => setShowScrollTop(e.nativeEvent.contentOffset.y > 240)}
               scrollEventThrottle={16}
             />
             {showScrollTop && (
               <TouchableOpacity
-                style={styles.scrollTopBtn}
+                style={{
+                  position: "absolute",
+                  right: 18,
+                  bottom: 25,
+                  backgroundColor: "#101017EE",
+                  borderRadius: 25,
+                  width: 50,
+                  height: 50,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderWidth: 2,
+                  borderColor: "#FF8200",
+                }}
                 onPress={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: true })}
                 activeOpacity={0.8}
               >
@@ -780,6 +811,7 @@ export default function MatchsScreen() {
 
 // ================== Styles ==================
 const styles = StyleSheet.create({
+  
   // HERO
   hero: {
     backgroundColor: "#11131a",

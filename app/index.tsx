@@ -1,6 +1,7 @@
 // app/screens/Accueil.tsx
 "use client";
 
+import * as Notifications from "expo-notifications";
 import { router } from "expo-router";
 import React from "react";
 import {
@@ -18,7 +19,17 @@ import Icon from "react-native-vector-icons/Ionicons";
 import { useAdmin } from "../contexts/AdminContext";
 
 const logoComets = require("../assets/images/iconComets.png");
-
+async function testLocalNotif() {
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: "Local OK ✅",
+      body: "Si tu vois ça, le handler/canal affichent bien une notif.",
+      data: { route: "/messages" },
+      sound: "default",
+    },
+    trigger: null, // immédiat
+  });
+}
 export default function Accueil() {
   const { isAdmin, isMember, logout } = useAdmin();
   const isLoggedIn = isAdmin || isMember;
@@ -100,8 +111,19 @@ export default function Accueil() {
                 <Text style={styles.btnPrimaryTxt}>Inscription</Text>
               </TouchableOpacity>
             </>
+            
           )}
         </View>
+          {__DEV__ && (
+        <TouchableOpacity
+          style={[styles.btn, styles.btnLight, { alignSelf: "center", marginBottom: 10 }]}
+          onPress={testLocalNotif}
+          activeOpacity={0.9}
+        >
+          <Icon name="notifications-outline" size={16} color="#FF8200" />
+          <Text style={styles.btnLightTxt}>Tester une notif locale</Text>
+        </TouchableOpacity>
+      )}
       </View>
 
       {/* CONTENU */}
