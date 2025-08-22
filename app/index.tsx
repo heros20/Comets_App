@@ -11,6 +11,7 @@ import {
   ScrollView,
   StatusBar,
   StyleSheet,
+  Linking,
   Text,
   TouchableOpacity,
   View,
@@ -19,6 +20,7 @@ import Icon from "react-native-vector-icons/Ionicons";
 import { useAdmin } from "../contexts/AdminContext";
 
 const logoComets = require("../assets/images/iconComets.png");
+
 async function testLocalNotif() {
   await Notifications.scheduleNotificationAsync({
     content: {
@@ -30,6 +32,7 @@ async function testLocalNotif() {
     trigger: null, // immédiat
   });
 }
+
 export default function Accueil() {
   const { isAdmin, isMember, logout } = useAdmin();
   const isLoggedIn = isAdmin || isMember;
@@ -46,9 +49,9 @@ export default function Accueil() {
     { label: "Classement", icon: "trophy-outline" as const, route: "/classement" },
     { label: "Actualités", icon: "newspaper-outline" as const, route: "/actus" },
     { label: "Galerie", icon: "images-outline" as const, route: "/GalleryScreen" },
-    // 👉 Nouveau: accès direct au runner
-    { label: "Comets Run", icon: "game-controller-outline" as const, route: "/(tabs)/CometsRunScreen" },
-    ...(isLoggedIn ? [{ label: "Profil", icon: "person-circle-outline" as const, route: "/profil" }] : []),
+    ...(isLoggedIn
+      ? [{ label: "Comets Run", icon: "game-controller-outline" as const, route: "/(tabs)/CometsRunScreen" }]
+      : []),
   ];
 
   const handleLogout = async () => {
@@ -85,13 +88,28 @@ export default function Accueil() {
           </View>
         </View>
 
-        {/* Boutons Connexion / Inscription / Déconnexion */}
+        {/* Boutons Connexion / Inscription OU Profil / Déconnexion */}
         <View style={styles.authRow}>
           {isLoggedIn ? (
-            <TouchableOpacity style={[styles.btn, styles.btnLight]} onPress={handleLogout} activeOpacity={0.9}>
-              <Icon name="log-out-outline" size={16} color="#D63908" />
-              <Text style={[styles.btnLightTxt, { color: "#D63908" }]}>Déconnexion</Text>
-            </TouchableOpacity>
+            <>
+              <TouchableOpacity
+                style={[styles.btn, styles.btnPrimary]}
+                onPress={() => router.push("/profil")}
+                activeOpacity={0.9}
+              >
+                <Icon name="person-circle-outline" size={16} color="#fff" />
+                <Text style={styles.btnPrimaryTxt}>Profil</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.btn, styles.btnLight]}
+                onPress={handleLogout}
+                activeOpacity={0.9}
+              >
+                <Icon name="log-out-outline" size={16} color="#D63908" />
+                <Text style={[styles.btnLightTxt, { color: "#D63908" }]}>Déconnexion</Text>
+              </TouchableOpacity>
+            </>
           ) : (
             <>
               <TouchableOpacity
@@ -111,19 +129,8 @@ export default function Accueil() {
                 <Text style={styles.btnPrimaryTxt}>Inscription</Text>
               </TouchableOpacity>
             </>
-            
           )}
         </View>
-          {__DEV__ && (
-        <TouchableOpacity
-          style={[styles.btn, styles.btnLight, { alignSelf: "center", marginBottom: 10 }]}
-          onPress={testLocalNotif}
-          activeOpacity={0.9}
-        >
-          <Icon name="notifications-outline" size={16} color="#FF8200" />
-          <Text style={styles.btnLightTxt}>Tester une notif locale</Text>
-        </TouchableOpacity>
-      )}
       </View>
 
       {/* CONTENU */}
@@ -133,7 +140,6 @@ export default function Accueil() {
           <Text style={styles.introTxt}>
             Bienvenue dans l’app officielle des Comets. Actus, matchs, galerie, profil…
             tout le club au bout des doigts. ⚾
-
           </Text>
         </View>
 
@@ -176,7 +182,25 @@ export default function Accueil() {
           </TouchableOpacity>
         )}
 
-        <Text style={styles.footNote}>Made by Kevin — powered by Comets Honfleur 🟠</Text>
+        <Text
+          style={styles.footNote}
+          onPress={() => Linking.openURL("https://heros20.github.io/Portfolio-2.0/")}
+        >
+          Made by Kevin Bigoni
+        </Text>
+
+        <Text
+          style={styles.footNote}
+          onPress={() => Linking.openURL("https://les-comets-honfleur.vercel.app/mentions-legales")}
+        >
+           © {new Date().getFullYear()} Les Comets d’Honfleur — Tous droits réservés.
+        </Text>
+
+        {/* Bouton test notif local (optionnel) */}
+        {/* <TouchableOpacity onPress={testLocalNotif} style={[styles.adminBtn, { marginTop: 10, backgroundColor: "#1b1e27", borderColor: "#2b3141" }]}>
+          <Icon name="notifications-outline" size={18} color="#FF8200" />
+          <Text style={[styles.adminBtnTxt, { color: "#FF8200" }]}>Tester une notif locale</Text>
+        </TouchableOpacity> */}
       </ScrollView>
     </View>
   );

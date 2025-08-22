@@ -20,18 +20,27 @@ const logoComets = require("../../assets/images/iconComets.png");
 
 type AdminLink = { label: string; icon: string; route: string };
 
-// Liens avec actions (CRUD)
-const adminLinksCrud: AdminLink[] = [
+// 📨 Messagerie seule
+const adminLinksMessaging: AdminLink[] = [
   { label: "Messages reçus", icon: "mail-unread-outline", route: "/messages" },
-  { label: "Galerie", icon: "images-outline", route: "/AdminGalleryScreen" },
-  { label: "Matchs à venir", icon: "calendar-outline", route: "/matchs-admin" },
-  { label: "Actualités", icon: "newspaper-outline", route: "/actus-admin" },
-  { label: "Membres", icon: "people-outline", route: "/membres-admin" },
 ];
 
-// Liens lecture seule
-const adminLinksReadOnly: AdminLink[] = [
+// ⚾ Gestion des matchs
+const adminLinksMatchs: AdminLink[] = [
   { label: "Inscriptions aux matchs", icon: "list-outline", route: "/MatchsAdminScreen" },
+  { label: "Matchs à venir", icon: "calendar-outline", route: "/matchs-admin" },
+];
+
+// 📰 Contenus & médias
+const adminLinksContent: AdminLink[] = [
+  { label: "Actualités", icon: "newspaper-outline", route: "/actus-admin" },
+  { label: "Galerie", icon: "images-outline", route: "/AdminGalleryScreen" },
+];
+
+// 👥 Membres
+const adminLinksMembers: AdminLink[] = [
+  { label: "Jeunes (12U/15U)", icon: "school-outline", route: "/(admin)/youngPlayers" },
+  { label: "Membres", icon: "people-outline", route: "/membres-admin" },
 ];
 
 export default function AdminMenuScreen() {
@@ -58,7 +67,7 @@ export default function AdminMenuScreen() {
     <View style={{ flex: 1, backgroundColor: "#0f1014" }}>
       <StatusBar barStyle="light-content" />
 
-      {/* HERO (même style que Profil) */}
+      {/* HERO */}
       <View
         style={[
           styles.hero,
@@ -81,7 +90,6 @@ export default function AdminMenuScreen() {
         </View>
 
         <View style={styles.heroProfileRow}>
-          {/* Badge rond Admin à gauche (comme l’avatar profil) */}
           <View style={styles.heroAvatar}>
             <Icon name="shield-checkmark-outline" size={26} color="#FF8200" />
           </View>
@@ -91,7 +99,7 @@ export default function AdminMenuScreen() {
             <Text style={styles.heroEmail}>Gestion du club • Outils & contenus</Text>
             <View style={styles.heroChips}>
               <View style={[styles.chip, { backgroundColor: "#FFD7A1" }]}>
-                <Text style={styles.chipTxt}>🔐 Rôle : Admin</Text>
+                <Text style={styles.chipTxt}>🔐 Rôle : Admin</Text>
               </View>
               <View style={[styles.chip, { backgroundColor: "#D1F3FF" }]}>
                 <Text style={[styles.chipTxt, { color: "#0C7499" }]}>⚙️ Actions rapides</Text>
@@ -112,49 +120,59 @@ export default function AdminMenuScreen() {
             galerie et les membres — tout en un clin d’œil.
           </Text>
         </View>
-    {/* Section Lecture seule */}
-        <Text style={[styles.sectionTitle, { marginTop: 22 }]}>Participations au Match</Text>
+
+        {/* Messagerie */}
+        <Text style={[styles.sectionTitle, { marginTop: 22 }]}>Messagerie</Text>
         <View style={styles.linksWrap}>
-          {adminLinksReadOnly.map(({ label, icon, route }) => (
-            <TouchableOpacity
-              key={label}
-              style={styles.adminLink}
-              onPress={() => router.push(route)}
-              activeOpacity={0.92}
-            >
-              <View style={styles.iconWrap}>
-                <Icon name={icon as any} size={20} color="#FF8200" />
-              </View>
-              <Text style={styles.linkLabel} numberOfLines={1}>{label}</Text>
-              <Icon name="chevron-forward" size={18} color="#cfd3db" />
-            </TouchableOpacity>
+          {adminLinksMessaging.map(({ label, icon, route }) => (
+            <AdminLinkItem key={label} label={label} icon={icon} route={route} />
           ))}
         </View>
 
-        {/* Section CRUD */}
-        <Text style={[styles.sectionTitle, { marginTop: 16 }]}>Gestion & publication</Text>
+        {/* Matchs */}
+        <Text style={[styles.sectionTitle, { marginTop: 22 }]}>Matchs</Text>
         <View style={styles.linksWrap}>
-          {adminLinksCrud.map(({ label, icon, route }) => (
-            <TouchableOpacity
-              key={label}
-              style={styles.adminLink}
-              onPress={() => router.push(route)}
-              activeOpacity={0.92}
-            >
-              <View style={styles.iconWrap}>
-                <Icon name={icon as any} size={20} color="#FF8200" />
-              </View>
-              <Text style={styles.linkLabel} numberOfLines={1}>{label}</Text>
-              <Icon name="chevron-forward" size={18} color="#cfd3db" />
-            </TouchableOpacity>
+          {adminLinksMatchs.map(({ label, icon, route }) => (
+            <AdminLinkItem key={label} label={label} icon={icon} route={route} />
           ))}
         </View>
 
-    
+        {/* Contenus & médias */}
+        <Text style={[styles.sectionTitle, { marginTop: 22 }]}>Contenus & Médias</Text>
+        <View style={styles.linksWrap}>
+          {adminLinksContent.map(({ label, icon, route }) => (
+            <AdminLinkItem key={label} label={label} icon={icon} route={route} />
+          ))}
+        </View>
+
+        {/* Membres */}
+        <Text style={[styles.sectionTitle, { marginTop: 22 }]}>Membres</Text>
+        <View style={styles.linksWrap}>
+          {adminLinksMembers.map(({ label, icon, route }) => (
+            <AdminLinkItem key={label} label={label} icon={icon} route={route} />
+          ))}
+        </View>
 
         <View style={{ height: 20 }} />
       </ScrollView>
     </View>
+  );
+}
+
+// 🔹 Factorisation d’un lien Admin
+function AdminLinkItem({ label, icon, route }: AdminLink) {
+  return (
+    <TouchableOpacity
+      style={styles.adminLink}
+      onPress={() => router.push(route)}
+      activeOpacity={0.92}
+    >
+      <View style={styles.iconWrap}>
+        <Icon name={icon as any} size={20} color="#FF8200" />
+      </View>
+      <Text style={styles.linkLabel} numberOfLines={1}>{label}</Text>
+      <Icon name="chevron-forward" size={18} color="#cfd3db" />
+    </TouchableOpacity>
   );
 }
 
@@ -272,6 +290,7 @@ const styles = StyleSheet.create({
     maxWidth: 460,
     alignSelf: "center",
     marginTop: 12,
+    marginBottom: 15,
     gap: 10,
   },
   adminLink: {

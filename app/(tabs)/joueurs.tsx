@@ -22,14 +22,14 @@ import { supabase } from "../../supabase";
 
 const logoComets = require("../../assets/images/iconComets.png");
 
-type Admin = {
-  id: number;
+type YoungPlayer = {
+  id: string; // uuid en base
   first_name: string;
   last_name: string;
-  age: number | null;
-  categorie: string | null;
-  email: string | null;
+  date_naissance: string | null; // "YYYY-MM-DD" ou "DD/MM/YYYY"
+  categorie: "12U" | "15U" | null;
 };
+
 type Player = {
   id: number;
   last_name: string;
@@ -43,19 +43,36 @@ type Player = {
 const CATEGORIES = ["Senior", "15U", "12U"] as const;
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
+// ---- Helpers année depuis date_naissance (ISO ou FR) ----
+const getBirthYearFromDate = (val?: string | null): number | null => {
+  if (!val) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
+    return parseInt(val.slice(0, 4), 10);
+  }
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(val)) {
+    return parseInt(val.slice(6, 10), 10);
+  }
+  return null;
+};
+
 export default function JoueursScreen() {
   const navigation = useNavigation();
-  const [admins, setAdmins] = useState<Admin[]>([]);
+
+  // Seniors: toujours la table `players`
   const [players, setPlayers] = useState<Player[]>([]);
+  // Jeunes: maintenant via `young_players` (12U/15U)
+  const [youngPlayers, setYoungPlayers] = useState<YoungPlayer[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const [selectedCat, setSelectedCat] = useState<(typeof CATEGORIES)[number]>("Senior");
+  const [selectedCat, setSelectedCat] =
+    useState<(typeof CATEGORIES)[number]>("Senior");
   const [activeLetter, setActiveLetter] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
   const [showScrollTop, setShowScrollTop] = useState(false);
-  const [showFilter, setShowFilter] = useState(false); // <<< nouveau : pliable
+  const [showFilter, setShowFilter] = useState(false);
   const flatListRef = useRef<FlatList>(null);
 
   useEffect(() => {
@@ -63,33 +80,44 @@ export default function JoueursScreen() {
       setLoading(true);
       setErrorMsg(null);
       try {
-        const { data: adminsData, error: errorAdmins } = await supabase
-          .from("admins")
-          .select("id, first_name, last_name, age, categorie, email");
+        // Seniors
         const { data: playersData, error: errorPlayers } = await supabase
           .from("players")
           .select("id, last_name, first_name, number, yob, player_link, team_abbr");
 
-        if (errorAdmins) {
-          setErrorMsg("Erreur Supabase Admins : " + errorAdmins.message);
-        } else if (errorPlayers) {
+        if (errorPlayers) {
           setErrorMsg("Erreur Supabase Players : " + errorPlayers.message);
         } else {
-          setAdmins((adminsData || []) as Admin[]);
           setPlayers((playersData || []) as Player[]);
+        }
+
+        // Jeunes 12U/15U via young_players
+        const { data: ypData, error: ypErr } = await supabase
+          .from("young_players")
+          .select("id, first_name, last_name, date_naissance, categorie")
+          .in("categorie", ["12U", "15U"]);
+
+        if (ypErr) {
+          setErrorMsg((prev) =>
+            (prev ? prev + " · " : "") + "Erreur Supabase YoungPlayers : " + ypErr.message
+          );
+        } else {
+          setYoungPlayers((ypData || []) as YoungPlayer[]);
         }
       } catch (e: any) {
         setErrorMsg("Gros crash côté JS : " + (e?.message || e));
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     fetchAll();
   }, []);
 
-  // Data de base (catégorie)
+  // Data de base selon l’onglet
   const allData = useMemo(() => {
     if (selectedCat === "Senior") {
+      // Seniors → `players` inchangé
       return [...players]
         .sort(
           (a, b) =>
@@ -97,37 +125,46 @@ export default function JoueursScreen() {
             a.first_name.localeCompare(b.first_name)
         )
         .map((p) => ({
-          id: p.id,
+          id: String(p.id),
           first_name: p.first_name,
           last_name: p.last_name,
-          year: p.yob || "--",
+          year: p.yob ?? "--",
           link: p.player_link || "",
           number: p.number,
           team: p.team_abbr || "",
         }));
     }
-    // 15U / 12U — depuis admins
-    return admins
+
+    // 15U / 12U → utilise young_players
+    const list = youngPlayers
       .filter(
-        (a) =>
-          a.categorie &&
-          a.categorie.toUpperCase() === selectedCat.toUpperCase()
+        (yp) =>
+          (yp.categorie || "").toUpperCase() === selectedCat.toUpperCase()
       )
       .sort(
         (a, b) =>
-          (a.last_name || "").localeCompare(b.last_name || "") ||
-          (a.first_name || "").localeCompare(b.first_name || "")
+          (a.last_name || "").localeCompare(b.last_name || "", "fr", {
+            sensitivity: "base",
+          }) ||
+          (a.first_name || "").localeCompare(b.first_name || "", "fr", {
+            sensitivity: "base",
+          })
       )
-      .map((a) => ({
-        id: a.id,
-        first_name: a.first_name,
-        last_name: a.last_name,
-        year: a.age ? new Date().getFullYear() - a.age : "--",
-        link: "",
-        number: undefined as number | undefined,
-        team: "",
-      }));
-  }, [admins, players, selectedCat]);
+      .map((yp) => {
+        const year = getBirthYearFromDate(yp.date_naissance);
+        return {
+          id: String(yp.id),
+          first_name: yp.first_name || "",
+          last_name: yp.last_name || "",
+          year: year ?? "--",
+          link: "", // pas de fiche FFBS pour jeunes
+          number: undefined as number | undefined,
+          team: "",
+        };
+      });
+
+    return list;
+  }, [players, youngPlayers, selectedCat]);
 
   // Filtre texte + alphabet
   const dataToShow = useMemo(() => {
@@ -153,13 +190,22 @@ export default function JoueursScreen() {
   // Compteurs pour onglets
   const counts = useMemo(() => {
     const senior = players.length;
-    const u15 = admins.filter((a) => (a.categorie || "").toUpperCase() === "15U").length;
-    const u12 = admins.filter((a) => (a.categorie || "").toUpperCase() === "12U").length;
-    return { Senior: senior, "15U": u15, "12U": u12 } as Record<(typeof CATEGORIES)[number], number>;
-  }, [players, admins]);
+    const u15 = youngPlayers.filter((yp) => (yp.categorie || "").toUpperCase() === "15U").length;
+    const u12 = youngPlayers.filter((yp) => (yp.categorie || "").toUpperCase() === "12U").length;
+    return { Senior: senior, "15U": u15, "12U": u12 } as Record<
+      (typeof CATEGORIES)[number],
+      number
+    >;
+  }, [players, youngPlayers]);
 
   // UI
-  const CategoryTab = ({ cat, icon }: { cat: (typeof CATEGORIES)[number]; icon: string }) => {
+  const CategoryTab = ({
+    cat,
+    icon,
+  }: {
+    cat: (typeof CATEGORIES)[number];
+    icon: string;
+  }) => {
     const active = selectedCat === cat;
     return (
       <TouchableOpacity
@@ -167,7 +213,7 @@ export default function JoueursScreen() {
           setSelectedCat(cat);
           setActiveLetter(null);
           setQuery("");
-          setShowFilter(false); // on replie le filtre si on change d'onglet
+          setShowFilter(false);
           flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
         }}
         style={[styles.tabBtn, active && styles.tabBtnActive]}
@@ -304,7 +350,7 @@ export default function JoueursScreen() {
           )}
         </View>
 
-        {/* Filtrer (A‑Z) — pliable */}
+        {/* Filtrer (A-Z) — pliable */}
         <View style={{ marginHorizontal: 14, marginTop: 8, marginBottom: 10 }}>
           <TouchableOpacity
             onPress={() => setShowFilter((s) => !s)}
@@ -325,7 +371,7 @@ export default function JoueursScreen() {
                 style={[styles.alphaBtn, !activeLetter && styles.alphaBtnActive]}
                 onPress={() => {
                   setActiveLetter(null);
-                  setShowFilter(false); // se replie après choix
+                  setShowFilter(false);
                 }}
                 activeOpacity={0.75}
               >
@@ -347,7 +393,7 @@ export default function JoueursScreen() {
                   ]}
                   onPress={() => {
                     setActiveLetter(letter);
-                    setShowFilter(false); // se replie après choix
+                    setShowFilter(false);
                   }}
                   activeOpacity={0.75}
                 >
@@ -381,7 +427,7 @@ export default function JoueursScreen() {
             <FlatList
               ref={flatListRef}
               data={dataToShow}
-              keyExtractor={(item) => item.id.toString()}
+              keyExtractor={(item) => String(item.id)}
               contentContainerStyle={{ padding: 14, paddingBottom: 36 }}
               ListEmptyComponent={
                 <Text style={styles.emptyTxt}>
@@ -432,8 +478,8 @@ const styles = StyleSheet.create({
     borderBottomColor: "#1f2230",
     paddingTop:
       Platform.OS === "android"
-        ? (StatusBar.currentHeight || 0) + 12 // espace dynamique Android
-        : 22, // petit espace iOS
+        ? (StatusBar.currentHeight || 0) + 12
+        : 22,
   },
   heroStripe: {
     position: "absolute",
@@ -449,7 +495,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 12,
-    paddingTop: 4, // ↓ avant c'était 10 sur iOS, 6 sur Android
+    paddingTop: 4,
     gap: 10,
   },
   backBtnHero: {

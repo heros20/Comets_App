@@ -21,13 +21,18 @@ import { useAdmin } from "../../contexts/AdminContext";
 
 const logoComets = require("../../assets/images/iconComets.png");
 
-// ================== API utils (aligné avec MatchsScreen) ==================
+// ================== API utils ==================
 const PRIMARY_API =
   process.env.EXPO_PUBLIC_API_URL ??
   (__DEV__ ? "http://10.0.2.2:3000" : "https://les-comets-honfleur.vercel.app");
 const FALLBACK_API = "https://les-comets-honfleur.vercel.app";
 
-async function fetchWithTimeout(url: string, init?: RequestInit, ms = 3000) {
+// Timeout stable & court
+const REQ_TIMEOUT_MS = 2500;
+// ⬇️ Chemin unique : celui qui répond 200 chez toi
+const PARTICIPANTS_PATH = "/api/admin/match/participants";
+
+async function fetchWithTimeout(url: string, init?: RequestInit, ms = REQ_TIMEOUT_MS) {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), ms);
   try {
@@ -36,27 +41,42 @@ async function fetchWithTimeout(url: string, init?: RequestInit, ms = 3000) {
     clearTimeout(id);
   }
 }
+
 async function apiTry<T>(base: string, path: string, init?: RequestInit): Promise<T> {
   const url = `${base}${path}`;
   const res = await fetchWithTimeout(url, init);
   let json: any = null;
   try { json = await res.json(); } catch {}
-  if (!res.ok) {
-    const msg = json?.error ?? `HTTP ${res.status}`;
-    throw new Error(msg);
-  }
+  if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
   return json as T;
 }
-async function apiGet<T>(path: string): Promise<T> {
-  try {
-    return await apiTry<T>(PRIMARY_API, path, { method: "GET" });
-  } catch {
-    return await apiTry<T>(FALLBACK_API, path, { method: "GET" });
-  }
+
+// ⚡ Un seul chemin, mais on “race” les 2 hosts pour minimiser la latence perçue
+async function apiGetFastestHost<T>(path: string): Promise<T> {
+  return await Promise.race([
+    apiTry<T>(PRIMARY_API, path, { method: "GET" }),
+    apiTry<T>(FALLBACK_API, path, { method: "GET" }),
+  ]);
 }
 
 // ================== Types ==================
 type Participant = { id: string; first_name: string; last_name: string };
+
+// brut depuis l’API
+type ApiItem = {
+  match_id: string;
+  date: string;
+  opponent: string;
+  is_home: boolean;
+  note: string | null;
+  count: number;
+  participants: Participant[];
+  categorie?: string | null;
+};
+type ApiResp = { items: ApiItem[] };
+
+// type normalisé pour l’app
+type Category = "Seniors" | "15U" | "12U";
 type AdminMatchItem = {
   match_id: string;
   date: string;
@@ -65,8 +85,8 @@ type AdminMatchItem = {
   note: string | null;
   count: number;
   participants: Participant[];
+  categorie: Category;
 };
-type ApiResp = { items: AdminMatchItem[] };
 
 // ================== Helpers ==================
 function formatDate(dateStr: string) {
@@ -81,6 +101,15 @@ function formatDate(dateStr: string) {
   });
 }
 
+function normalizeCategory(raw?: string | null): Category {
+  if (!raw) return "Seniors";
+  const v = String(raw).trim();
+  if (/^seniors?$/i.test(v)) return "Seniors";
+  if (/^15u$/i.test(v)) return "15U";
+  if (/^12u$/i.test(v)) return "12U";
+  return "Seniors";
+}
+
 // ================== Screen ==================
 export default function MatchsAdminScreen() {
   const navigation = useNavigation();
@@ -92,17 +121,36 @@ export default function MatchsAdminScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
+  // onglets catégories (par défaut Seniors)
+  const [catFilter, setCatFilter] = useState<Category>("Seniors");
+  const listRef = useRef<FlatList<AdminMatchItem>>(null);
+
+  const hydrate = useCallback((resp: ApiResp) => {
+    const normalized: AdminMatchItem[] = (resp.items ?? []).map((m) => ({
+      match_id: String(m.match_id),
+      date: m.date,
+      opponent: m.opponent,
+      is_home: !!m.is_home,
+      note: m.note ?? null,
+      count: m.count ?? 0,
+      participants: Array.isArray(m.participants) ? m.participants : [],
+      categorie: normalizeCategory(m.categorie),
+    }));
+    setItems(normalized);
+  }, []);
+
   const load = useCallback(async () => {
     setErr(null);
+    setLoading(true);
     try {
-      const resp = await apiGet<ApiResp>("/api/admin/match/participants");
-      setItems(resp.items ?? []);
+      const resp = await apiGetFastestHost<ApiResp>(PARTICIPANTS_PATH);
+      hydrate(resp);
     } catch (e: any) {
       setErr(e?.message ?? "Erreur réseau");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [hydrate]);
 
   useEffect(() => {
     load();
@@ -111,14 +159,14 @@ export default function MatchsAdminScreen() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const resp = await apiGet<ApiResp>("/api/admin/match/participants");
-      setItems(resp.items ?? []);
+      const resp = await apiGetFastestHost<ApiResp>(PARTICIPANTS_PATH);
+      hydrate(resp);
     } catch (e: any) {
       setErr(e?.message ?? "Erreur réseau");
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [hydrate]);
 
   if (!isAdmin) {
     return (
@@ -171,8 +219,53 @@ export default function MatchsAdminScreen() {
         </View>
         <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
       </View>
+
+      {/* sous-onglets catégories */}
+      <View style={{ flexDirection: "row", gap: 8, paddingHorizontal: 12, paddingTop: 10, flexWrap: "wrap" }}>
+        {(["Seniors", "15U", "12U"] as const).map((f) => {
+          const counts = categoryCounts[f];
+          const active = catFilter === f;
+          return (
+            <TouchableOpacity
+              key={f}
+              onPress={() => {
+                setCatFilter(f);
+                listRef.current?.scrollToOffset({ offset: 0, animated: true });
+              }}
+              style={{
+                backgroundColor: active ? "#FF8200" : "rgba(255,255,255,0.06)",
+                borderColor: active ? "#FF8200" : "rgba(255,130,0,0.22)",
+                borderWidth: 1,
+                borderRadius: 999,
+                paddingVertical: 8,
+                paddingHorizontal: 14,
+              }}
+              activeOpacity={0.9}
+            >
+              <Text style={{ color: active ? "#fff" : "#eaeef7", fontWeight: active ? "900" : "800" }}>
+                {f} ({counts})
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
     </View>
   );
+
+  // comptage par catégorie
+  const categoryCounts = useMemo(() => {
+    const base = { Seniors: 0, "15U": 0, "12U": 0 } as Record<Category, number>;
+    items.forEach((it) => {
+      const cat = it.categorie;
+      if (base[cat] !== undefined) base[cat] += 1;
+    });
+    return base;
+  }, [items]);
+
+  // filtrage par onglet
+  const filteredItems = useMemo(() => {
+    return items.filter((it) => it.categorie === catFilter);
+  }, [items, catFilter]);
 
   const ItemCard = ({ it }: { it: AdminMatchItem }) => {
     const isOpen = !!expanded[it.match_id];
@@ -184,6 +277,7 @@ export default function MatchsAdminScreen() {
             <Text style={styles.matchTitle}>
               {it.is_home ? "🏠 Domicile" : "✈️ Extérieur"} • Honfleur vs {it.opponent}
             </Text>
+            {!!it.categorie && <Text style={styles.catBadge}>{it.categorie}</Text>}
             {!!it.note && <Text style={styles.noteTxt}>{it.note}</Text>}
           </View>
 
@@ -193,11 +287,7 @@ export default function MatchsAdminScreen() {
           </View>
         </View>
 
-        <TouchableOpacity
-          onPress={() => toggle(it.match_id)}
-          activeOpacity={0.9}
-          style={styles.toggleBtn}
-        >
+        <TouchableOpacity onPress={() => toggle(it.match_id)} activeOpacity={0.9} style={styles.toggleBtn}>
           <Text style={styles.toggleTxt}>
             {isOpen ? "Masquer les participants" : "Voir les participants"}
           </Text>
@@ -240,11 +330,12 @@ export default function MatchsAdminScreen() {
         </View>
       ) : (
         <FlatList
-          data={items}
+          ref={listRef}
+          data={filteredItems}
           keyExtractor={(it) => it.match_id}
           contentContainerStyle={{ padding: 14, paddingBottom: 28 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FF8200" />}
-          ListEmptyComponent={<Text style={styles.emptyTxt}>Aucun match à venir.</Text>}
+          ListEmptyComponent={<Text style={styles.emptyTxt}>{`Aucun match en ${catFilter}.`}</Text>}
           renderItem={({ item }) => <ItemCard it={item} />}
         />
       )}
@@ -348,6 +439,20 @@ const styles = StyleSheet.create({
   cardTopRow: { flexDirection: "row", alignItems: "center" },
   matchDate: { color: "#d5d8df", fontWeight: "700", fontSize: 13.5 },
   matchTitle: { color: "#fff", fontWeight: "900", fontSize: 15, marginTop: 2 },
+
+  catBadge: {
+    color: "#eaeef7",
+    backgroundColor: "#141821",
+    borderColor: "rgba(255,130,0,0.35)",
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    fontWeight: "900",
+    fontSize: 12.5,
+    marginTop: 6,
+    alignSelf: "flex-start",
+  },
 
   countBadge: {
     marginLeft: "auto",

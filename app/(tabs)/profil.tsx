@@ -1,8 +1,8 @@
 // app/screens/ProfilPlayerScreen.tsx
 "use client";
 
-import { useNavigation } from "@react-navigation/native";
-import React, { useEffect, useMemo, useState } from "react";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Image,
@@ -23,9 +23,16 @@ import { Picker } from "@react-native-picker/picker";
 import { useAdmin } from "../../contexts/AdminContext";
 import { supabase } from "../../supabase";
 
-const logoComets = require("../../assets/images/iconComets.png");
+// 🆕 PDF local
+import * as FileSystem from "expo-file-system";
+import * as Sharing from "expo-sharing";
+import { Asset } from "expo-asset";
 
-// === Badges (tes PNG/SVG réels) ===
+const logoComets = require("../../assets/images/iconComets.png");
+// 🆕 PDF d’adhésion
+const ADHESION_PDF = require("../../assets/papiers/adhesion.pdf");
+
+// === Badges ===
 const BADGE_ASSETS = {
   rookie: require("../../assets/badges/rookie.png"),
   novice: require("../../assets/badges/novice.png"),
@@ -34,7 +41,6 @@ const BADGE_ASSETS = {
   allstar: require("../../assets/badges/allstar.png"),
 } as const;
 
-// Paliers & styles (du plus haut au plus bas)
 const TIERS = [
   { min: 7, key: "allstar", label: "All-Star", color: "#EF4444" },
   { min: 5, key: "confirme", label: "Confirmé", color: "#8B5CF6" },
@@ -119,7 +125,6 @@ function ageToCategorie(age: number): "12U" | "15U" | "Senior" {
   if (age < 17) return "15U";
   return "Senior";
 }
-// =====================================
 
 // === Positions (label / value) ===
 const POSITIONS = [
@@ -135,7 +140,7 @@ const POSITIONS = [
   { label: "Batteur désigné (DH)", value: "DH" },
   { label: "Polyvalent (UT)", value: "UT" },
 ] as const;
-const ALLOWED_POSITIONS = POSITIONS.map(p => p.value);
+const ALLOWED_POSITIONS = POSITIONS.map((p) => p.value);
 
 export default function ProfilPlayerScreen() {
   const navigation = useNavigation();
@@ -146,6 +151,7 @@ export default function ProfilPlayerScreen() {
   const [profile, setProfile] = useState<any>(null);
   const [players, setPlayers] = useState<any[]>([]);
   const [cotisations, setCotisations] = useState<any[]>([]);
+  const [youngPlayers, setYoungPlayers] = useState<any[]>([]); // 🆕
   const [lastArticle, setLastArticle] = useState<any>(null);
 
   const [edit, setEdit] = useState(false);
@@ -165,77 +171,111 @@ export default function ProfilPlayerScreen() {
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [passwordError, setPasswordError] = useState<string | null>(null);
 
+  // pour éviter le “profil vide” après longue inactivité : on refetch sur focus
+  const lastFetchRef = useRef<number>(0);
+
   useEffect(() => {
-    fetchAll();
+    fetchAll(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const fetchAll = async () => {
-    setLoading(true);
+  useFocusEffect(
+    useCallback(() => {
+      const now = Date.now();
+      // Refetch si > 60s depuis le dernier fetch (ajuste si tu veux)
+      if (!lastFetchRef.current || now - lastFetchRef.current > 60_000) {
+        fetchAll(false);
+      }
+    }, [])
+  );
+
+  const ensureSession = async () => {
+    // S’assure d’avoir une session valide (évite profil vide si token périmé)
+    const { data } = await supabase.auth.getSession();
+    if (!data?.session) {
+      try {
+        await supabase.auth.refreshSession();
+      } catch {
+        // pas bloquant : certaines routes sont publiques, on continue
+      }
+    }
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    return session?.access_token || null;
+  };
+
+  const fetchAll = async (initial = false) => {
+    if (initial) setLoading(true);
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const token = session?.access_token;
+      const token = await ensureSession();
 
       const headers: Record<string, string> = token
         ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
         : { "Content-Type": "application/json" };
 
-      const [userRes, playersRes, cotisRes, articleRes] = await Promise.all([
+      // ⚠️ Important : on NE remet pas profile à null avant d’avoir tout reçu,
+      // pour éviter l’écran “vide” visuel en cas d’erreur ponctuelle.
+      const [userRes, playersRes, cotisRes, youngRes, articleRes] = await Promise.all([
         fetch("https://les-comets-honfleur.vercel.app/api/me", { headers }),
         fetch("https://les-comets-honfleur.vercel.app/api/players", { headers }),
         fetch("https://les-comets-honfleur.vercel.app/api/cotisations", { headers }),
+        fetch("https://les-comets-honfleur.vercel.app/api/young_players", { headers }), // 🆕
         fetch("https://les-comets-honfleur.vercel.app/api/news?limit=1", { headers }),
       ]);
 
-      const [userJson, playersJson, cotisJson, articleJson] = await Promise.all([
-        userRes.json(),
-        playersRes.json(),
-        cotisRes.json(),
-        articleRes.json(),
+      // On parse même si une route tombe (try/catch individuel)
+      const safeJson = async (r: Response) => {
+        try {
+          return await r.json();
+        } catch {
+          return null;
+        }
+      };
+
+      const [userJson, playersJson, cotisJson, youngJson, articleJson] = await Promise.all([
+        safeJson(userRes),
+        safeJson(playersRes),
+        safeJson(cotisRes),
+        safeJson(youngRes),
+        safeJson(articleRes),
       ]);
 
-      setProfile(userJson.user);
-      setPlayers(playersJson || []);
-      setCotisations(cotisJson || []);
-      setLastArticle(articleJson?.[0] || null);
+      if (userRes.ok && userJson?.user) {
+        setProfile(userJson.user);
 
-      // 🆕 Form côté app
-      setForm({
-        email: userJson.user?.email ?? "",
-        first_name: userJson.user?.first_name ?? "",
-        last_name: userJson.user?.last_name ?? "",
-        date_naissance_fr: isoToFR(userJson.user?.date_naissance) ?? "",
-        position: userJson.user?.position ?? "",
-        numero_maillot: userJson.user?.numero_maillot ?? "",
-        categorie: userJson.user?.categorie ?? "",
-        player_link: userJson.user?.player_link ?? "",
-      });
+        // 🆕 met aussi à jour le form (pour éviter le form vide au retour)
+        setForm({
+          email: userJson.user?.email ?? "",
+          first_name: userJson.user?.first_name ?? "",
+          last_name: userJson.user?.last_name ?? "",
+          date_naissance_fr: isoToFR(userJson.user?.date_naissance) ?? "",
+          position: userJson.user?.position ?? "",
+          numero_maillot: userJson.user?.numero_maillot ?? "",
+          categorie: userJson.user?.categorie ?? "",
+          player_link: userJson.user?.player_link ?? "",
+        });
 
-      if (typeof userJson.user?.participations === "number") {
-        setParticipations(userJson.user.participations);
-      } else if (typeof admin?.participations === "number") {
-        setParticipations(admin.participations);
-      }
+        if (typeof userJson.user?.participations === "number") {
+          setParticipations(userJson.user.participations);
+        } else if (typeof admin?.participations === "number") {
+          setParticipations(admin.participations);
+        }
+      } // sinon : on garde le profile précédent (pas d’écran vide)
+
+      if (playersRes.ok) setPlayers(playersJson || []);
+      if (cotisRes.ok) setCotisations(cotisJson || []);
+if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data : []);      if (articleRes.ok) setLastArticle(articleJson?.[0] || null);
+
+      lastFetchRef.current = Date.now();
     } catch {
-      Alert.alert("Erreur", "Impossible de charger le profil ou les infos club.");
+      if (initial) Alert.alert("Erreur", "Impossible de charger le profil ou les infos club.");
+    } finally {
+      if (initial) setLoading(false);
     }
-    setLoading(false);
   };
 
-  const hasCotisation = () => {
-    const f = normalizeName(profile?.first_name);
-    const l = normalizeName(profile?.last_name);
-    const cotisationOk = (cotisations || []).some(
-      (c) => normalizeName(c.prenom) === f && normalizeName(c.nom) === l
-    );
-    const playersOk = (players || []).some(
-      (p) => normalizeName(p.first_name) === f && normalizeName(p.last_name) === l
-    );
-    return cotisationOk || playersOk;
-  };
-
+  // === Lien FFBS
   const ffbsLink = useMemo(() => {
     const f = profile?.first_name?.trim().toLowerCase();
     const l = profile?.last_name?.trim().toLowerCase();
@@ -248,7 +288,7 @@ export default function ProfilPlayerScreen() {
     return match?.player_link || null;
   }, [players, profile?.first_name, profile?.last_name]);
 
-  // === Données dérivées d'affichage depuis la BDD ===
+  // === Données dérivées d'affichage
   const ageComputed = useMemo(() => computeAgeFromISO(profile?.date_naissance), [profile?.date_naissance]);
   const birthFR = useMemo(() => isoToFR(profile?.date_naissance), [profile?.date_naissance]);
   const categorieFromAge = useMemo(() => {
@@ -257,8 +297,7 @@ export default function ProfilPlayerScreen() {
   }, [ageComputed]);
 
   // Helpers UI
-  const getArticleUrl = (id: number | string) =>
-    `https://les-comets-honfleur.vercel.app/actus/${id}`;
+  const getArticleUrl = (id: number | string) => `https://les-comets-honfleur.vercel.app/actus/${id}`;
   const getExcerpt = (text: string, n = 120) =>
     (text || "").replace(/(<([^>]+)>)/gi, "").slice(0, n) + (text && text.length > n ? "…" : "");
 
@@ -279,12 +318,12 @@ export default function ProfilPlayerScreen() {
     const url = getArticleUrl(article.id);
     const excerpt = getExcerpt(article.content);
 
-    const fb = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(
-      url
-    )}&quote=${encodeURIComponent(article.title + " – " + excerpt)}`;
-    const tw = `https://twitter.com/intent/tweet?url=${encodeURIComponent(
-      url
-    )}&text=${encodeURIComponent(article.title + " – " + excerpt)}`;
+    const fb = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}&quote=${encodeURIComponent(
+      article.title + " – " + excerpt
+    )}`;
+    const tw = `https://twitter.com/intent/tweet?url=${encodeURIComponent(url)}&text=${encodeURIComponent(
+      article.title + " – " + excerpt
+    )}`;
     const li = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(url)}`;
     const mail = `mailto:?subject=${encodeURIComponent(
       "À lire : " + article.title
@@ -349,7 +388,7 @@ export default function ProfilPlayerScreen() {
         }
       }
 
-      // ✅ Validation "si renseigné, alors valide"
+      // ✅ Validation
       if (form.position && !ALLOWED_POSITIONS.includes(form.position)) {
         Alert.alert("Position invalide", "Merci de sélectionner une position valide.");
         setSaving(false);
@@ -369,14 +408,11 @@ export default function ProfilPlayerScreen() {
         last_name: form.last_name,
         ...(form.position ? { position: form.position } : {}),
         ...(form.numero_maillot ? { numero_maillot: Number(form.numero_maillot) } : {}),
-        ...(dnFR ? { date_naissance: frToISO(dnFR) } : {}), // 👈 envoie ISO si présent
+        ...(dnFR ? { date_naissance: frToISO(dnFR) } : {}),
         ...(passwordEdit ? { oldPassword, password } : {}),
       };
 
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const token = session?.access_token;
+      const token = await ensureSession();
       const headers = token
         ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
         : { "Content-Type": "application/json" };
@@ -400,7 +436,7 @@ export default function ProfilPlayerScreen() {
         return;
       }
 
-      // ✅ Prend le user rafraîchi renvoyé par l’API (avec categorie mise à jour)
+      // ✅ Prend le user rafraîchi renvoyé par l’API
       if (json?.user) {
         setProfile(json.user);
         setForm((prev: any) => ({
@@ -413,7 +449,6 @@ export default function ProfilPlayerScreen() {
           date_naissance_fr: isoToFR(json.user.date_naissance) ?? "",
         }));
       } else {
-        // fallback (rare)
         setProfile({ ...profile, ...body, date_naissance: body.date_naissance ?? profile?.date_naissance });
       }
 
@@ -461,10 +496,7 @@ export default function ProfilPlayerScreen() {
           text: "Supprimer",
           style: "destructive",
           onPress: async () => {
-            const {
-              data: { session },
-            } = await supabase.auth.getSession();
-            const token = session?.access_token;
+            const token = await ensureSession();
             const headers = token ? { Authorization: `Bearer ${token}` } : {};
             await fetch("https://les-comets-honfleur.vercel.app/api/me", { method: "DELETE", headers });
             logout();
@@ -472,6 +504,79 @@ export default function ProfilPlayerScreen() {
         },
       ]
     );
+  };
+
+  // === COTISATION: logique “payée” étendue avec young_players
+  const hasCotisation = () => {
+    // Priorité au nom/prénom depuis admin (comme demandé)
+    const fAdmin = normalizeName(admin?.first_name);
+    const lAdmin = normalizeName(admin?.last_name);
+    const fProfile = normalizeName(profile?.first_name);
+    const lProfile = normalizeName(profile?.last_name);
+
+    // Prends d’abord admin si dispo, sinon profil
+    const f = fAdmin || fProfile;
+    const l = lAdmin || lProfile;
+
+    // 1) Déjà payé via table cotisations
+    const cotisationOk = (cotisations || []).some(
+      (c) => normalizeName(c.prenom) === f && normalizeName(c.nom) === l
+    );
+
+    // 2) Présent dans players (= inscrit effectif)
+    const playersOk = (players || []).some(
+      (p) => normalizeName(p.first_name) === f && normalizeName(p.last_name) === l
+    );
+
+    // 3) 🆕 Présent dans young_players ⇒ considéré payé
+    const youngOk = (youngPlayers || []).some(
+      (yp) => normalizeName(yp.first_name) === f && normalizeName(yp.last_name) === l
+    );
+
+    return cotisationOk || playersOk || youngOk;
+  };
+
+  // 🆕 Téléchargement/partage du PDF d’adhésion (inchangé)
+  const handleAdhesionDownload = async () => {
+    try {
+      if (Platform.OS === "web") {
+        Alert.alert(
+          "Non disponible sur web",
+          "Le téléchargement local n’est pas disponible ici. Récupère le PDF depuis le site si besoin."
+        );
+        return;
+      }
+
+      const asset = Asset.fromModule(ADHESION_PDF);
+      await asset.downloadAsync();
+      const src = asset.localUri || asset.uri;
+      if (!src) {
+        Alert.alert("Erreur", "PDF introuvable dans le bundle.");
+        return;
+      }
+
+      const dest = FileSystem.documentDirectory + "adhesion_les_comets.pdf";
+      try {
+        const info = await FileSystem.getInfoAsync(dest);
+        if (info.exists) {
+          await FileSystem.deleteAsync(dest, { idempotent: true });
+        }
+      } catch {}
+      await FileSystem.copyAsync({ from: src, to: dest });
+
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(dest, {
+          dialogTitle: "Adhésion – Les Comets",
+          mimeType: "application/pdf",
+          UTI: "com.adobe.pdf",
+        });
+      } else {
+        await Linking.openURL(dest);
+      }
+    } catch {
+      Alert.alert("Erreur", "Impossible d’ouvrir le PDF d’adhésion.");
+    }
   };
 
   if (loading)
@@ -684,7 +789,6 @@ export default function ProfilPlayerScreen() {
                     >
                       <Coin size={64} borderColor={t.color} source={BADGE_ASSETS[k]} />
                       <Text style={styles.wallLabel}>{t.label}</Text>
-                      <Text style={styles.wallSub}>≥ {t.min}</Text>
                     </View>
                   );
                 })}
@@ -740,6 +844,26 @@ export default function ProfilPlayerScreen() {
                   </TouchableOpacity>
                 </>
               )}
+            </View>
+
+            {/* Bloc “Documents d’adhésion” */}
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>📎 Documents d’adhésion</Text>
+              <Text style={{ color: "#cdd2dc", marginBottom: 10 }}>
+                Télécharge le dossier à imprimer et à ramener au club à la prochaine séance.
+              </Text>
+
+              <TouchableOpacity style={styles.payBtn} onPress={handleAdhesionDownload} activeOpacity={0.9}>
+                <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 17 }}>
+                  Télécharger le dossier (PDF)
+                </Text>
+              </TouchableOpacity>
+
+              <View style={{ marginTop: 10, opacity: 0.8 }}>
+                <Text style={{ color: "#98a0ae", fontSize: 12.5 }}>
+                  Format: PDF • Taille: ~quelques Mo • Ouvrable avec ton lecteur PDF
+                </Text>
+              </View>
             </View>
           </>
         )}
@@ -815,7 +939,7 @@ export default function ProfilPlayerScreen() {
               )}
             </View>
 
-            {/* Position préférée (Picker) */}
+            {/* Position préférée */}
             <View style={styles.field}>
               <Text style={styles.label}>Position préférée</Text>
               <View style={styles.fieldRow}>
@@ -834,7 +958,7 @@ export default function ProfilPlayerScreen() {
               </View>
             </View>
 
-            {/* Numéro de maillot (Picker 1..99) */}
+            {/* Numéro de maillot */}
             <View style={styles.field}>
               <Text style={styles.label}>Numéro de maillot</Text>
               <View style={styles.fieldRow}>
@@ -844,7 +968,6 @@ export default function ProfilPlayerScreen() {
                   style={styles.pickerModern}
                   dropdownIconColor="#FF8200"
                   onValueChange={(value) => {
-                    // value est une string ; on garde "" ou un entier 1..99
                     if (value === "") handleChange("numero_maillot", "");
                     else handleChange("numero_maillot", Number(value));
                   }}
@@ -984,10 +1107,7 @@ const styles = StyleSheet.create({
     paddingBottom: 14,
     borderBottomWidth: 1,
     borderBottomColor: "#1f2230",
-    paddingTop:
-      Platform.OS === "android"
-        ? (StatusBar.currentHeight || 0) + 12
-        : 22,
+    paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 12 : 22,
   },
   heroStripe: {
     position: "absolute",
@@ -1215,7 +1335,7 @@ const styles = StyleSheet.create({
     alignSelf: "center",
   },
 
-  // Form legacy (non utilisé pour moderne mais conservé)
+  // Form legacy
   sectionTitle: { color: "#FF8200", fontWeight: "900", fontSize: 16, marginBottom: 8 },
   input: {
     backgroundColor: "rgba(255,255,255,0.96)",
@@ -1318,7 +1438,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,130,0,0.28)",
     borderRadius: 14,
     paddingHorizontal: 10,
-    paddingVertical: 0, // pour Picker
+    paddingVertical: 0,
     minHeight: 44,
   },
   iconLeft: { color: "#FF9E3A", marginRight: 8 },
