@@ -24,7 +24,7 @@
 
     "android": {
       "package": "com.lescomets.app",
-      "versionCode": 23,
+      "versionCode": 26,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/iconComets.png",

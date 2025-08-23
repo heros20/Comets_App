@@ -47,12 +47,46 @@ const logoComets = require("../../assets/images/iconComets.png");
 
 // 🔶 Form inclut categorie
 const initialForm = {
-  date: "",
+  date: "", // "YYYY-MM-DD"
   opponent: "",
   is_home: true,
   note: "",
   categorie: "Seniors" as (typeof CATEGORIES)[number],
 };
+
+// ---------- Utils dates ----------
+/** Renvoie "YYYY-MM-DD" (locale-agnostic) pour la date d'aujourd'hui en heure locale */
+function todayISO(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/** Compare deux "YYYY-MM-DD" sans piège de fuseau. */
+function isBefore(aISO: string, bISO: string): boolean {
+  return aISO < bISO;
+}
+
+/** Formate "YYYY-MM-DD" en FR (ex: "ven. 22 août 2025") */
+function formatDateFR(iso: string): string {
+  if (!iso) return "";
+  // Forcer minuit local pour éviter les décalages
+  const dt = new Date(`${iso}T00:00:00`);
+  try {
+    return dt.toLocaleDateString("fr-FR", {
+      weekday: "short",
+      day: "2-digit",
+      month: "long",
+      year: "numeric",
+    });
+  } catch {
+    // fallback simple si Intl absent (rare avec Hermes récent)
+    const [y, m, d] = iso.split("-");
+    return `${d}/${m}/${y}`;
+  }
+}
 
 export default function AdminMatchsScreen({ navigation }: any) {
   const { isAdmin } = useAdmin();
@@ -79,13 +113,39 @@ export default function AdminMatchsScreen({ navigation }: any) {
     setShowForm((s) => !s);
   };
 
+  // -------- Fetch + Auto-purge des matchs passés --------
   async function fetchMatchs() {
     setLoading(true);
     const { data, error } = await supabase
       .from("matches_planned")
       .select("*")
       .order("date", { ascending: true });
-    if (!error && data) setMatchs(data);
+
+    if (error) {
+      setLoading(false);
+      return;
+    }
+
+    const today = todayISO();
+    const pastIds: string[] = [];
+    const upcoming: any[] = [];
+
+    for (const m of data || []) {
+      const iso = (m?.date ? String(m.date).slice(0, 10) : "");
+      if (iso && isBefore(iso, today)) {
+        // à supprimer des "matchs à venir"
+        if (m.id) pastIds.push(m.id);
+      } else {
+        upcoming.push(m);
+      }
+    }
+
+    // Supprime en base les matchs passés (batch)
+    if (pastIds.length > 0) {
+      await supabase.from("matches_planned").delete().in("id", pastIds);
+    }
+
+    setMatchs(upcoming);
     setLoading(false);
   }
 
@@ -102,7 +162,13 @@ export default function AdminMatchsScreen({ navigation }: any) {
   }
   function onDateChange(_: any, selectedDate?: Date) {
     setShowDatePicker(false);
-    if (selectedDate) handleChange("date", selectedDate.toISOString().slice(0, 10));
+    if (selectedDate) {
+      // on stocke uniquement en ISO "YYYY-MM-DD"
+      const y = selectedDate.getFullYear();
+      const m = String(selectedDate.getMonth() + 1).padStart(2, "0");
+      const d = String(selectedDate.getDate()).padStart(2, "0");
+      handleChange("date", `${y}-${m}-${d}`);
+    }
   }
 
   async function handleSave() {
@@ -115,10 +181,17 @@ export default function AdminMatchsScreen({ navigation }: any) {
       return;
     }
 
+    // Bloque l’enregistrement de dates passées
+    const today = todayISO();
+    if (isBefore(form.date, today)) {
+      Alert.alert("Date invalide", "La date est déjà passée. Choisis une date future.");
+      return;
+    }
+
     setLoading(true);
     try {
       const row = {
-        date: form.date,
+        date: form.date, // "YYYY-MM-DD"
         opponent: form.opponent,
         is_home: form.is_home,
         note: form.note || null,
@@ -134,11 +207,11 @@ export default function AdminMatchsScreen({ navigation }: any) {
 
       setForm({ ...initialForm });
       setEditId(null);
-      fetchMatchs();
+      await fetchMatchs();
     } catch (e: any) {
       Alert.alert("Erreur", e.message);
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   async function handleDelete(id: string) {
@@ -150,7 +223,7 @@ export default function AdminMatchsScreen({ navigation }: any) {
         onPress: async () => {
           setLoading(true);
           await supabase.from("matches_planned").delete().eq("id", id);
-          fetchMatchs();
+          await fetchMatchs();
           setLoading(false);
         },
       },
@@ -237,13 +310,15 @@ export default function AdminMatchsScreen({ navigation }: any) {
           <TouchableOpacity style={styles.rowBetween} onPress={openDatePicker}>
             <Text style={styles.label}>Date</Text>
             <View style={styles.inputPill}>
-              <Text style={styles.inputPillTxt}>{form.date || "Choisir une date"}</Text>
+              <Text style={styles.inputPillTxt}>
+                {form.date ? formatDateFR(form.date) : "Choisir une date"}
+              </Text>
               <Icon name="calendar-outline" size={18} color="#b36a00" />
             </View>
           </TouchableOpacity>
           {showDatePicker && (
             <DateTimePicker
-              value={form.date ? new Date(form.date) : new Date()}
+              value={form.date ? new Date(`${form.date}T00:00:00`) : new Date()}
               mode="date"
               display="default"
               onChange={onDateChange}
@@ -448,35 +523,38 @@ export default function AdminMatchsScreen({ navigation }: any) {
               </Text>
             )
           }
-          renderItem={({ item }) => (
-            <View style={styles.card}>
-              <View style={[styles.cardTopRow, { marginBottom: 6 }]}>
-                {getLogo(item.opponent) && (
-                  <RNImage source={getLogo(item.opponent)} style={styles.matchLogo} resizeMode="contain" />
-                )}
-                <Text style={styles.cardDate}>{item.date ? String(item.date).slice(0, 10) : ""}</Text>
-                <Text style={styles.cardOpponent} numberOfLines={1}>
-                  {item.opponent}
-                </Text>
-                <TouchableOpacity onPress={() => handleEdit(item)}>
-                  <Icon name="create-outline" size={20} color="#FF8200" />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => handleDelete(item.id)}>
-                  <Icon name="trash-outline" size={20} color="#E53935" />
-                </TouchableOpacity>
-              </View>
+          renderItem={({ item }) => {
+            const iso = item.date ? String(item.date).slice(0, 10) : "";
+            return (
+              <View style={styles.card}>
+                <View style={[styles.cardTopRow, { marginBottom: 6 }]}>
+                  {getLogo(item.opponent) && (
+                    <RNImage source={getLogo(item.opponent)} style={styles.matchLogo} resizeMode="contain" />
+                  )}
+                  <Text style={styles.cardDate}>{formatDateFR(iso)}</Text>
+                  <Text style={styles.cardOpponent} numberOfLines={1}>
+                    {item.opponent}
+                  </Text>
+                  <TouchableOpacity onPress={() => handleEdit(item)}>
+                    <Icon name="create-outline" size={20} color="#FF8200" />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => handleDelete(item.id)}>
+                    <Icon name="trash-outline" size={20} color="#E53935" />
+                  </TouchableOpacity>
+                </View>
 
-              {/* Lieu + Catégorie */}
-              <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
-                <Text style={item.is_home ? styles.badgeHome : styles.badgeAway}>
-                  {item.is_home ? "Domicile" : "Extérieur"}
-                </Text>
-                {!!item.categorie && <Text style={styles.badgeCategory}>{item.categorie}</Text>}
-              </View>
+                {/* Lieu + Catégorie */}
+                <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+                  <Text style={item.is_home ? styles.badgeHome : styles.badgeAway}>
+                    {item.is_home ? "Domicile" : "Extérieur"}
+                  </Text>
+                  {!!item.categorie && <Text style={styles.badgeCategory}>{item.categorie}</Text>}
+                </View>
 
-              {!!item.note && <Text style={styles.noteTxt}>{item.note}</Text>}
-            </View>
-          )}
+                {!!item.note && <Text style={styles.noteTxt}>{item.note}</Text>}
+              </View>
+            );
+          }}
         />
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -650,7 +728,7 @@ const styles = StyleSheet.create({
 
   cardTopRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   matchLogo: { width: 40, height: 40, borderRadius: 22, borderWidth: 1, borderColor: "#ffe0b2", backgroundColor: "#fff" },
-  cardDate: { color: "#FF8200", fontWeight: "bold", fontSize: 15, minWidth: 82 },
+  cardDate: { color: "#FF8200", fontWeight: "bold", fontSize: 15, minWidth: 140 },
   cardOpponent: { color: "#e6e7eb", fontSize: 16.5, fontWeight: "bold", flex: 1 },
 
   badgeHome: {

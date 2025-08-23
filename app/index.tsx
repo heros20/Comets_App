@@ -279,7 +279,7 @@ const styles = StyleSheet.create({
   },
   btnLightTxt: { color: "#FF8200", fontWeight: "900", fontSize: 13.5 },
   btnPrimary: {
-    backgroundColor: "#FF8200",
+    backgroundColor: "#D96B00",
     borderWidth: 1,
     borderColor: "#FF8200",
   },
@@ -343,19 +343,19 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "#FF8200",
+    backgroundColor: "#D96B00",
     borderRadius: 16,
     paddingVertical: 14,
     paddingHorizontal: 24,
     marginTop: 12,
     borderWidth: 1,
-    borderColor: "#FF8200",
+    borderColor: "##D96B00",
     shadowColor: "#000",
     shadowOpacity: 0.18,
     shadowRadius: 12,
     elevation: 3,
   },
-  adminBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 14.5, letterSpacing: 0.5, textTransform: "uppercase" },
+  adminBtnTxt: { backgroundColor: "##D96B00", color: "#fff", fontWeight: "900", fontSize: 14.5, letterSpacing: 0.5, textTransform: "uppercase" },
 
   // Footnote
   footNote: {

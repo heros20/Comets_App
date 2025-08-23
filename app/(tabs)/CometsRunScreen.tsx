@@ -19,6 +19,7 @@ import {
   View,
   Modal,
   TouchableOpacity,
+  ScrollView,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import { Audio } from "expo-av";
@@ -88,16 +89,36 @@ const MULT_SCALE = 260;
 const KEY_BEST = "COMETS_RUNNER_BEST";
 const KEY_SETTINGS = "COMETS_RUNNER_SETTINGS";
 const KEY_ACH = "COMETS_RUNNER_ACHIEVEMENTS";
+const KEY_COMETS_PROGRESS = "COMETS_RUNNER_COMETS_PROGRESS"; // persistance C-O-M-E-T-S
 
 const DOUBLEJUMP_DURATION = 10_000;
-const INVINCIBLE_DURATION = 900;
+const INVINCIBLE_DURATION = 900; // post-choc court
 
 const R_COLLECTIBLE = 14;
-// Power-ups : on garde la base à 16 mais on grossit visuellement le bouclier
 const R_POWERUP = 16;
 const R_X2 = 18;
 
 const SCORE_MULT_DURATION = 10_000; // purple coin
+
+// --- HUD anti-spam (toasts)
+const TOAST_MIN_INTERVAL_MS = 900;
+
+// Super shield
+const SUPER_SHIELD_STACK = 3;
+const SUPER_SHIELD_INVINCIBLE_MS = 3000;
+const SUPER_SHIELD_GROUND_COINS = 5;
+const SUPER_SHIELD_COIN_SCALE = 1.6; // pièces plus grosses
+
+// Purple combo
+const PURPLE_CHAIN_GOAL = 10;
+const PURPLE_CHAIN_AIR_COINS = 10;
+
+// COMETS (ordre strict)
+const LETTERS = ["C","O","M","E","T","S"] as const;
+type CometsLetter = typeof LETTERS[number];
+
+// PALMIERS SCORE (une lettre tous les 10k entre 10k et 60k)
+const LETTER_THRESHOLDS = [10_000, 20_000, 30_000, 40_000, 50_000, 60_000] as const;
 
 // Assets
 const logoComets   = require("../../assets/images/iconComets.png");
@@ -108,8 +129,10 @@ const imgX2        = require("../../assets/game/PurpleCoin.png");
 const imgObs1      = require("../../assets/game/chibi_baseball.png");
 const imgObs2      = require("../../assets/game/chibi_batte.png");
 
-// Musique
-const musicFile = require("../../assets/sounds/comets-song.mp3");
+// Musique & SFX
+const musicFile       = require("../../assets/sounds/comets-song.mp3");
+const sfxCoinFile     = require("../../assets/sounds/coin.mp3");       // ← coin pickup
+const sfxApplauseFile = require("../../assets/sounds/applause.mp3");   // ← COMETS complété + x10
 
 // Maps
 const mapBaseBG           = require("../../assets/game/maps/base.jpg");
@@ -121,8 +144,8 @@ const mapSystemeSolaireBG = require("../../assets/game/maps/systeme_solaire.png"
 // Types
 type Obstacle = { id: number; x: number; w: number; h: number; y: number; variant: 0 | 1 };
 type Collectible = { id: number; x: number; y: number; r: number };
-type PowerUpKind = "shield" | "doublejump" | "x2";
-type PowerUp = { id: number; x: number; y: number; r: number; kind: PowerUpKind };
+type PowerUpKind = "shield" | "doublejump" | "x2" | "letter";
+type PowerUp = { id: number; x: number; y: number; r: number; kind: PowerUpKind; letter?: CometsLetter };
 type GameState = "ready" | "running" | "paused" | "gameover";
 
 type Settings = { mute: boolean; haptics: boolean; highContrast: boolean; };
@@ -137,7 +160,6 @@ type LBRow = {
 const randf = (min: number, max: number) => Math.random() * (max - min) + min;
 const randi = (min: number, max: number) => Math.floor(randf(min, max));
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
-const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 // Jumps
 const V0 = Math.abs(JUMP_VELOCITY);
@@ -184,15 +206,15 @@ function activeMapForScore(score: number): MapName {
 
 // ================= Component =================
 export default function CometsRunnerScreen() {
-  // Lock paysage + NavBar Android visible/transparente/icônes blanches
+  // Lock paysage + nav bar
   useEffect(() => {
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
     (async () => {
       try {
         if (Platform.OS === "android" && NavigationBar?.setBackgroundColorAsync) {
-          await NavigationBar.setBackgroundColorAsync("#00000000"); // transparent
-          await NavigationBar.setButtonStyleAsync("light");          // icônes blanches
-          await NavigationBar.setVisibilityAsync("visible");         // visible
+          await NavigationBar.setBackgroundColorAsync("#00000000");
+          await NavigationBar.setButtonStyleAsync("light");
+          await NavigationBar.setVisibilityAsync("visible");
         }
       } catch {}
     })();
@@ -201,7 +223,7 @@ export default function CometsRunnerScreen() {
       (async () => {
         try {
           if (Platform.OS === "android" && NavigationBar?.setBackgroundColorAsync) {
-            await NavigationBar.setBackgroundColorAsync("#000000");  // état neutre
+            await NavigationBar.setBackgroundColorAsync("#000000");
             await NavigationBar.setButtonStyleAsync("light");
             await NavigationBar.setVisibilityAsync("visible");
           }
@@ -211,7 +233,23 @@ export default function CometsRunnerScreen() {
   }, []);
   const setPlayingStatusBar = (b: boolean) => { try { /* @ts-ignore */ StatusBar.setHidden(b, "fade"); } catch {} };
 
-  // Taille réelle de l’aire de jeu
+  // 🔊 Mode audio pour iOS silencieux + latence minimale
+  useEffect(() => {
+    (async () => {
+      try {
+        await Audio.setAudioModeAsync({
+          playsInSilentModeIOS: true,
+          allowsRecordingIOS: false,
+          staysActiveInBackground: false,
+          interruptionModeIOS: 1,
+          shouldDuckAndroid: true,
+          interruptionModeAndroid: 1,
+        });
+      } catch {}
+    })();
+  }, []);
+
+  // Taille aire de jeu
   const [screenH, setScreenH] = useState(SCREEN_H_INIT);
   const [GROUND_Y, setGROUND_Y] = useState(GROUND_Y_INIT);
   const onGameAreaLayout = useCallback((e: any) => {
@@ -244,7 +282,7 @@ export default function CometsRunnerScreen() {
   const [best, setBest] = useState(0);
   const [showHelp, setShowHelp] = useState(true);
 
-  // restart lockout (2s après game over)
+  // restart lockout
   const restartAllowedAtRef = useRef<number>(0);
 
   // Settings
@@ -256,13 +294,20 @@ export default function CometsRunnerScreen() {
   // Achievements
   const [achievements, setAchievements] = useState<Record<AchievementKey, boolean>>({ first_x2: false, score_2000: false, combo_10: false });
   const [toast, setToast] = useState<string | null>(null);
-  const showToast = useCallback((msg: string) => { setToast(msg); setTimeout(() => setToast((t) => (t === msg ? null : t)), 1400); }, []);
+  const lastToastAtRef = useRef(0);
+  const showToast = useCallback((msg: string) => {
+    const now = Date.now();
+    if (now - lastToastAtRef.current < TOAST_MIN_INTERVAL_MS) return;
+    lastToastAtRef.current = now;
+    setToast(msg);
+    setTimeout(() => setToast((t) => (t === msg ? null : t)), 1200);
+  }, []);
   const unlock = useCallback((key: AchievementKey) => {
     setAchievements((prev) => { if (prev[key]) return prev; const next = { ...prev, ...{ [key]: true } };
       AsyncStorage.setItem(KEY_ACH, JSON.stringify(next)).catch(() => {}); showToast(`🏅 ${ACH_LABEL[key]}`); return next; });
   }, [showToast]);
 
-  // Milestones (goals) unique
+  // Milestones
   const milestonesRef = useRef(new Set<number>());
   const checkMilestones = useCallback((val: number) => {
     const goals = [2000, 10000, 50000, 100000];
@@ -275,19 +320,67 @@ export default function CometsRunnerScreen() {
     }
   }, [showToast]);
 
-  // Buffs / état temporaire
+  // Buffs
   const [hasShield, setHasShield] = useState(false);
+  const [shieldStacks, setShieldStacks] = useState(0);                  // vers super shield
+  const [superShieldUntil, setSuperShieldUntil] = useState(0);          // invincibilité super shield
   const [doubleJumpUntil, setDoubleJumpUntil] = useState<number>(0);
   const [invincibleUntil, setInvincibleUntil] = useState<number>(0);
   const comboRef = useRef(0);
 
-  // Purple coin: multiplicateur temporaire — jusqu’à ×10
+  // Multiplicateur Purple
   const scoreMultLevelRef = useRef<number>(1);
   const scoreMultUntilRef = useRef<number>(0);
   const getActiveScoreMult = () => (Date.now() < scoreMultUntilRef.current ? scoreMultLevelRef.current : 1);
-  const applyScoreGain = (base: number) => {
-    const mult = getActiveScoreMult();
-    return Math.floor(base * mult);
+  const applyScoreGain = (base: number) => Math.floor(base * getActiveScoreMult());
+
+  // Chaîne Purple
+  const [purpleChain, setPurpleChain] = useState(0);
+  const purpleChainExpiresAtRef = useRef<number>(0);
+
+  // === COMETS persistant (ordre strict) ===
+  const persistentLettersRef = useRef<Set<CometsLetter>>(new Set());
+  const [lettersTick, setLettersTick] = useState(0);
+
+  // Gestion des lettres par paliers : index du prochain palier non spawn pour cette partie
+  const spawnedLetterIdxThisRunRef = useRef<Set<number>>(new Set()); // indices 0..5 spawnés durant CE run
+
+  const loadCometsProgress = useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem(KEY_COMETS_PROGRESS);
+      if (raw) {
+        const arr: CometsLetter[] = JSON.parse(raw);
+        persistentLettersRef.current = new Set(arr);
+        setLettersTick(t => t + 1);
+      }
+    } catch {}
+  }, []);
+  const saveCometsProgress = useCallback(() => {
+    try {
+      const arr = Array.from(persistentLettersRef.current);
+      AsyncStorage.setItem(KEY_COMETS_PROGRESS, JSON.stringify(arr)).catch(() => {});
+    } catch {}
+  }, []);
+
+  useEffect(() => { loadCometsProgress(); }, [loadCometsProgress]);
+
+  const expectedLetter = (): CometsLetter => {
+    for (const L of LETTERS) {
+      if (!persistentLettersRef.current.has(L)) return L;
+    }
+    return "S";
+  };
+  const haveAllLetters = () => LETTERS.every(L => persistentLettersRef.current.has(L));
+
+  const addPersistentLetter = (L: CometsLetter) => {
+    persistentLettersRef.current.add(L);
+    saveCometsProgress();
+    setLettersTick(t => t + 1);
+  };
+  const resetPersistentLetters = () => {
+    persistentLettersRef.current.clear();
+    saveCometsProgress();
+    setLettersTick(t => t + 1);
   };
 
   // Monde
@@ -299,7 +392,7 @@ export default function CometsRunnerScreen() {
   const powerUpsRef = useRef<PowerUp[]>([]);
   const lastIdRef = useRef(1);
 
-  // Popups localisées +pts
+  // Popups points
   const popupsRef = useRef<Array<{ id:number; x:number; y:number; born:number; text:string }>>([]);
 
   // Physique joueur
@@ -311,15 +404,15 @@ export default function CometsRunnerScreen() {
   const airJumpsLeftRef = useRef(0);
   const holdingJumpRef = useRef(false);
 
-  // Parallax + transition de map douce
+  // Parallax
   const angleRef = useRef(0);
   const groundOffsetRef = useRef(0);
   const fenceOffsetRef = useRef(0);
 
-  // Deux pistes d’arrière-plan pour fondu
-  const mapARef = useRef<MapName>("base");            // carte affichée
-  const mapBRef = useRef<MapName>("base");            // carte cible
-  const mapFadeRef = useRef(0);                       // 0..1 alpha vers B
+  // BG double
+  const mapARef = useRef<MapName>("base");
+  const mapBRef = useRef<MapName>("base");
+  const mapFadeRef = useRef(0);
   const mapAOffsetRef = useRef(0);
   const mapBOffsetRef = useRef(0);
   const MAP_FADE_SECS = 1.4;
@@ -335,7 +428,7 @@ export default function CometsRunnerScreen() {
   const shake = useRef(new Animated.Value(0)).current;
   const heroPulse = useRef(new Animated.Value(0)).current;
 
-  // (Plus de debug togglable au long press)
+  // FPS debug
   const [fps, setFps] = useState(60);
   const fpsBuf = useRef<number[]>([]);
   let fpsLastUpdate = useRef(0);
@@ -344,7 +437,7 @@ export default function CometsRunnerScreen() {
   const { admin } = useAdmin();
   const adminId = (admin?.id ?? null) as any as string | null;
   const adminFirst = (admin as any)?.first_name ?? null;
-  const adminLast = (admin as any)?.last_name ?? null;
+  const adminLast  = (admin as any)?.last_name ?? null;
   const adminEmail = admin?.email ?? null;
   const adminName = [adminFirst, adminLast].filter(Boolean).join(" ").trim() || adminEmail || "Anonyme";
 
@@ -408,6 +501,91 @@ export default function CometsRunnerScreen() {
     await loadTop5();
   }, [adminId, adminName, best, loadTop5]);
 
+  // 🔊 Refs & helpers audio
+  const musicRef = useRef<Audio.Sound | null>(null);
+  const sfxApplauseRef = useRef<Audio.Sound | null>(null);
+
+  // Pool de sons pour COINS (superposition possible)
+  const COIN_POOL_SIZE = 8;
+  const coinPoolRef = useRef<Audio.Sound[]>([]);
+  const coinPoolIdxRef = useRef(0);
+
+  const ensureMusic = useCallback(async () => {
+    if (musicRef.current) return musicRef.current;
+    const { sound } = await Audio.Sound.createAsync(musicFile, { isLooping: true, volume: settings.mute ? 0 : 1 });
+    musicRef.current = sound;
+    return sound;
+  }, [settings.mute]);
+
+  const ensureCoinPool = useCallback(async () => {
+    if (coinPoolRef.current.length > 0) return coinPoolRef.current;
+    const arr: Audio.Sound[] = [];
+    for (let i = 0; i < COIN_POOL_SIZE; i++) {
+      const { sound } = await Audio.Sound.createAsync(sfxCoinFile, {
+        volume: settings.mute ? 0 : 1,
+        shouldPlay: false,
+        isLooping: false,
+      });
+      arr.push(sound);
+    }
+    coinPoolRef.current = arr;
+    return arr;
+  }, [settings.mute]);
+
+  const playCoinSfx = useCallback(async () => {
+    try {
+      const pool = await ensureCoinPool();
+      const s = pool[coinPoolIdxRef.current];
+      coinPoolIdxRef.current = (coinPoolIdxRef.current + 1) % pool.length;
+      // Démarrage immédiat, sans await (latence minimale)
+      s.setPositionAsync(0).catch(() => {});
+      s.playAsync().catch(() => {});
+    } catch {}
+  }, [ensureCoinPool]);
+
+  const ensureSfxApplause = useCallback(async () => {
+    if (sfxApplauseRef.current) return sfxApplauseRef.current;
+    const { sound } = await Audio.Sound.createAsync(sfxApplauseFile, { volume: settings.mute ? 0 : 1, shouldPlay: false });
+    sfxApplauseRef.current = sound;
+    return sound;
+  }, [settings.mute]);
+
+  const playMusic = useCallback(async () => {
+    try {
+      const sound = await ensureMusic();
+      await sound.setIsLoopingAsync(true);
+      await sound.setVolumeAsync(settings.mute ? 0 : 1);
+      await sound.playAsync();
+    } catch {}
+  }, [ensureMusic, settings.mute]);
+  const stopMusic = useCallback(async () => { try { await musicRef.current?.stopAsync(); } catch {} }, []);
+  const unloadMusic = useCallback(async () => { try { await musicRef.current?.unloadAsync(); musicRef.current = null; } catch {} }, []);
+
+  // réagir au mute en direct
+  useEffect(() => { (async () => {
+    try {
+      await musicRef.current?.setVolumeAsync(settings.mute ? 0 : 1);
+      await sfxApplauseRef.current?.setVolumeAsync(settings.mute ? 0 : 1);
+      // met à jour le pool
+      for (const s of coinPoolRef.current) {
+        try { await s.setVolumeAsync(settings.mute ? 0 : 1); } catch {}
+      }
+    } catch {}
+  })(); }, [settings.mute]);
+
+  // Transitions d’état jeu -> musique
+  useEffect(() => { (async () => { if (gameState === "running") await playMusic(); else await stopMusic(); })(); }, [gameState, playMusic, stopMusic]);
+
+  // Cleanup audio
+  useEffect(() => { return () => {
+    unloadMusic();
+    try { sfxApplauseRef.current?.unloadAsync?.(); } catch {}
+    try {
+      for (const s of coinPoolRef.current) { try { s.unloadAsync(); } catch {} }
+      coinPoolRef.current = [];
+    } catch {}
+  }; }, [unloadMusic]);
+
   // Preload & settings
   useEffect(() => {
     (async () => {
@@ -419,8 +597,11 @@ export default function CometsRunnerScreen() {
       try { const rawS = await AsyncStorage.getItem(KEY_SETTINGS); if (rawS) setSettings(s => ({ ...s, ...JSON.parse(rawS) })); } catch {}
       try { const rawA = await AsyncStorage.getItem(KEY_ACH); if (rawA) setAchievements(prev => ({ ...prev, ...JSON.parse(rawA) })); } catch {}
       try { const raw = await AsyncStorage.getItem(KEY_BEST); if (raw) setBest(parseInt(raw, 10) || 0); } catch {}
+      // précharge le pool coin pour éliminer le "vide" initial
+      try { await ensureCoinPool(); } catch {}
+      // progression COMETS chargée ailleurs
     })();
-  }, []);
+  }, [ensureCoinPool]);
 
   useEffect(() => {
     (async () => {
@@ -438,7 +619,7 @@ export default function CometsRunnerScreen() {
     return () => sub.remove();
   }, []);
 
-  // === Alignement si hauteur de sol change ===
+  // === alignement si sol change
   const prevGroundYRef = useRef(GROUND_Y);
   useEffect(() => {
     const prev = prevGroundYRef.current;
@@ -446,13 +627,13 @@ export default function CometsRunnerScreen() {
 
     const dy = GROUND_Y - prev;
 
-    // 1) Joueur
+    // joueur
     yRef.current = Math.min(yRef.current + dy, GROUND_Y - PLAYER_SIZE);
 
-    // 2) Obstacles : recoller sur le sol
+    // obstacles
     obstaclesRef.current = obstaclesRef.current.map(o => ({ ...o, y: GROUND_Y - o.h }));
 
-    // 3) Collectibles / power-ups : conserver altitude relative et re-clamper
+    // collectibles / power-ups
     const clampCenter = (y: number, r: number) =>
       Math.max(r + 8, Math.min(y, GROUND_Y - r - 4));
 
@@ -467,41 +648,7 @@ export default function CometsRunnerScreen() {
     setFrameTick(t => t + 1);
   }, [GROUND_Y]);
 
-  // Son
-  const musicRef = useRef<Audio.Sound | null>(null);
-  const ensureMusic = useCallback(async () => {
-    if (musicRef.current) return musicRef.current;
-    const { sound } = await Audio.Sound.createAsync(musicFile, { isLooping: true, volume: settings.mute ? 0 : 1 });
-    musicRef.current = sound;
-    return sound;
-  }, [settings.mute]);
-  const playMusic = useCallback(async () => {
-    try {
-      const sound = await ensureMusic();
-      await sound.setIsLoopingAsync(true);
-      await sound.setVolumeAsync(settings.mute ? 0 : 1);
-      await sound.playAsync();
-    } catch {}
-  }, [ensureMusic, settings.mute]);
-  const stopMusic = useCallback(async () => {
-    try { await musicRef.current?.stopAsync(); } catch {}
-  }, []);
-  const unloadMusic = useCallback(async () => {
-    try { await musicRef.current?.unloadAsync(); musicRef.current = null; } catch {}
-  }, []);
-  // réagir au mute en direct
-  useEffect(() => { (async () => { try { await musicRef.current?.setVolumeAsync(settings.mute ? 0 : 1); } catch {} })(); }, [settings.mute]);
-
-  // Transitions d’état jeu -> musique
-  useEffect(() => {
-    (async () => {
-      if (gameState === "running") { await playMusic(); }
-      else { await stopMusic(); }
-    })();
-    return () => {};
-  }, [gameState, playMusic, stopMusic]);
-  useEffect(() => { return () => { unloadMusic(); }; }, [unloadMusic]);
-
+  // Reset monde
   const resetWorld = useCallback(() => {
     obstaclesRef.current = [];
     collectiblesRef.current = [];
@@ -514,11 +661,18 @@ export default function CometsRunnerScreen() {
     milestonesRef.current.clear();
     comboRef.current = 0;
     setHasShield(false);
+    setShieldStacks(0);
+    setSuperShieldUntil(0);
     setDoubleJumpUntil(0);
     setInvincibleUntil(0);
     scoreMultLevelRef.current = 1;
     scoreMultUntilRef.current = 0;
-    airJumpsLeftRef.current = 0;
+    setPurpleChain(0);
+    purpleChainExpiresAtRef.current = 0;
+
+    // reset des lettres spawnées pour CE run
+    spawnedLetterIdxThisRunRef.current.clear();
+
     distAccRef.current = 0;
     velYRef.current = 0;
     groundedRef.current = true;
@@ -527,7 +681,7 @@ export default function CometsRunnerScreen() {
     jumpBufferRef.current = 0;
     holdingJumpRef.current = false;
 
-    // reset parallax
+    // parallax
     groundOffsetRef.current = 0;
     fenceOffsetRef.current = 0;
     mapAOffsetRef.current = 0;
@@ -566,8 +720,12 @@ export default function CometsRunnerScreen() {
 
   const endGame = useCallback(async () => {
     setGameState("gameover");
-    restartAllowedAtRef.current = Date.now() + 2000; // lock 2s
+    restartAllowedAtRef.current = Date.now() + 2000;
     setPlayingStatusBar(false);
+
+    // ✨ RESET de la progression des lettres à la fin de la partie
+    resetPersistentLetters();
+
     try {
       if (adminId) {
         await saveRunToCloud(score);
@@ -575,23 +733,63 @@ export default function CometsRunnerScreen() {
         setBest(score);
         await AsyncStorage.setItem(KEY_BEST, String(score));
         await loadTop5();
-      } else {
-        await loadTop5();
-      }
+      } else { await loadTop5(); }
     } catch (e) { console.log("endGame error:", (e as any)?.message); }
   }, [score, best, adminId, saveRunToCloud, loadTop5]);
 
   // helpers
   const doubleJumpActive = () => ENABLE_DOUBLEJUMP && doubleJumpUntil > Date.now();
-  const invincibleActive = () => Date.now() < invincibleUntil;
+  const superShieldActive = () => Date.now() < superShieldUntil;
+  const invincibleActive = () => Date.now() < invincibleUntil || superShieldActive();
   const getSpeedMultiplier = (s: number) => Math.min(MULT_MAX, MULT_MIN + Math.max(0, s - START_SPEED) / MULT_SCALE);
   const getComboMultiplier = () => Math.min(2.0, 1 + 0.25 * Math.max(0, comboRef.current - 1));
 
-  // Spawner
+  // Spawner utils
+  const spawnCoinsGround = useCallback((count: number, startX?: number, big = false) => {
+    const s = speedRef.current;
+    const lead = Math.max(220, Math.min(880, s * 1.0));
+    const x0 = (startX ?? SCREEN_W + lead);
+    const gap = 36;
+    for (let i = 0; i < count; i++) {
+      const x = x0 + i * gap;
+      const y = GROUND_Y - (big ? R_COLLECTIBLE*SUPER_SHIELD_COIN_SCALE : R_COLLECTIBLE) - 4;
+      collectiblesRef.current.push({ id: ++lastIdRef.current, x, y, r: big ? R_COLLECTIBLE*SUPER_SHIELD_COIN_SCALE : R_COLLECTIBLE });
+    }
+  }, [GROUND_Y]);
+
+  const spawnCoinsAirLine = useCallback((count: number) => {
+    const s = speedRef.current;
+    const lead = Math.max(320, Math.min(1100, s * 1.4));
+    const x0 = SCREEN_W + lead;
+    const gap = 34;
+    const h = clamp(H_SINGLE * 0.85, H_STAR_MIN, H_DOUBLE * 0.95);
+    const y = clampYCenter(yForHeight(h), R_COLLECTIBLE);
+    for (let i = 0; i < count; i++) {
+      const x = x0 + i * gap;
+      collectiblesRef.current.push({ id: ++lastIdRef.current, x, y, r: R_COLLECTIBLE });
+    }
+  }, [H_SINGLE, H_DOUBLE, H_STAR_MIN, clampYCenter, yForHeight]);
+
+  // Spawn d'une lettre pour un index donné (0..5) quand palier atteint
+  const spawnLetterAtIndex = useCallback((idx: number) => {
+    if (idx < 0 || idx >= LETTERS.length) return;
+    if (spawnedLetterIdxThisRunRef.current.has(idx)) return; // déjà spawn cette partie
+    const letter = LETTERS[idx];
+    // si déjà collectée dans la progression persistante (au cas où), on n'en spawn pas
+    if (persistentLettersRef.current.has(letter)) return;
+
+    spawnedLetterIdxThisRunRef.current.add(idx);
+
+    const s = speedRef.current;
+    const x = SCREEN_W + Math.max(420, Math.min(1200, s * 1.4));
+    const h = randf(H_STAR_MIN, H_STAR_MAX);
+    const y = clampYCenter(yForHeight(h), R_POWERUP);
+    powerUpsRef.current.push({ id: ++lastIdRef.current, x, y, r: R_POWERUP + 2, kind: "letter", letter });
+  }, [H_STAR_MIN, H_STAR_MAX, clampYCenter, yForHeight]);
+
   const spawnObstacle = useCallback((minGap: number, gapMul: number, scoreNow: number) => {
-    // difficulté progressive selon score
-    const harden = clamp(0.25 * (scoreNow / 120000), 0, 0.25); // jusqu’à -25% de gap
-    const localGapMul = gapMul * (1 - harden);                  // rétrécit un peu les espaces
+    const harden = clamp(0.25 * (scoreNow / 120000), 0, 0.25);
+    const localGapMul = gapMul * (1 - harden);
 
     const attempts = Math.max(1, Math.min(MAX_SPAWN_ATTEMPTS, Math.floor(speedRef.current / 60)));
     for (let i = 0; i < attempts; i++) {
@@ -603,23 +801,27 @@ export default function CometsRunnerScreen() {
       const y = GROUND_Y - h;
       obstaclesRef.current.push({ id: ++lastIdRef.current, x, w, h, y, variant: Math.random() < 0.5 ? 0 : 1 });
 
-      // chance de double obstacle augmente légèrement avec le score
-      const extraChance = 0.18 + clamp(scoreNow / 150000, 0, 0.12); // max ~0.30
+      // double obstacle chance
+      const extraChance = 0.18 + clamp(scoreNow / 150000, 0, 0.12);
       if (Math.random() < extraChance) {
         const w2 = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W);
         const x2 = x + w + randi(90, 150);
         obstaclesRef.current.push({ id: ++lastIdRef.current, x: x2, w: w2, h, y, variant: Math.random() < 0.5 ? 0 : 1 });
       }
+
+      // pièces volantes
       if (ENABLE_COLLECTIBLES && Math.random() < 0.45) {
         const hStar = randf(H_STAR_MIN, H_STAR_MAX);
         const yStar = clampYCenter(yForHeight(hStar), R_COLLECTIBLE);
         collectiblesRef.current.push({ id: ++lastIdRef.current, x: x + Math.max(80, w + 40), y: yStar, r: R_COLLECTIBLE });
       }
+      // bouclier
       if (ENABLE_SHIELD && Math.random() < 0.15) {
         const hShield = randf(H_STAR_MIN, H_STAR_MAX);
         const yShield = clampYCenter(yForHeight(hShield), R_POWERUP);
         powerUpsRef.current.push({ id: ++lastIdRef.current, x: x + randi(140, 240), y: yShield, r: R_POWERUP, kind: "shield" });
       }
+      // double saut
       if (ENABLE_DOUBLEJUMP && Math.random() < 0.1) {
         const hDJ = randf(H_STAR_MIN, H_STAR_MAX);
         const yDJ = clampYCenter(yForHeight(hDJ), R_POWERUP);
@@ -670,8 +872,6 @@ export default function CometsRunnerScreen() {
         mapBRef.current = desiredMap;
         mapFadeRef.current = 0;
       }
-
-      // Fondu entre A et B
       if (mapFadeRef.current < 1) {
         mapFadeRef.current = clamp(mapFadeRef.current + dt / MAP_FADE_SECS, 0, 1);
         if (mapFadeRef.current >= 1) {
@@ -682,24 +882,20 @@ export default function CometsRunnerScreen() {
 
       const diff = getDifficultyByMap(mapARef.current);
       // Vitesse
-      const targetGain = diff.speedGain;
-      targetSpeedRef.current += targetGain * dt;
+      targetSpeedRef.current += diff.speedGain * dt;
       const alphaSmooth = 1 - Math.exp(-SPEED_SMOOTHING * dt);
       speedRef.current = speedRef.current + (targetSpeedRef.current - speedRef.current) * alphaSmooth;
       const s = speedRef.current;
 
       // Parallax
-      const parallaxMul = 1;
-      groundOffsetRef.current += s * dt * parallaxMul;
-      fenceOffsetRef.current  += s * FENCE_SPEED  * dt * parallaxMul;
-      mapAOffsetRef.current   += s * BG_SPEED     * dt * parallaxMul;
-      mapBOffsetRef.current   += s * BG_SPEED     * dt * parallaxMul;
+      groundOffsetRef.current += s * dt;
+      fenceOffsetRef.current  += s * FENCE_SPEED  * dt;
+      mapAOffsetRef.current   += s * BG_SPEED     * dt;
+      mapBOffsetRef.current   += s * BG_SPEED     * dt;
 
       // Gravité
       const gravityBase = GRAVITY_BASE * diff.gravityMul;
-      const gravityNow = (velYRef.current < 0 && holdingJumpRef.current)
-        ? gravityBase * HOLD_GRAVITY_SCALE
-        : gravityBase;
+      const gravityNow = (velYRef.current < 0 && holdingJumpRef.current) ? gravityBase * HOLD_GRAVITY_SCALE : gravityBase;
 
       velYRef.current += gravityNow * dt;
       let newY = yRef.current + velYRef.current * dt;
@@ -747,6 +943,7 @@ export default function CometsRunnerScreen() {
         spawnObstacle(randi(OBSTACLE_MIN_GAP_BASE, OBSTACLE_MAX_GAP_BASE), diff.gapMul, score);
       }
 
+      // Collectibles (coins)
       for (let i = collectiblesRef.current.length - 1; i >= 0; i--) {
         const c = collectiblesRef.current[i];
         c.x -= s * dt;
@@ -763,18 +960,12 @@ export default function CometsRunnerScreen() {
             return next;
           });
 
-          // popup localisé au point de ramassage
-          popupsRef.current.push({
-            id: ++lastIdRef.current,
-            x: c.x,
-            y: c.y,
-            born: Date.now(),
-            text: `+${gained}`,
-          });
+          // 🔊 SFX pièce — via pool (superposition & sans délai)
+          playCoinSfx();
 
+          popupsRef.current.push({ id: ++lastIdRef.current, x: c.x, y: c.y, born: Date.now(), text: `+${gained}` });
           collectiblesRef.current.splice(i, 1);
 
-          // petit effet/pulse et haptics
           heroPulse.setValue(0);
           Animated.timing(heroPulse, { toValue: 1, duration: 200, useNativeDriver: true }).start();
           if (settings.haptics && Haptics) Haptics.selectionAsync?.().catch(() => {});
@@ -783,6 +974,7 @@ export default function CometsRunnerScreen() {
         if (c.x + c.r < -20) { comboRef.current = 0; collectiblesRef.current.splice(i, 1); }
       }
 
+      // Power-ups
       for (let i = powerUpsRef.current.length - 1; i >= 0; i--) {
         const p = powerUpsRef.current[i];
         p.x -= s * dt;
@@ -790,36 +982,89 @@ export default function CometsRunnerScreen() {
         const cy = yRef.current + PLAYER_SIZE / 2;
         if (circleCircleCollide(cx, cy, PLAYER_SIZE * 0.38, p.x, p.y, p.r)) {
           if (p.kind === "shield") {
+            const newStacks = shieldStacks + 1;
+            setShieldStacks(newStacks);
             setHasShield(true);
-            showToast("🛡️ Protection !");
-            if (settings.haptics && Haptics) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+            if (newStacks >= SUPER_SHIELD_STACK) {
+              setShieldStacks(0);
+              setHasShield(false);
+              const until = Date.now() + SUPER_SHIELD_INVINCIBLE_MS;
+              setSuperShieldUntil(until);
+              setInvincibleUntil(until); // sécurité
+              spawnCoinsGround(SUPER_SHIELD_GROUND_COINS, undefined, true); // pièces plus grosses
+              showToast("✨ Super Shield");
+              if (settings.haptics && Haptics) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+            } else {
+              // toast discret uniquement stack 1/3 et 2/3
+              showToast(`🛡️ ${newStacks}/${SUPER_SHIELD_STACK}`);
+              if (settings.haptics && Haptics) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+            }
           } else if (p.kind === "doublejump") {
             const until = Date.now() + DOUBLEJUMP_DURATION;
             setDoubleJumpUntil(until);
-            showToast("⛓️ Double saut !");
+            showToast("⛓️ Double saut");
             airJumpsLeftRef.current = 1;
             spawnX2BonusForDoubleJump();
           } else if (p.kind === "x2") {
             const now = Date.now();
+            if (now <= scoreMultUntilRef.current) {
+              setPurpleChain((c) => Math.min(PURPLE_CHAIN_GOAL, c + 1));
+            } else {
+              setPurpleChain(1);
+            }
+            purpleChainExpiresAtRef.current = now + SCORE_MULT_DURATION;
+
             if (now < scoreMultUntilRef.current) {
-              // Empile jusqu’à ×10
               scoreMultLevelRef.current = clamp(scoreMultLevelRef.current + 1, 2, 10);
               scoreMultUntilRef.current = now + SCORE_MULT_DURATION;
-              showToast(`💜 ×${scoreMultLevelRef.current} pendant 10s !`);
             } else {
               scoreMultLevelRef.current = 2;
               scoreMultUntilRef.current = now + SCORE_MULT_DURATION;
               if (!achievements.first_x2) unlock("first_x2");
-              showToast("💜 ×2 pendant 10s !");
+            }
+            // toasts seulement sur paliers
+            if ([2,5,10].includes(scoreMultLevelRef.current)) {
+              showToast(`💜 ×${scoreMultLevelRef.current}`);
+            }
+            if (purpleChain + 1 >= PURPLE_CHAIN_GOAL) {
+              spawnCoinsAirLine(PURPLE_CHAIN_AIR_COINS);
+              showToast("💜 Série ×10 !");
+              // 🔊 applause quand on atteint la série ×10
+              (async () => { try { const snd = await ensureSfxApplause(); await snd.replayAsync(); } catch {} })();
+              setPurpleChain(0);
+              purpleChainExpiresAtRef.current = 0;
+            }
+          } else if (p.kind === "letter" && p.letter) {
+            // collecte de la lettre
+            addPersistentLetter(p.letter);
+            showToast(`🔠 ${p.letter}`);
+            if (haveAllLetters()) {
+              const gained = applyScoreGain(20_000);
+              setScore((prev) => {
+                const next = prev + gained;
+                checkMilestones(next);
+                return next;
+              });
+              popupsRef.current.push({ id: ++lastIdRef.current, x: playerX + 40, y: yRef.current, born: Date.now(), text: `+${gained}` });
+
+              // 🔊 SFX applaudissements (COMETS complété)
+              (async () => { try { const snd = await ensureSfxApplause(); await snd.replayAsync(); } catch {} })();
+
+              showToast("🚀 COMETS !");
+              // on laisse la progression complète jusqu'au game over (elle se resettra alors)
             }
           }
+
           powerUpsRef.current.splice(i, 1);
           continue;
         }
-        if (p.x + p.r < -20) powerUpsRef.current.splice(i, 1);
+        if (p.x + p.r < -20) {
+          // powerup raté
+          powerUpsRef.current.splice(i, 1);
+        }
       }
 
-      // Collisions
+      // Collisions obstacles
       const cx = playerX + PLAYER_SIZE / 2;
       const cy = yRef.current + PLAYER_SIZE / 2;
       const r = PLAYER_SIZE * 0.42;
@@ -829,6 +1074,7 @@ export default function CometsRunnerScreen() {
           if (circleRectCollide(cx, cy, r, o.x, o.y, o.w, o.h)) {
             if (hasShield) {
               setHasShield(false);
+              setShieldStacks(0); // reset des stacks si on consomme la protection
               setInvincibleUntil(Date.now() + INVINCIBLE_DURATION);
               velYRef.current = JUMP_VELOCITY * 0.7;
               obstaclesRef.current.splice(i, 1);
@@ -850,17 +1096,30 @@ export default function CometsRunnerScreen() {
       if (distAccRef.current >= 10) {
         const gainedUnits = Math.floor(distAccRef.current / 10);
         distAccRef.current -= gainedUnits * 10;
+
         setScore((prev) => {
           const base = Math.floor(gainedUnits * getSpeedMultiplier(s));
           const added = applyScoreGain(base);
           const next = prev + added;
           if (next >= 2000) unlock("score_2000");
           checkMilestones(next);
+
+          // ✨ Paliers de lettres : 10k,20k,...,60k
+          for (let i = 0; i < LETTER_THRESHOLDS.length; i++) {
+            const threshold = LETTER_THRESHOLDS[i];
+            if (next >= threshold && !spawnedLetterIdxThisRunRef.current.has(i) && !persistentLettersRef.current.has(LETTERS[i])) {
+              spawnLetterAtIndex(i);
+            }
+          }
+
           return next;
         });
       }
 
-      // Popups (+pts) : durée ~900ms
+      // Expiration chaîne purple
+      if (purpleChain > 0 && Date.now() > purpleChainExpiresAtRef.current) setPurpleChain(0);
+
+      // Popups (+pts)
       popupsRef.current = popupsRef.current.filter(p => Date.now() - p.born < 900);
 
       // Render tick
@@ -870,7 +1129,7 @@ export default function CometsRunnerScreen() {
 
     rafRef.current = requestAnimationFrame(tick);
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); rafRef.current = null; };
-  }, [gameState, endGame, spawnObstacle, doubleJumpUntil, invincibleUntil, spawnX2BonusForDoubleJump, settings.haptics, GROUND_Y, unlock, score, checkMilestones]);
+  }, [gameState, endGame, spawnObstacle, doubleJumpUntil, superShieldUntil, invincibleUntil, spawnX2BonusForDoubleJump, settings.haptics, GROUND_Y, unlock, score, checkMilestones, spawnCoinsAirLine, spawnCoinsGround, purpleChain, playCoinSfx, ensureSfxApplause, spawnLetterAtIndex]);
 
   // Input
   const tryJump = useCallback(() => {
@@ -910,17 +1169,41 @@ export default function CometsRunnerScreen() {
   }, [gameState]);
 
   const mapNow = mapARef.current;
-  const mapAlpha = mapFadeRef.current; // 0..1 vers B
+  const mapAlpha = mapFadeRef.current;
   const showGround = mapNow !== "systeme_solaire";
-
   const showHeroHeader = gameState !== "running";
 
-  // Mult affiché (lié à la vitesse)
+  // UI mult & buff
   const speedMult = Math.min(MULT_MAX, MULT_MIN + Math.max(0, speedRef.current - START_SPEED) / MULT_SCALE).toFixed(1);
   const scoreBuff = getActiveScoreMult();
 
-  // Seconds left helpers
+  // Helpers temps restant
   const secsLeft = (ms: number) => Math.max(0, Math.ceil((ms - Date.now()) / 1000));
+  const invBarInfo = () => {
+    const now = Date.now();
+    if (now < superShieldUntil) {
+      const total = SUPER_SHIELD_INVINCIBLE_MS;
+      const left = superShieldUntil - now;
+      return { ratio: clamp(left / total, 0, 1), kind: "super" as const };
+    } else if (now < invincibleUntil) {
+      const total = INVINCIBLE_DURATION;
+      const left = invincibleUntil - now;
+      return { ratio: clamp(left / total, 0, 1), kind: "hit" as const };
+    }
+    return null;
+  };
+
+  // COMETS banner (unique) rempli selon progression persistante
+  const cometsFillArray = LETTERS.map(L => (persistentLettersRef.current.has(L) ? L : " "));
+
+  // Badges condensés (max 3)
+  const badges: Array<{ key: string; text: string; image?: any }> = [];
+  if (superShieldActive()) badges.push({ key: "super", text: `Super Shield ${secsLeft(superShieldUntil)}s`, image: imgShield });
+  else if (hasShield) badges.push({ key: "shield", text: "Bouclier actif", image: imgShield });
+  if (shieldStacks > 0 && !superShieldActive() && !hasShield) badges.push({ key: "stack", text: `Stacks ${shieldStacks}/${SUPER_SHIELD_STACK}`, image: imgShield });
+  if (doubleJumpActive()) badges.push({ key: "dj", text: `Double saut ${secsLeft(doubleJumpUntil)}s`, image: imgDouble });
+  if (scoreBuff > 1) badges.push({ key: "x2", text: `×${scoreBuff} ${Math.max(0, Math.ceil((scoreMultUntilRef.current - Date.now())/1000))}s`, image: imgX2 });
+  const compactBadges = badges.slice(0, 3);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -954,50 +1237,53 @@ export default function CometsRunnerScreen() {
           <View style={[styles.heroChips, { paddingHorizontal: 12, marginTop: 8 }]}>
             <View style={[styles.chip, { backgroundColor: "#D1F3FF" }]}><Text style={[styles.chipTxt, { color: "#0C7499" }]}>🏆 {best}</Text></View>
             <Animated.View style={{ transform: [{ scale: heroPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] }) }] }}>
-              <View style={[styles.chip, { backgroundColor: hasShield ? "#86efac" : "#E5E7EB" }]}><Text style={[styles.chipTxt, { color: hasShield ? "#064e3b" : "#111827" }]}>{hasShield ? "🛡️" : `⚡ ${score}`}</Text></View>
+              <View style={[styles.chip, { backgroundColor: "#E5E7EB" }]}><Text style={[styles.chipTxt, { color: "#111827" }]}>⚡ {score}</Text></View>
             </Animated.View>
             <View style={[styles.chip, { backgroundColor: "#fde68a" }]}><Text style={[styles.chipTxt, { color: "#7c2d12" }]}>×{speedMult}</Text></View>
-            {ENABLE_DOUBLEJUMP && doubleJumpUntil > Date.now() && (<View style={[styles.chip, { backgroundColor: "#bfdbfe" }]}><Text style={[styles.chipTxt, { color: "#1e3a8a" }]}>⛓️ {secsLeft(doubleJumpUntil)}s</Text></View>)}
-            {Date.now() < invincibleUntil && (<View style={[styles.chip, { backgroundColor: "#FFE4C7" }]}><Text style={[styles.chipTxt, { color: "#7a2e0e" }]}>✨ invincible</Text></View>)}
-            {scoreBuff > 1 && (
-              <View style={[styles.chip, { backgroundColor: "#e9d5ff" }]}>
-                <Text style={[styles.chipTxt, { color: "#4c1d95" }]}>💜 ×{scoreBuff} {secsLeft(scoreMultUntilRef.current)}s</Text>
-              </View>
-            )}
+            {getActiveScoreMult() > 1 && (<View style={[styles.chip, { backgroundColor: "#e9d5ff" }]}><Text style={[styles.chipTxt, { color: "#4c1d95" }]}>💜 ×{getActiveScoreMult()}</Text></View>)}
           </View>
 
           {!showHelp ? null : (
             <View style={styles.legendWrap}>
               <LegendItem image={imgCoin}   size={18} label="Pièce : +100 (combo jusqu’à ×2)" />
-              <LegendItem image={imgShield} size={22} label="Bouclier : ignore 1 choc" />
+              <LegendItem image={imgShield} size={22} label="Bouclier : ignore 1 choc (3× = Super Shield 3s)" />
               <LegendItem image={imgDouble} size={20} label="Double saut : 10s" />
-              <LegendItem image={imgX2}     size={20} label="Purple Coin : ×2 → ×10 (10s, refresh)" />
+              <LegendItem image={imgX2}     size={20} label="Purple Coin : ×2 → ×10 (10s, refresh) – 10 d’affilée = 10 pièces en l’air" />
             </View>
           )}
         </View>
       )}
 
-      {/* Score centré style Comets */}
+      {/* Score centré */}
       <View pointerEvents="none" style={styles.scoreBigWrap}>
         <Text style={styles.scoreBig}>{score}</Text>
       </View>
 
-      {/* Bouton pause seul en jeu, plus gros et décollé */}
+      {/* Bandeau COMETS (descendu un peu) */}
+      {gameState === "running" && (
+        <View pointerEvents="none" style={styles.cometsBannerWrap}>
+          <Text style={styles.cometsBannerFill}>
+            {cometsFillArray.map((ch, i) => <Text key={i} style={{ opacity: ch === " " ? 0.1 : 1 }}>{ch}</Text>)}
+          </Text>
+        </View>
+      )}
+
+      {/* Bouton pause */}
       {gameState === "running" && (
         <View pointerEvents="box-none" style={styles.hudWrap}>
           <Pressable onPress={pauseGame} style={styles.hudBtn}><Icon name="pause" size={22} color="#FF8200" /></Pressable>
         </View>
       )}
 
-      {/* Rappels bonus à gauche */}
-      {gameState === "running" && (
-        <View pointerEvents="none" style={styles.leftReminders}>
-          {hasShield && (
-            <ReminderBadge image={imgShield} text="Bouclier actif" />
-          )}
-          {doubleJumpActive() && (
-            <ReminderBadge image={imgDouble} text={`Double saut  ${secsLeft(doubleJumpUntil)}s`} />
-          )}
+      {/* Rappels compacts (max 3) */}
+      {gameState === "running" && compactBadges.length > 0 && (
+        <View pointerEvents="none" style={styles.leftRemindersRow}>
+          {compactBadges.map(b => (
+            <View key={b.key} style={styles.reminderBadgeRow}>
+              {b.image ? <Image source={b.image} style={styles.reminderIcon} resizeMode="contain" /> : null}
+              <Text style={styles.reminderText}>{b.text}</Text>
+            </View>
+          ))}
         </View>
       )}
 
@@ -1013,7 +1299,7 @@ export default function CometsRunnerScreen() {
         <Animated.View style={{ transform: [{ translateY: shake.interpolate({ inputRange: [0, 1], outputRange: [0, 8] }) }] }}>
           <View style={styles.sky} pointerEvents="none" />
 
-          {/* BACKGROUNDS avec fondu A→B */}
+          {/* BACKGROUNDS A→B */}
           <View style={StyleSheet.absoluteFill} pointerEvents="none">
             {renderMapBackground({
               screenH,
@@ -1047,7 +1333,7 @@ export default function CometsRunnerScreen() {
           {/* Ombre joueur */}
           <View style={{ position: "absolute", left: playerX + PLAYER_RADIUS - 18, top: GROUND_Y - 10, width: 36, height: 10, backgroundColor: "#000", borderRadius: 6, opacity: showGround ? 0.25 : 0.08, transform: [{ scaleX: 1.1 }] }} pointerEvents="none" />
 
-          {/* Aura double saut (derrière le joueur) */}
+          {/* Aura double saut */}
           {ENABLE_DOUBLEJUMP && doubleJumpUntil > Date.now() && (
             <View
               pointerEvents="none"
@@ -1058,15 +1344,15 @@ export default function CometsRunnerScreen() {
                 width: PLAYER_SIZE + 12,
                 height: PLAYER_SIZE + 12,
                 borderRadius: (PLAYER_SIZE + 12) / 2,
-                borderWidth: 3,
-                borderColor: "#60a5fa",
-                backgroundColor: "rgba(96,165,250,0.12)",
+                borderWidth: 2,
+                borderColor: "rgba(96,165,250,0.6)",
+                backgroundColor: "rgba(96,165,250,0.10)",
                 transform: [{ rotate: `${angleRef.current}rad` }],
               }}
             />
           )}
 
-          {/* Halo bouclier (anneau SEUL, pas de fond, un peu plus petit) — derrière le joueur */}
+          {/* Halo bouclier (léger) */}
           {hasShield && (
             <View
               pointerEvents="none"
@@ -1078,7 +1364,24 @@ export default function CometsRunnerScreen() {
                 height: PLAYER_SIZE + 8,
                 borderRadius: (PLAYER_SIZE + 8) / 2,
                 borderWidth: 2,
-                borderColor: "rgba(34,197,94,0.55)",
+                borderColor: "rgba(34,197,94,0.5)",
+              }}
+            />
+          )}
+
+          {/* Halo Super Shield */}
+          {superShieldActive() && (
+            <View
+              pointerEvents="none"
+              style={{
+                position: "absolute",
+                left: playerX - 8,
+                top: yRef.current - 8,
+                width: PLAYER_SIZE + 16,
+                height: PLAYER_SIZE + 16,
+                borderRadius: (PLAYER_SIZE + 16) / 2,
+                borderWidth: 3,
+                borderColor: "rgba(255,215,0,0.8)",
               }}
             />
           )}
@@ -1089,11 +1392,28 @@ export default function CometsRunnerScreen() {
             style={[styles.player, {
               left: playerX, top: yRef.current, width: PLAYER_SIZE, height: PLAYER_SIZE, borderRadius: PLAYER_RADIUS,
               transform: [{ rotate: `${angleRef.current}rad` }],
-              // Teinte uniquement en invincibilité (après un choc)
-              tintColor: Date.now() < invincibleUntil ? "#ffbb6b" : undefined,
+              tintColor: invincibleActive() ? "rgba(255,187,107,0.9)" : undefined,
             }]}
             resizeMode="contain"
           />
+
+          {/* Barre-timer invincibilité */}
+          {(() => {
+            const info = invBarInfo();
+            if (!info) return null;
+            const W = 40, H = 4;
+            const filled = Math.max(2, Math.floor(W * info.ratio));
+            const top = yRef.current - 12;
+            return (
+              <View pointerEvents="none" style={{ position: "absolute", left: playerX + PLAYER_RADIUS - W/2, top }}>
+                <View style={{ width: W, height: H, borderRadius: 3, backgroundColor: "rgba(0,0,0,0.4)", borderWidth: 1, borderColor: "rgba(255,255,255,0.25)" }} />
+                <View style={{
+                  position: "absolute", left: 0, top: 0, width: filled, height: H, borderRadius: 3,
+                  backgroundColor: info.kind === "super" ? "rgba(255,215,0,0.9)" : "rgba(255,255,255,0.85)",
+                }} />
+              </View>
+            );
+          })()}
 
           {/* Obstacles */}
           {obstaclesRef.current.map((o) => (
@@ -1102,16 +1422,27 @@ export default function CometsRunnerScreen() {
           ))}
 
           {/* Collectibles */}
-          {ENABLE_COLLECTIBLES && collectiblesRef.current.map((c) => (
-            <Image key={`c-${c.id}`} source={imgCoin}
-              style={{ position: "absolute", left: c.x - R_COLLECTIBLE, top: c.y - R_COLLECTIBLE, width: R_COLLECTIBLE * 2, height: R_COLLECTIBLE * 2 }}
-              resizeMode="contain" />
-          ))}
+          {ENABLE_COLLECTIBLES && collectiblesRef.current.map((c) => {
+            const r = c.r ?? R_COLLECTIBLE;
+            return (
+              <Image key={`c-${c.id}`} source={imgCoin}
+                style={{ position: "absolute", left: c.x - r, top: c.y - r, width: r * 2, height: r * 2 }}
+                resizeMode="contain" />
+            );
+          })}
 
           {/* Power-ups */}
           {powerUpsRef.current.map((p) => {
+            if (p.kind === "letter") {
+              const size = (R_POWERUP + 4) * 2;
+              const r = (R_POWERUP + 4);
+              return (
+                <View key={`p-${p.id}`} style={{ position: "absolute", left: p.x - r, top: p.y - r, width: size, height: size, borderRadius: size/2, backgroundColor: "rgba(255,255,255,0.10)", borderWidth: 2, borderColor: "rgba(255,255,255,0.35)", alignItems: "center", justifyContent: "center" }}>
+                  <Text style={{ color: "#ffd166", fontWeight: "900", fontSize: 16 }}>{p.letter}</Text>
+                </View>
+              );
+            }
             const src = p.kind === "shield" ? imgShield : p.kind === "doublejump" ? imgDouble : imgX2;
-            // ↗️ bouclier plus gros et plus visible
             const scale = p.kind === "shield" ? 1.45 : 1.0;
             const size = (p.kind === "x2" ? R_X2 * 2 : R_POWERUP * 2) * scale;
             const r = (p.kind === "x2" ? R_X2 : R_POWERUP) * scale;
@@ -1128,26 +1459,15 @@ export default function CometsRunnerScreen() {
             );
           })}
 
-          {/* Popups +pts (flottants) */}
+          {/* Popups +pts */}
           {popupsRef.current.map((p) => {
             const age = Date.now() - p.born;
             const t = Math.min(1, age / 900);
             const dy = -28 * t;
             const op = 1 - t;
             const scale = 1 + 0.1 * (1 - t);
-
             return (
-              <View
-                key={`pop-${p.id}`}
-                pointerEvents="none"
-                style={{
-                  position: "absolute",
-                  left: p.x - 8,
-                  top: p.y - 22 + dy,
-                  transform: [{ scale }],
-                  opacity: op,
-                }}
-              >
+              <View key={`pop-${p.id}`} pointerEvents="none" style={{ position: "absolute", left: p.x - 8, top: p.y - 22 + dy, transform: [{ scale }], opacity: op }}>
                 <Text style={styles.popupPts}>{p.text}</Text>
               </View>
             );
@@ -1162,7 +1482,7 @@ export default function CometsRunnerScreen() {
       {/* Toast global */}
       {toast && (<View style={styles.toast}><Text style={styles.toastTxt}>{toast}</Text></View>)}
 
-      {/* Game Over */}
+      {/* Game Over (mobile-friendly) */}
       {gameState === "gameover" && (
         <GameOverModal
           visible
@@ -1177,7 +1497,7 @@ export default function CometsRunnerScreen() {
   );
 }
 
-// ===== helpers =====
+// ===== collisions helpers =====
 function circleRectCollide(cx: number, cy: number, r: number, rx: number, ry: number, rw: number, rh: number) {
   const testX = Math.max(rx, Math.min(cx, rx + rw));
   const testY = Math.max(ry, Math.min(cy, ry + rh));
@@ -1286,68 +1606,197 @@ function LegendItem({ image, label, size = 18 }: { image: any; label: string; si
   );
 }
 
-function ReminderBadge({ image, text }: { image: any; text: string; }) {
-  return (
-    <View style={styles.reminderBadge} pointerEvents="none">
-      <Image source={image} style={styles.reminderIcon} resizeMode="contain" />
-      <Text style={styles.reminderText}>{text}</Text>
-    </View>
-  );
-}
-
-// Game Over modal
+// Game Over modal (mobile‑friendly)
 function GameOverModal({
-  visible, onRestart, onLeaderboard, top5, myId, myScore,
-}: { visible: boolean; onRestart: () => void; onLeaderboard: () => void; top5: LBRow[] | null; myId: string; myScore: number; }) {
+  visible,
+  onRestart,
+  onLeaderboard,
+  top5,
+  myId,
+  myScore,
+}: {
+  visible: boolean;
+  onRestart: () => void;
+  onLeaderboard: () => void;
+  top5: LBRow[] | null;
+  myId: string;
+  myScore: number;
+}) {
+  const { width, height } = Dimensions.get("window");
+  const maxW = Math.min(420, Math.max(width, height) - 32);
+  const maxH = Math.min(520, Math.max(width, height) - 80);
+
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onRestart}>
-      <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", alignItems: "center", justifyContent: "center" }} onPress={onRestart}>
-        <Pressable onPress={() => {}} style={{ minWidth: 280, maxWidth: SCREEN_W - 32, backgroundColor: "#0b0b0b", borderRadius: 14, borderWidth: 1, borderColor: "#2a2a2a", padding: 12, alignItems: "center" }}>
-          <Icon name="reload" size={24} color="#fff" />
-          <Text style={{ color: "#fff", fontSize: 18, fontWeight: "800", marginTop: 6 }}>Perdu !</Text>
-          <Text style={{ color: "#ddd", fontSize: 12, marginTop: 4 }}>Touchez pour recommencer</Text>
-          <Text style={{ color: "#aaa", fontSize: 11, marginTop: 4 }}>Appuie n'importe où</Text>
+      {/* Tap en dehors => restart */}
+      <Pressable
+        style={{
+          flex: 1,
+          backgroundColor: "rgba(0,0,0,0.55)",
+          alignItems: "center",
+          justifyContent: "center",
+          paddingHorizontal: 12,
+        }}
+        onPress={onRestart}
+      >
+        {/* Carte bloquant la propagation du press */}
+        <Pressable
+          onPress={() => {}}
+          style={{
+            width: maxW,
+            maxHeight: maxH,
+            backgroundColor: "#0b0b0b",
+            borderRadius: 14,
+            borderWidth: 1,
+            borderColor: "#2a2a2a",
+            overflow: "hidden",
+          }}
+        >
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{
+              padding: 12,
+              paddingBottom: 24,
+              alignItems: "center",
+            }}
+          >
+            <Icon name="reload" size={24} color="#fff" />
+            <Text style={{ color: "#fff", fontSize: 18, fontWeight: "800", marginTop: 6 }}>
+              Perdu !
+            </Text>
+            <Text style={{ color: "#ddd", fontSize: 12, marginTop: 4, textAlign: "center" }}>
+              Touchez pour recommencer
+            </Text>
+            <Text style={{ color: "#aaa", fontSize: 11, marginTop: 4, textAlign: "center" }}>
+              Appuie n'importe où
+            </Text>
 
-          <View style={{ alignSelf: "stretch", marginTop: 12 }}>
-            <Text style={{ color: "#ffd166", fontWeight: "800", marginBottom: 6, textAlign: "center" }}>Top 5</Text>
-            {top5 === null ? (
-              <Text style={{ color: "#bbb", textAlign: "center" }}>Chargement…</Text>
-            ) : top5.length === 0 ? (
-              <Text style={{ color: "#bbb", textAlign: "center" }}>Aucun score pour le moment</Text>
-            ) : (
-              top5.map((row, idx) => {
-                const isMe = row.admin_id && myId && row.admin_id === myId;
-                const first = row.admins?.first_name ?? "";
-                const last  = row.admins?.last_name ?? "";
-                const display = (first || last) ? `${first} ${last}`.trim() : "Anonyme";
-                return (
-                  <View key={row.admin_id + String(idx)} style={{
-                    flexDirection: "row", alignItems: "center", paddingVertical: 6, paddingHorizontal: 10, borderRadius: 10, marginBottom: 6,
-                    backgroundColor: isMe ? "rgba(255,209,102,0.20)" : "rgba(255,255,255,0.04)", borderWidth: 1, borderColor: isMe ? "#ffd166" : "#2a2aa",
-                  }}>
-                    <Text style={{ width: 22, color: isMe ? "#111" : "#fff", fontWeight: "800", backgroundColor: isMe ? "#ffd166" : "transparent", textAlign: "center", borderRadius: 6 }}>
-                      {idx + 1}
-                    </Text>
-                    <Text numberOfLines={1} style={{ flex: 1, marginLeft: 10, color: "#e5e7eb", fontWeight: isMe ? "800" : "600" }}>
-                      {display}{isMe ? "  (vous)" : ""}
-                    </Text>
-                    <Text style={{ color: "#93c5fd", fontWeight: "800" }}>{row.best_score}</Text>
-                  </View>
-                );
-              })
-            )}
-          </View>
+            {/* Top 5 */}
+            <View style={{ alignSelf: "stretch", marginTop: 12 }}>
+              <Text
+                style={{
+                  color: "#ffd166",
+                  fontWeight: "800",
+                  marginBottom: 6,
+                  textAlign: "center",
+                }}
+              >
+                Top 5
+              </Text>
 
-          <View style={{ alignSelf: "stretch", marginTop: 8, padding: 10, borderRadius: 12, borderWidth: 1, borderColor: "#3a2a00", backgroundColor: "rgba(255,180,0,0.09)" }}>
-            <Text style={{ color: "#ffd166", fontWeight: "900", textAlign: "center", fontSize: 15 }}>Ton score : {myScore}</Text>
-          </View>
+              {top5 === null ? (
+                <Text style={{ color: "#bbb", textAlign: "center" }}>Chargement…</Text>
+              ) : top5.length === 0 ? (
+                <Text style={{ color: "#bbb", textAlign: "center" }}>
+                  Aucun score pour le moment
+                </Text>
+              ) : (
+                top5.map((row, idx) => {
+                  const isMe = !!row.admin_id && !!myId && row.admin_id === myId;
+                  const first = row.admins?.first_name ?? "";
+                  const last = row.admins?.last_name ?? "";
+                  const display = (first || last) ? `${first} ${last}`.trim() : "Anonyme";
+                  return (
+                    <View
+                      key={row.admin_id + String(idx)}
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        paddingVertical: 6,
+                        paddingHorizontal: 10,
+                        borderRadius: 10,
+                        marginBottom: 6,
+                        backgroundColor: isMe
+                          ? "rgba(255,209,102,0.20)"
+                          : "rgba(255,255,255,0.04)",
+                        borderWidth: 1,
+                        borderColor: isMe ? "#ffd166" : "#2a2a2a",
+                      }}
+                    >
+                      <Text
+                        style={{
+                          width: 22,
+                          color: isMe ? "#111" : "#fff",
+                          fontWeight: "800",
+                          backgroundColor: isMe ? "#ffd166" : "transparent",
+                          textAlign: "center",
+                          borderRadius: 6,
+                        }}
+                      >
+                        {idx + 1}
+                      </Text>
 
-          <TouchableOpacity onPress={onLeaderboard} activeOpacity={0.8} style={{ marginTop: 10, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, backgroundColor: "#111", borderWidth: 1, borderColor: "#333", alignSelf: "center" }} testID="go-to-leaderboard">
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
-              <Icon name="trophy-outline" size={16} color="#ffd166" />
-              <Text style={{ marginLeft: 8, color: "#ffd166", fontWeight: "800", fontSize: 14 }}>Voir le classement 🏆</Text>
+                      <Text
+                        numberOfLines={1}
+                        style={{
+                          flex: 1,
+                          marginLeft: 10,
+                          color: "#e5e7eb",
+                          fontWeight: isMe ? "800" : "600",
+                        }}
+                      >
+                        {display}
+                        {isMe ? "  (vous)" : ""}
+                      </Text>
+
+                      <Text style={{ color: "#93c5fd", fontWeight: "800" }}>
+                        {row.best_score}
+                      </Text>
+                    </View>
+                  );
+                })
+              )}
             </View>
-          </TouchableOpacity>
+
+            {/* Score du joueur */}
+            <View
+              style={{
+                alignSelf: "stretch",
+                marginTop: 8,
+                padding: 10,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: "#3a2a00",
+                backgroundColor: "rgba(255,180,0,0.09)",
+              }}
+            >
+              <Text
+                style={{
+                  color: "#ffd166",
+                  fontWeight: "900",
+                  textAlign: "center",
+                  fontSize: 15,
+                }}
+              >
+                Ton score : {myScore}
+              </Text>
+            </View>
+
+            {/* Bouton leaderboard */}
+            <TouchableOpacity
+              onPress={onLeaderboard}
+              activeOpacity={0.8}
+              style={{
+                marginTop: 12,
+                marginBottom: 4,
+                paddingHorizontal: 14,
+                paddingVertical: 10,
+                borderRadius: 10,
+                backgroundColor: "#111",
+                borderWidth: 1,
+                borderColor: "#333",
+                alignSelf: "center",
+              }}
+              testID="go-to-leaderboard"
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
+                <Icon name="trophy-outline" size={16} color="#ffd166" />
+                <Text style={{ marginLeft: 8, color: "#ffd166", fontWeight: "800", fontSize: 14 }}>
+                  Voir le classement 🏆
+                </Text>
+              </View>
+            </TouchableOpacity>
+          </ScrollView>
         </Pressable>
       </Pressable>
     </Modal>
@@ -1404,28 +1853,29 @@ const styles = StyleSheet.create({
   gameArea: { flex: 1, position: "relative", overflow: "hidden" },
   sky: { ...StyleSheet.absoluteFillObject, backgroundColor: "#0b0e14" },
 
-  // Rappels bonus à gauche
-  leftReminders: {
+  // Rappels compacts (une rangée, max 3 badges)
+  leftRemindersRow: {
     position: "absolute",
-    left: 16,
-    top: Platform.OS === "android" ? 60 : 70,
+    left: 12,
+    top: Platform.OS === "android" ? 64 : 70,
     zIndex: 10,
-    gap: 8,
+    flexDirection: "row",
+    gap: 6,
   },
-  reminderBadge: {
+  reminderBadgeRow: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.06)",
     borderColor: "rgba(255,255,255,0.14)",
     borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
   },
-  reminderIcon: { width: 18, height: 18, marginRight: 8 },
-  reminderText: { color: "#e5e7eb", fontWeight: "800", fontSize: 12.5 },
+  reminderIcon: { width: 16, height: 16, marginRight: 6 },
+  reminderText: { color: "#e5e7eb", fontWeight: "800", fontSize: 12 },
 
-  ground: { position: "absolute", left: 0, right: 0, height: GROUND_HEIGHT },
+  ground: { position: "absolute", left: 0, right: 0, height: 2 },
   groundDetail: { position: "absolute", left: 0, right: 0, height: 2 },
 
   player: { position: "absolute", backgroundColor: "transparent", backfaceVisibility: "hidden" },
@@ -1447,7 +1897,7 @@ const styles = StyleSheet.create({
 
   toast: {
     position: "absolute",
-    top: Platform.OS === "android" ? 64 : 72, // sous le score
+    top: Platform.OS === "android" ? 64 : 72,
     alignSelf: "center",
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -1458,7 +1908,7 @@ const styles = StyleSheet.create({
   },
   toastTxt: { color: "#ffd166", fontWeight: "800" },
 
-  // HUD (pause seul) — plus gros et décollé
+  // HUD (pause)
   hudWrap: { position: "absolute", left: 16, top: Platform.OS === "android" ? 12 : 16, zIndex: 10 },
   hudBtn: {
     width: 42, height: 42, borderRadius: 12, backgroundColor: "#1b1e27",
@@ -1504,5 +1954,21 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 6,
     paddingVertical: 3,
+  },
+
+  // Bandeau COMETS (descendu un peu)
+  cometsBannerWrap: {
+    position: "absolute",
+    left: 0, right: 0,
+    top: Platform.OS === "android" ? 68 : 76,
+    alignItems: "center",
+    zIndex: 1,
+  },
+  cometsBannerFill: {
+    color: "#ffd166",
+    fontSize: 46,
+    fontWeight: "900",
+    letterSpacing: 8,
+    opacity: 0.22,
   },
 });

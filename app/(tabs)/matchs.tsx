@@ -26,6 +26,40 @@ import { supabase } from "../../supabase";
 import { formatDateFr } from "../lib/date";
 import { resultColor, resultLabel } from "../lib/match";
 
+// ================== Palette Comets (sobre) ==================
+const COLORS = {
+  bg: "#0f1014",
+  surface: "#11131a",
+  surfaceBorder: "#1f2230",
+
+  card: "#141821",
+  cardBorder: "#252a38",
+
+  text: "#eaeef7",
+  textMuted: "#cfd3db",
+  slateDark: "#0F172A",
+
+  // Orange Comets (adouci)
+  orange: "#D96B00",
+  orangeBorder: "#C25F00",
+  orangeSoftBg: "rgba(217,107,0,0.14)",
+  orangeSoftBorder: "rgba(217,107,0,0.34)",
+
+  // Bleu (moins flashy)
+  blue: "#2F6AA9",
+  blueSoftBg: "rgba(47,106,169,0.16)",
+  blueSoftBorder: "rgba(47,106,169,0.42)",
+
+  // Etats
+  danger: "#B91C1C",
+
+  // Infos / Pills
+  infoBg: "#D6E3F3",
+  infoBorder: "#7FA8D6",
+  amberPillBg: "#EBD3A0",
+  amberPillBorder: "#C98F3C",
+};
+
 // ================== API utils ==================
 const PRIMARY_API =
   process.env.EXPO_PUBLIC_API_URL ??
@@ -45,22 +79,29 @@ async function apiTry<T>(base: string, path: string, init?: RequestInit): Promis
   const url = `${base}${path}`;
   const res = await fetchWithTimeout(url, init);
   let json: any = null;
-  try { json = await res.json(); } catch {}
+  try {
+    json = await res.json();
+  } catch {}
   if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
   return json as T;
 }
 async function apiGet<T>(path: string): Promise<T> {
-  try { return await apiTry<T>(PRIMARY_API, path, { method: "GET" }); }
-  catch { return await apiTry<T>(FALLBACK_API, path, { method: "GET" }); }
+  try {
+    return await apiTry<T>(PRIMARY_API, path, { method: "GET" });
+  } catch {
+    return await apiTry<T>(FALLBACK_API, path, { method: "GET" });
+  }
 }
 async function apiPost<T>(path: string, body: any): Promise<T> {
   const init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
-  try { return await apiTry<T>(PRIMARY_API, path, init); }
-  catch { return await apiTry<T>(FALLBACK_API, path, init); }
+  try {
+    return await apiTry<T>(PRIMARY_API, path, init);
+  } catch {
+    return await apiTry<T>(FALLBACK_API, path, init);
+  }
 }
 
 // ================== Assets & mapping ==================
-const logoComets = require("../../assets/images/iconComets.png");
 const LOGO_MAP: Record<string, any> = {
   Caen: require("../../assets/images/Caen.png"),
   Cherbourg: require("../../assets/images/Cherbourg.jpg"),
@@ -108,22 +149,46 @@ function hexToRgba(hex: string, alpha = 0.33) {
   const m = hex.replace("#", "").match(/^([0-9a-f]{6})$/i);
   if (!m) return `rgba(255,255,255,${alpha})`;
   const int = parseInt(m[1], 16);
-  const r = (int >> 16) & 255, g = (int >> 8) & 255, b = int & 255;
+  const r = (int >> 16) & 255,
+    g = (int >> 8) & 255,
+    b = int & 255;
   return `rgba(${r},${g},${b},${alpha})`;
 }
-function normalizeName(name: string) { return name.replace(/^Les\s+/i, "").trim(); }
+function normalizeName(name: string) {
+  return name.replace(/^Les\s+/i, "").trim();
+}
 
 // ================== Types ==================
 const TEAM_NAMES: Record<string, string> = {
-  HON: "Honfleur", LHA: "Le Havre", ROU: "Rouen", CAE: "Caen", CHE: "Cherbourg", WAL: "Louviers", AND: "Les Andelys",
+  HON: "Honfleur",
+  LHA: "Le Havre",
+  ROU: "Rouen",
+  CAE: "Caen",
+  CHE: "Cherbourg",
+  WAL: "Louviers",
+  AND: "Les Andelys",
 };
 type Game = {
-  id: number; game_number: number; date: string; is_home: boolean;
-  opponent_abbr: string; opponent_logo: string; team_score: number | null; opponent_score: number | null;
-  result: string; boxscore_link: string; team_abbr?: string; note?: string | null;
+  id: number;
+  game_number: number;
+  date: string;
+  is_home: boolean;
+  opponent_abbr: string;
+  opponent_logo: string;
+  team_score: number | null;
+  opponent_score: number | null;
+  result: string;
+  boxscore_link: string;
+  team_abbr?: string;
+  note?: string | null;
 };
 type PlannedGame = {
-  id: number | string; date: string; opponent: string; logo?: string; is_home: boolean; note?: string | null;
+  id: number | string;
+  date: string;
+  opponent: string;
+  logo?: string;
+  is_home: boolean;
+  note?: string | null;
   categorie?: "Seniors" | "15U" | "12U";
 };
 type ParticipationsGET = { matchIds: string[] };
@@ -136,20 +201,52 @@ const TTL_MS = 10 * 60 * 1000;
 type JoinedCache = { map: Record<string, boolean>; ts: number };
 
 async function readJoinedFromStorage(adminId: string | number): Promise<JoinedCache | null> {
-  try { const raw = await AsyncStorage.getItem(storageKey(adminId)); if (!raw) return null;
-    const parsed = JSON.parse(raw); if (parsed && parsed.map && typeof parsed.ts === "number") return parsed as JoinedCache; return null;
-  } catch { return null; }
+  try {
+    const raw = await AsyncStorage.getItem(storageKey(adminId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.map && typeof parsed.ts === "number") return parsed as JoinedCache;
+    return null;
+  } catch {
+    return null;
+  }
 }
 async function writeJoinedToStorage(adminId: string | number, map: Record<string, boolean>) {
-  try { const payload: JoinedCache = { map, ts: Date.now() }; await AsyncStorage.setItem(storageKey(adminId), JSON.stringify(payload)); } catch {}
+  try {
+    const payload: JoinedCache = { map, ts: Date.now() };
+    await AsyncStorage.setItem(storageKey(adminId), JSON.stringify(payload));
+  } catch {}
 }
 
 // ================== Toast ==================
-type ToastData = { participations: number; badgeKey: TierKey; badgeLabel: string; badgeColor: string; nextAt: number | null; progress: number; };
+type ToastData = {
+  participations: number;
+  badgeKey: TierKey;
+  badgeLabel: string;
+  badgeColor: string;
+  nextAt: number | null;
+  progress: number;
+};
 function BadgeCoin({ size, borderColor, source }: { size: number; borderColor: string; source: any }) {
   return (
-    <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: "#fff", borderWidth: 3, borderColor, alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-      {source ? <Image source={source} resizeMode="cover" style={{ width: "100%", height: "100%" }} /> : <Text style={{ fontSize: size * 0.42 }}>🏅</Text>}
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: "#fff",
+        borderWidth: 3,
+        borderColor,
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+      }}
+    >
+      {source ? (
+        <Image source={source} resizeMode="cover" style={{ width: "100%", height: "100%" }} />
+      ) : (
+        <Text style={{ fontSize: size * 0.42 }}>🏅</Text>
+      )}
     </View>
   );
 }
@@ -173,20 +270,40 @@ function CometsToast({ visible, data, onClose }: { visible: boolean; data: Toast
   }, [visible]);
   if (!visible || !data) return null;
   return (
-    <View pointerEvents="box-none" style={{ position: "absolute", left: 0, right: 0, bottom: 0, alignItems: "center", paddingBottom: 18, paddingHorizontal: 12 }}>
+    <View
+      pointerEvents="box-none"
+      style={{ position: "absolute", left: 0, right: 0, bottom: 0, alignItems: "center", paddingBottom: 18, paddingHorizontal: 12 }}
+    >
       <Animated.View
-        style={{ width: "100%", maxWidth: 520, backgroundColor: "rgba(17,19,26,0.98)", borderWidth: 1.5, borderRadius: 16, padding: 12, transform: [{ translateY }], opacity,
-          borderColor: hexToRgba(data.badgeColor || "#ffffff", 0.33) }}
+        style={{
+          width: "100%",
+          maxWidth: 520,
+          backgroundColor: "rgba(17,19,26,0.98)",
+          borderWidth: 1.5,
+          borderRadius: 16,
+          padding: 12,
+          transform: [{ translateY }],
+          opacity,
+          borderColor: hexToRgba(data.badgeColor || "#ffffff", 0.33),
+        }}
       >
         <View style={{ flexDirection: "row", alignItems: "center" }}>
           <BadgeCoin size={58} borderColor={data.badgeColor} source={BADGE_ASSETS[data.badgeKey]} />
           <View style={{ flex: 1, marginLeft: 12 }}>
             <Text style={{ fontWeight: "900", fontSize: 16, color: data.badgeColor }}>{data.badgeLabel}</Text>
-            <Text style={{ color: "#eaeef7", fontWeight: "700", fontSize: 13, marginTop: 2 }}>
-              {data.participations} participation{data.participations > 1 ? "s" : ""} enregistrée{data.participations > 1 ? "s" : ""} 🎉
+            <Text style={{ color: COLORS.text, fontWeight: "700", fontSize: 13, marginTop: 2 }}>
+              {data.participations} participation{data.participations > 1 ? "s" : ""} enregistrée
+              {data.participations > 1 ? "s" : ""} 🎉
             </Text>
             <View style={{ height: 8, borderRadius: 6, backgroundColor: "#242937", marginTop: 8, overflow: "hidden" }}>
-              <View style={{ height: "100%", borderRadius: 6, width: `${Math.round(data.progress * 100)}%`, backgroundColor: data.badgeColor }} />
+              <View
+                style={{
+                  height: "100%",
+                  borderRadius: 6,
+                  width: `${Math.round(data.progress * 100)}%`,
+                  backgroundColor: data.badgeColor,
+                }}
+              />
             </View>
             <Text style={{ color: "#9aa0ae", fontWeight: "700", fontSize: 11.5, marginTop: 6 }}>
               {data.nextAt === null ? "Palier max atteint" : `Prochain titre à ${data.nextAt} participations`}
@@ -213,7 +330,7 @@ export default function MatchsScreen() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedTab, setSelectedTab] = useState<"upcoming" | "played">("upcoming");
 
-  // ✅ filtres catégorie (par défaut Seniors, plus de "Tous")
+  // filtres catégorie (par défaut Seniors)
   const [catFilter, setCatFilter] = useState<"Seniors" | "15U" | "12U">("Seniors");
 
   const [joined, setJoined] = useState<Record<string, boolean>>({});
@@ -221,10 +338,10 @@ export default function MatchsScreen() {
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [hydratingJoined, setHydratingJoined] = useState(false);
 
-  // ✅ ÉLIGIBILITÉ + catégorie
+  // ÉLIGIBILITÉ + catégorie
   const [elig, setElig] = useState<Eligibility>({ eligible: null, category: null });
 
-  // ✅ Comptes d'inscrits par match (cache locale)
+  // Comptes d'inscrits par match (cache locale)
   const [counts, setCounts] = useState<Record<string, number>>({});
 
   // Toast
@@ -236,7 +353,10 @@ export default function MatchsScreen() {
   // INIT NOTIFS
   useEffect(() => {
     if (Platform.OS === "android") {
-      Notifications.setNotificationChannelAsync("default", { name: "default", importance: Notifications.AndroidImportance.MAX }).catch(() => {});
+      Notifications.setNotificationChannelAsync("default", {
+        name: "default",
+        importance: Notifications.AndroidImportance.MAX,
+      }).catch(() => {});
     }
   }, []);
 
@@ -280,7 +400,9 @@ export default function MatchsScreen() {
       let apiMap: Record<string, boolean> = {};
       try {
         const res = await apiGet<ParticipationsGET>(`/api/matches/participations?adminId=${admin.id}`);
-        (res.matchIds || []).forEach((mid) => { apiMap[String(mid)] = true; });
+        (res.matchIds || []).forEach((mid) => {
+          apiMap[String(mid)] = true;
+        });
       } catch {}
       const merged: Record<string, boolean> = { ...(local?.map || {}), ...(apiMap || {}) };
       setJoined(merged);
@@ -299,9 +421,11 @@ export default function MatchsScreen() {
           return;
         }
         try {
-          const res = await apiGet<{ eligible: boolean; source: "players" | "young_players" | null; category: "Seniors" | "15U" | "12U" | null }>(
-            `/api/matches/eligibility?adminId=${admin.id}`
-          );
+          const res = await apiGet<{
+            eligible: boolean;
+            source: "players" | "young_players" | null;
+            category: "Seniors" | "15U" | "12U" | null;
+          }>(`/api/matches/eligibility?adminId=${admin.id}`);
           setElig({ eligible: !!res.eligible, category: res.category ?? null });
         } catch {
           setElig({ eligible: false, category: null });
@@ -328,16 +452,22 @@ export default function MatchsScreen() {
   // Précharge les comptes pour les matchs à venir visibles
   useEffect(() => {
     const ids = plannedGames.map((m) => String(m.id));
-    ids.forEach((id) => { if (counts[id] === undefined) fetchCountFor(id); });
+    ids.forEach((id) => {
+      if (counts[id] === undefined) fetchCountFor(id);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plannedGames]);
 
   // Data filtering
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const playedGames = useMemo(() => games.filter((g) => g.result === "W" || g.result === "L" || g.result === "T"), [games]);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const playedGames = useMemo(
+    () => games.filter((g) => g.result === "W" || g.result === "L" || g.result === "T"),
+    [games]
+  );
   const upcomingGames = useMemo(() => plannedGames.filter((pg) => new Date(pg.date) >= today), [plannedGames]);
 
-  // ✅ filtre catégorie appliqué aux à-venir (Seniors par défaut)
+  // filtre catégorie appliqué aux à-venir
   const filteredUpcoming = useMemo(() => {
     return upcomingGames.filter((m) => m.categorie === catFilter);
   }, [upcomingGames, catFilter]);
@@ -359,29 +489,42 @@ export default function MatchsScreen() {
     try {
       const { status } = await Calendar.requestCalendarPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert("Permission requise", "Autorisez l’accès au calendrier."); return;
+        Alert.alert("Permission requise", "Autorisez l’accès au calendrier.");
+        return;
       }
       const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
       const defaultCal = calendars.find((cal) => cal.allowsModifications);
-      if (!defaultCal) { Alert.alert("Erreur", "Aucun calendrier modifiable trouvé."); return; }
-      const baseDate = new Date(match.date); baseDate.setHours(11, 0, 0, 0);
+      if (!defaultCal) {
+        Alert.alert("Erreur", "Aucun calendrier modifiable trouvé.");
+        return;
+      }
+      const baseDate = new Date(match.date);
+      baseDate.setHours(11, 0, 0, 0);
       const endDate = new Date(baseDate.getTime() + 6 * 60 * 60 * 1000);
       await Calendar.createEventAsync(defaultCal.id, {
         title: `Match ${match.categorie ? `[${match.categorie}] ` : ""}Comets vs ${match.opponent}`,
-        startDate: baseDate, endDate,
+        startDate: baseDate,
+        endDate,
         location: match.is_home ? "Stade de Honfleur" : `Déplacement - ${match.opponent}`,
-        notes: match.note || "", alarms: [{ relativeOffset: -60 }], timeZone: "Europe/Paris",
+        notes: match.note || "",
+        alarms: [{ relativeOffset: -60 }],
+        timeZone: "Europe/Paris",
       });
       Alert.alert("Ajouté !", "Le match a été ajouté dans votre calendrier.");
-    } catch (e: any) { Alert.alert("Erreur calendrier", e?.message || "Erreur inconnue."); }
+    } catch (e: any) {
+      Alert.alert("Erreur calendrier", e?.message || "Erreur inconnue.");
+    }
   }
 
   // Participate
   async function handleParticipate(match: PlannedGame) {
-    if (!admin?.id) { Alert.alert("Connexion requise", "Connecte-toi pour participer."); return; }
+    if (!admin?.id) {
+      Alert.alert("Connexion requise", "Connecte-toi pour participer.");
+      return;
+    }
     const catOk = !match.categorie || (elig.category !== null && match.categorie === elig.category);
     if (elig.eligible !== true || !catOk) {
-      if (!catOk) Alert.alert("Catégorie non autorisée", `Ce match est ${match.categorie ?? "?"} et ton profil est ${elig.category ?? "?"}.`);
+      if (!catOk) Alert.alert("Catégorie non autorisée", `Ce match est ${match.categorie ?? "?"} — ton profil est ${elig.category ?? "?"}.`);
       else Alert.alert("Profil joueur requis", "Ton profil (admins) doit correspondre à un joueur dans players ou young_players (prénom/nom).");
       return;
     }
@@ -391,7 +534,11 @@ export default function MatchsScreen() {
     setPosting((p) => ({ ...p, [mid]: true }));
     try {
       const res = await apiPost<ParticipatePOST>(`/api/matches/${mid}/participate`, { adminId: admin.id });
-      setJoined((j) => { const upd = { ...j, [mid]: true }; writeJoinedToStorage(admin.id, upd); return upd; });
+      setJoined((j) => {
+        const upd = { ...j, [mid]: true };
+        writeJoinedToStorage(admin.id, upd);
+        return upd;
+      });
       // incrémente le compteur local
       setCounts((c) => ({ ...c, [mid]: (c[mid] ?? 0) + 1 }));
 
@@ -399,7 +546,14 @@ export default function MatchsScreen() {
         setAdmin((prev: any) => (prev ? { ...prev, participations: res.participations } : prev));
       }
       const b = computeBadgeFromCount(res.participations);
-      setToastData({ participations: res.participations, badgeKey: b.key, badgeLabel: b.label, badgeColor: b.color, nextAt: b.nextAt, progress: b.progress });
+      setToastData({
+        participations: res.participations,
+        badgeKey: b.key,
+        badgeLabel: b.label,
+        badgeColor: b.color,
+        nextAt: b.nextAt,
+        progress: b.progress,
+      });
       setToastVisible(true);
     } catch (e: any) {
       Alert.alert("Oups", e?.message ?? "Impossible d’enregistrer");
@@ -408,177 +562,173 @@ export default function MatchsScreen() {
     }
   }
 
-  // 🔻 NEW: Unparticipate (désinscription)
+  // Unparticipate (désinscription)
   async function handleUnparticipate(match: PlannedGame) {
-    if (!admin?.id) { Alert.alert("Connexion requise", "Connecte-toi pour te désinscrire."); return; }
+    if (!admin?.id) {
+      Alert.alert("Connexion requise", "Connecte-toi pour te désinscrire.");
+      return;
+    }
     const mid = String(match.id);
     if (!joined[mid]) return;
 
-    Alert.alert(
-      "Me désinscrire",
-      "Tu te désinscris de ce match ?",
-      [
-        { text: "Annuler", style: "cancel" },
-        {
-          text: "Oui",
-          style: "destructive",
-          onPress: async () => {
-            setPosting((p) => ({ ...p, [mid]: true }));
-            try {
-              await apiPost<{ ok: boolean }>(`/api/matches/${mid}/unparticipate`, { adminId: admin.id }); // 🔻 NEW
-              setJoined((j) => { const upd = { ...j }; delete upd[mid]; writeJoinedToStorage(admin.id, upd); return upd; });
-              setCounts((c) => ({ ...c, [mid]: Math.max(0, (c[mid] ?? 1) - 1) })); // décrémente proprement
-              // Pas de toast badge ici (on ne retire pas des participations “acquises”)
-            } catch (e: any) {
-              Alert.alert("Oups", e?.message ?? "Impossible de te désinscrire");
-            } finally {
-              setPosting((p) => ({ ...p, [mid]: false }));
-            }
-          },
+    Alert.alert("Me désinscrire", "Tu te désinscris de ce match ?", [
+      { text: "Annuler", style: "cancel" },
+      {
+        text: "Oui",
+        style: "destructive",
+        onPress: async () => {
+          setPosting((p) => ({ ...p, [mid]: true }));
+          try {
+            await apiPost<{ ok: boolean }>(`/api/matches/${mid}/unparticipate`, { adminId: admin.id });
+            setJoined((j) => {
+              const upd = { ...j };
+              delete upd[mid];
+              writeJoinedToStorage(admin.id, upd);
+              return upd;
+            });
+            setCounts((c) => ({ ...c, [mid]: Math.max(0, (c[mid] ?? 1) - 1) }));
+          } catch (e: any) {
+            Alert.alert("Oups", e?.message ?? "Impossible de te désinscrire");
+          } finally {
+            setPosting((p) => ({ ...p, [mid]: false }));
+          }
         },
-      ]
-    );
+      },
+    ]);
   }
 
   function getOpponentLogo(opponent: string): any {
     return LOGO_MAP[opponent] || LOGO_MAP[normalizeName(opponent)] || null;
   }
 
-UpcomingCard // ================== UI Components ==================
-const UpcomingCard = ({ item }: { item: PlannedGame }) => {
-  const mid = String(item.id);
-  const isJoined = !!joined[mid];
-  const isPosting = !!posting[mid];
+  // ================== UI Components ==================
+  const UpcomingCard = ({ item }: { item: PlannedGame }) => {
+    const mid = String(item.id);
+    const isJoined = !!joined[mid];
+    const isPosting = !!posting[mid];
 
-  const catOk = !item.categorie || (elig.category !== null && item.categorie === elig.category);
-  const joinDisabled = isJoined || isPosting || !(elig.eligible === true && catOk);
-  const count = counts[mid] ?? 0;
+    const catOk = !item.categorie || (elig.category !== null && item.categorie === elig.category);
+    const joinDisabled = isJoined || isPosting || !(elig.eligible === true && catOk);
+    const count = counts[mid] ?? 0;
 
-  // Raison(s) claire(s) de non inscription
-  const reasons: string[] = [];
-  if (!admin?.id) {
-    reasons.push("Connecte-toi pour participer.");
-  } else {
-    if (elig.eligible === false) {
-      reasons.push("Tu dois être membre du club pour participer.");
-    } else if (elig.eligible === null) {
-      reasons.push("Vérification du profil en cours…");
+    // Raison(s) claire(s) de non inscription
+    const reasons: string[] = [];
+    if (!admin?.id) {
+      reasons.push("Connecte-toi pour participer.");
+    } else {
+      if (elig.eligible === false) {
+        reasons.push("Tu dois être membre du club pour participer.");
+      } else if (elig.eligible === null) {
+        reasons.push("Vérification du profil en cours…");
+      }
+      if (!catOk) {
+        reasons.push(`Match réservé ${item.categorie ?? "?"} — ton profil est ${elig.category ?? "?"}.`);
+      }
+      if (isJoined) {
+        reasons.push("Tu es déjà inscrit à ce match ✅");
+      }
     }
-    if (!catOk) {
-      reasons.push(`Match réservé ${item.categorie ?? "?"} — ton profil est ${elig.category ?? "?"}.`);
-    }
-    if (isJoined) {
-      reasons.push("Tu es déjà inscrit à ce match ✅");
-    }
-  }
 
-  return (
-    <View style={styles.card}>
-      <View style={styles.cardTopRow}>
-        <Text style={styles.matchBadgeUpcoming}>À venir</Text>
+    return (
+      <View style={styles.card}>
+        <View style={styles.cardTopRow}>
+          <Text style={styles.matchBadgeUpcoming}>À venir</Text>
 
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          {/* Compteur d'inscrits bien visible */}
-          <View style={styles.countPill}>
-            <Icon name="people-outline" size={14} color="#0F172A" />
-            <Text style={styles.countPillTxt}>
-              {count} inscrit{count > 1 ? "s" : ""}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            {/* Compteur d'inscrits bien visible */}
+            <View style={styles.countPill}>
+              <Icon name="people-outline" size={14} color={COLORS.slateDark} />
+              <Text style={styles.countPillTxt}>
+                {count} inscrit{count > 1 ? "s" : ""}
+              </Text>
+            </View>
+            <Text style={styles.matchDate}>{formatDateFr(item.date)}</Text>
+          </View>
+        </View>
+
+        <View style={styles.venueRow}>
+          <Icon name={item.is_home ? "home" : "airplane-outline"} size={18} color={item.is_home ? COLORS.orange : COLORS.blue} />
+          <Text style={styles.venueTxt}>{item.is_home ? "À domicile" : "Extérieur"}</Text>
+        </View>
+
+        {/* VS */}
+        <View style={styles.vsRow}>
+          <View style={styles.teamCol}>
+            <Image source={LOGO_MAP["Honfleur"]} style={styles.logoTeam} />
+            <Text style={[styles.teamName, { color: COLORS.orange }]}>Honfleur</Text>
+          </View>
+          <Text style={styles.vs}>VS</Text>
+          <View style={styles.teamCol}>
+            {getOpponentLogo(item.opponent) ? (
+              <Image source={getOpponentLogo(item.opponent)} style={styles.logoTeam} />
+            ) : (
+              <View style={[styles.logoTeam]} />
+            )}
+            <Text style={[styles.teamName, { color: COLORS.blue }]} numberOfLines={1}>
+              {item.opponent}
             </Text>
           </View>
-          <Text style={styles.matchDate}>{formatDateFr(item.date)}</Text>
         </View>
-      </View>
 
-      <View style={styles.venueRow}>
-        <Icon
-          name={item.is_home ? "home" : "airplane-outline"}
-          size={18}
-          color={item.is_home ? "#FF8200" : "#52b6fa"}
-        />
-        <Text style={styles.venueTxt}>{item.is_home ? "À domicile" : "Extérieur"}</Text>
-      </View>
-
-      {/* VS */}
-      <View style={styles.vsRow}>
-        <View style={styles.teamCol}>
-          <Image source={LOGO_MAP["Honfleur"]} style={styles.logoTeam} />
-          <Text style={[styles.teamName, { color: "#FF8200" }]}>Honfleur</Text>
-        </View>
-        <Text style={styles.vs}>VS</Text>
-        <View style={styles.teamCol}>
-          {getOpponentLogo(item.opponent) ? (
-            <Image source={getOpponentLogo(item.opponent)} style={styles.logoTeam} />
-          ) : (
-            <View style={[styles.logoTeam]} />
+        {/* Catégorie + Note */}
+        <View
+          style={{
+            flexDirection: "row",
+            gap: 8,
+            marginTop: 8,
+            flexWrap: "wrap",
+            justifyContent: "center",
+          }}
+        >
+          {!!item.categorie && (
+            <Text
+              style={{
+                color: COLORS.text,
+                backgroundColor: COLORS.card,
+                borderColor: COLORS.orangeSoftBorder,
+                borderWidth: 1,
+                paddingHorizontal: 10,
+                paddingVertical: 4,
+                borderRadius: 10,
+                fontWeight: "900",
+                fontSize: 12.5,
+              }}
+            >
+              {item.categorie}
+            </Text>
           )}
-          <Text style={[styles.teamName, { color: "#52b6fa" }]} numberOfLines={1}>
-            {item.opponent}
-          </Text>
+          {!!item.note && (
+            <Text style={{ color: COLORS.orange, fontWeight: "bold", fontSize: 12.5 }} numberOfLines={2}>
+              {item.note}
+            </Text>
+          )}
         </View>
-      </View>
 
-      {/* Catégorie + Note */}
-      <View
-        style={{
-          flexDirection: "row",
-          gap: 8,
-          marginTop: 8,
-          flexWrap: "wrap",
-          justifyContent: "center",
-        }}
-      >
-        {!!item.categorie && (
-          <Text
-            style={{
-              color: "#eaeef7",
-              backgroundColor: "#141821",
-              borderColor: "rgba(255,130,0,0.35)",
-              borderWidth: 1,
-              paddingHorizontal: 10,
-              paddingVertical: 4,
-              borderRadius: 10,
-              fontWeight: "900",
-              fontSize: 12.5,
-            }}
-          >
-            {item.categorie}
-          </Text>
+        {/* Bannière d’info si inscription impossible */}
+        {reasons.length > 0 && !isJoined && (
+          <View style={styles.infoBanner}>
+            <Icon name="information-circle-outline" size={18} color={COLORS.slateDark} />
+            <Text style={styles.infoBannerTxt}>{reasons.join(" ")}</Text>
+          </View>
         )}
-        {!!item.note && (
-          <Text style={{ color: "#FF8200", fontWeight: "bold", fontSize: 12.5 }} numberOfLines={2}>
-            {item.note}
-          </Text>
-        )}
-      </View>
 
-      {/* Bannière d’info si inscription impossible */}
-      {reasons.length > 0 && !isJoined && (
-        <View style={styles.infoBanner}>
-          <Icon name="information-circle-outline" size={18} color="#0F172A" />
-          <Text style={styles.infoBannerTxt}>
-            {reasons.join(" ")}
-          </Text>
-        </View>
-      )}
+        {/* Actions */}
+        <TouchableOpacity
+          style={styles.calBtn}
+          activeOpacity={0.88}
+          onPress={() =>
+            Alert.alert("Ajouter au calendrier", "Ajouter ce match à votre calendrier ?", [
+              { text: "Annuler", style: "cancel" },
+              { text: "Oui", onPress: () => addMatchToCalendar(item) },
+            ])
+          }
+        >
+          <Icon name="calendar-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
+          <Text style={styles.calBtnTxt}>Ajouter au calendrier</Text>
+        </TouchableOpacity>
 
-      {/* Actions */}
-      <TouchableOpacity
-        style={styles.calBtn}
-        activeOpacity={0.88}
-        onPress={() =>
-          Alert.alert("Ajouter au calendrier", "Ajouter ce match à votre calendrier ?", [
-            { text: "Annuler", style: "cancel" },
-            { text: "Oui", onPress: () => addMatchToCalendar(item) },
-          ])
-        }
-      >
-        <Icon name="calendar-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
-        <Text style={styles.calBtnTxt}>Ajouter au calendrier</Text>
-      </TouchableOpacity>
-
-      {/* Boutons participation / désinscription */}
-      {!isJoined ? (
-        <>
+        {/* Boutons participation / désinscription */}
+        {!isJoined ? (
           <TouchableOpacity
             disabled={joinDisabled}
             accessibilityState={{ disabled: joinDisabled }}
@@ -586,7 +736,6 @@ const UpcomingCard = ({ item }: { item: PlannedGame }) => {
             style={[
               styles.joinBtn,
               {
-                backgroundColor: "#0ea5e9",
                 opacity: joinDisabled ? 0.7 : 1,
                 marginTop: 10,
               },
@@ -596,12 +745,7 @@ const UpcomingCard = ({ item }: { item: PlannedGame }) => {
             <Icon name="baseball-outline" size={18} color="#fff" style={{ marginRight: 7 }} />
             <Text style={styles.joinBtnTxt}>{isPosting ? "Inscription…" : "Je participe"}</Text>
           </TouchableOpacity>
-
-          {/* Petit rappel du compteur sous les boutons (secondaire) */}
-
-        </>
-      ) : (
-        <>
+        ) : (
           <TouchableOpacity
             onPress={() => handleUnparticipate(item)}
             disabled={isPosting}
@@ -611,12 +755,10 @@ const UpcomingCard = ({ item }: { item: PlannedGame }) => {
             <Icon name="close-circle-outline" size={18} color="#fff" style={{ marginRight: 7 }} />
             <Text style={styles.joinBtnTxt}>{isPosting ? "Désinscription…" : "Me désinscrire"}</Text>
           </TouchableOpacity>
-
-        </>
-      )}
-    </View>
-  );
-};
+        )}
+      </View>
+    );
+  };
 
   const PlayedCard = ({ g }: { g: Game }) => {
     const teamAbbr = g.team_abbr || "HON";
@@ -641,14 +783,14 @@ const UpcomingCard = ({ item }: { item: PlannedGame }) => {
         </View>
 
         <View style={styles.venueRow}>
-          <Icon name={g.is_home ? "home" : "airplane-outline"} size={18} color={g.is_home ? "#FF8200" : "#52b6fa"} />
+          <Icon name={g.is_home ? "home" : "airplane-outline"} size={18} color={g.is_home ? COLORS.orange : COLORS.blue} />
           <Text style={styles.venueTxt}>{g.is_home ? "À domicile" : "Extérieur"}</Text>
         </View>
 
         <View style={styles.scoresRow}>
           <View style={styles.teamScoreCol}>
             {leftLogo && <Image source={leftLogo} style={styles.logoTeam} />}
-            <Text style={[styles.teamName, { color: homeIsHonfleur ? "#FF8200" : "#52b6fa" }]} numberOfLines={1}>
+            <Text style={[styles.teamName, { color: homeIsHonfleur ? COLORS.orange : COLORS.blue }]} numberOfLines={1}>
               {leftName}
             </Text>
             <Text style={styles.scoreTxt}>{leftScore}</Text>
@@ -658,7 +800,7 @@ const UpcomingCard = ({ item }: { item: PlannedGame }) => {
 
           <View style={styles.teamScoreCol}>
             {rightLogo && <Image source={rightLogo} style={styles.logoTeam} />}
-            <Text style={[styles.teamName, { color: !homeIsHonfleur ? "#FF8200" : "#52b6fa" }]} numberOfLines={1}>
+            <Text style={[styles.teamName, { color: !homeIsHonfleur ? COLORS.orange : COLORS.blue }]} numberOfLines={1}>
               {rightName}
             </Text>
             <Text style={styles.scoreTxt}>{rightScore}</Text>
@@ -683,69 +825,100 @@ const UpcomingCard = ({ item }: { item: PlannedGame }) => {
   const isLoadingList = (selectedTab === "played" && loading) || (selectedTab === "upcoming" && loadingPlanned);
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.bg }}>
       <StatusBar barStyle="light-content" />
 
       {/* HERO */}
-      <View style={{ backgroundColor: "#11131a", borderBottomWidth: 1, borderBottomColor: "#1f2230", paddingBottom: 10,
-        paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26 }}>
+      <View
+        style={{
+          backgroundColor: COLORS.surface,
+          borderBottomWidth: 1,
+          borderBottomColor: COLORS.surfaceBorder,
+          paddingBottom: 10,
+          paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26,
+        }}
+      >
         <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12 }}>
           <TouchableOpacity
             onPress={() =>
               // @ts-ignore
               (navigation as any).canGoBack() ? (navigation as any).goBack() : (navigation as any).navigate("Home")
             }
-            style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: "#1b1e27", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#2a2f3d" }}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              backgroundColor: "#1b1e27",
+              alignItems: "center",
+              justifyContent: "center",
+              borderWidth: 1,
+              borderColor: COLORS.cardBorder,
+            }}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <Icon name="chevron-back" size={24} color="#FF8200" />
+            <Icon name="chevron-back" size={24} color={COLORS.orange} />
           </TouchableOpacity>
 
-          <Text style={{ flex: 1, textAlign: "center", color: "#FF8200", fontSize: 20, fontWeight: "800", letterSpacing: 1.1 }}>
+          <Text
+            style={{
+              flex: 1,
+              textAlign: "center",
+              color: COLORS.orange,
+              fontSize: 20,
+              fontWeight: "800",
+              letterSpacing: 1.1,
+            }}
+          >
             Calendrier & Résultats
           </Text>
           <LogoutButton />
         </View>
 
         {/* Onglets haut : joués / à venir */}
-        <View style={{ flexDirection: "row", paddingHorizontal: 12, paddingTop: 10 }}>
+        <View style={{ flexDirection: "row", paddingHorizontal: 12, paddingTop: 10, gap: 8 }}>
           {[
             { label: "Matchs à venir", key: "upcoming", icon: "calendar-outline" },
             { label: "Matchs joués", key: "played", icon: "list-outline" },
-          ].map((tab) => (
-            <TouchableOpacity
-              key={tab.key}
-              onPress={() => {
-                setSelectedTab(tab.key as any);
-                if (tab.key === "upcoming") {
-                  // garder le filtre courant
-                } else {
-                  // rien à faire
-                }
-                flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-              }}
-              style={{
-                flex: 1,
-                backgroundColor: selectedTab === tab.key ? "#FF8200" : "#141821",
-                borderWidth: 1,
-                borderColor: selectedTab === tab.key ? "#FF8200" : "#252a38",
-                paddingVertical: 10,
-                borderRadius: 12,
-                alignItems: "center",
-                flexDirection: "row",
-                justifyContent: "center",
-              }}
-              activeOpacity={0.9}
-            >
-              <Icon name={tab.icon as any} size={16} color={selectedTab === tab.key ? "#fff" : "#FF8200"} />
-              <Text style={{ color: selectedTab === tab.key ? "#fff" : "#FF8200", fontWeight: "900", fontSize: 13.5, letterSpacing: 0.3, marginLeft: 8 }}>
-                {tab.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          ].map((tab) => {
+            const active = selectedTab === tab.key;
+            return (
+              <TouchableOpacity
+                key={tab.key}
+                onPress={() => {
+                  setSelectedTab(tab.key as any);
+                  flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+                }}
+                style={{
+                  flex: 1,
+                  backgroundColor: active ? COLORS.orange : COLORS.card,
+                  borderWidth: 1,
+                  borderColor: active ? COLORS.orange : COLORS.cardBorder,
+                  paddingVertical: 10,
+                  borderRadius: 12,
+                  alignItems: "center",
+                  flexDirection: "row",
+                  justifyContent: "center",
+                }}
+                activeOpacity={0.9}
+              >
+                <Icon name={tab.icon as any} size={16} color={active ? "#fff" : COLORS.orange} />
+                <Text
+                  style={{
+                    color: active ? "#fff" : COLORS.orange,
+                    fontWeight: "900",
+                    fontSize: 13.5,
+                    letterSpacing: 0.3,
+                    marginLeft: 8,
+                  }}
+                >
+                  {tab.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
-        {/* ✅ Sous-onglets catégorie (Seniors par défaut) */}
+        {/* Sous-onglets catégorie (Seniors par défaut) */}
         {selectedTab === "upcoming" && (
           <View style={{ flexDirection: "row", gap: 8, paddingHorizontal: 12, paddingTop: 10, flexWrap: "wrap" }}>
             {(["Seniors", "15U", "12U"] as const).map((f) => {
@@ -753,10 +926,13 @@ const UpcomingCard = ({ item }: { item: PlannedGame }) => {
               return (
                 <TouchableOpacity
                   key={f}
-                  onPress={() => { setCatFilter(f); flatListRef.current?.scrollToOffset({ offset: 0, animated: true }); }}
+                  onPress={() => {
+                    setCatFilter(f);
+                    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+                  }}
                   style={{
-                    backgroundColor: active ? "#FF8200" : "rgba(255,255,255,0.06)",
-                    borderColor: active ? "#FF8200" : "rgba(255,130,0,0.22)",
+                    backgroundColor: active ? COLORS.orange : "rgba(255,255,255,0.06)",
+                    borderColor: active ? COLORS.orange : COLORS.orangeSoftBorder,
                     borderWidth: 1,
                     borderRadius: 999,
                     paddingVertical: 8,
@@ -764,7 +940,7 @@ const UpcomingCard = ({ item }: { item: PlannedGame }) => {
                   }}
                   activeOpacity={0.9}
                 >
-                  <Text style={{ color: active ? "#fff" : "#eaeef7", fontWeight: active ? "900" : "800" }}>
+                  <Text style={{ color: active ? "#fff" : COLORS.text, fontWeight: active ? "900" : "800" }}>
                     {f} ({catCounts[f]})
                   </Text>
                 </TouchableOpacity>
@@ -777,9 +953,13 @@ const UpcomingCard = ({ item }: { item: PlannedGame }) => {
       {/* LISTE */}
       <View style={{ flex: 1 }}>
         {isLoadingList ? (
-          <View style={styles.loaderBox}><Text style={styles.loaderTxt}>Chargement…</Text></View>
+          <View style={styles.loaderBox}>
+            <Text style={styles.loaderTxt}>Chargement…</Text>
+          </View>
         ) : errorMsg ? (
-          <View style={styles.loaderBox}><Text style={styles.errorTxt}>{errorMsg}</Text></View>
+          <View style={styles.loaderBox}>
+            <Text style={styles.errorTxt}>{errorMsg}</Text>
+          </View>
         ) : (
           <>
             <FlatList
@@ -787,22 +967,18 @@ const UpcomingCard = ({ item }: { item: PlannedGame }) => {
               data={dataToShow}
               keyExtractor={(it: any) => String(it.id)}
               contentContainerStyle={{ padding: 14, paddingBottom: 36 }}
-              ListEmptyComponent={
-                <Text style={styles.emptyTxt}>
-                  {selectedTab === "upcoming"
-                    ? `Aucun match en ${catFilter} à venir.`
-                    : "Aucun match joué à afficher."}
-                </Text>
-              }
-              renderItem={({ item }) =>
-                selectedTab === "upcoming" ? <UpcomingCard item={item as PlannedGame} /> : <PlayedCard g={item as Game} />
-              }
+              ListEmptyComponent={<Text style={styles.emptyTxt}>{selectedTab === "upcoming" ? `Aucun match en ${catFilter} à venir.` : "Aucun match joué à afficher."}</Text>}
+              renderItem={({ item }) => (selectedTab === "upcoming" ? <UpcomingCard item={item as PlannedGame} /> : <PlayedCard g={item as Game} />)}
               onScroll={(e) => setShowScrollTop(e.nativeEvent.contentOffset.y > 240)}
               scrollEventThrottle={16}
             />
             {showScrollTop && (
-              <TouchableOpacity style={styles.scrollTopBtn} onPress={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: true })} activeOpacity={0.8}>
-                <Icon name="chevron-up" size={30} color="#FF8200" />
+              <TouchableOpacity
+                style={styles.scrollTopBtn}
+                onPress={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: true })}
+                activeOpacity={0.8}
+              >
+                <Icon name="chevron-up" size={30} color={COLORS.orange} />
               </TouchableOpacity>
             )}
           </>
@@ -810,11 +986,7 @@ const UpcomingCard = ({ item }: { item: PlannedGame }) => {
       </View>
 
       {/* TOAST */}
-      <CometsToast
-        visible={toastVisible}
-        data={toastData}
-        onClose={() => { setToastVisible(false); setToastData(null); }}
-      />
+      <CometsToast visible={toastVisible} data={toastData} onClose={() => { setToastVisible(false); setToastData(null); }} />
     </SafeAreaView>
   );
 }
@@ -822,99 +994,183 @@ const UpcomingCard = ({ item }: { item: PlannedGame }) => {
 // ================== Styles ==================
 const styles = StyleSheet.create({
   loaderBox: { flex: 1, alignItems: "center", justifyContent: "center" },
-  loaderTxt: { color: "#FF8200", fontWeight: "bold", fontSize: 18 },
+  loaderTxt: { color: COLORS.orange, fontWeight: "bold", fontSize: 18 },
   errorTxt: { color: "tomato", fontSize: 15, textAlign: "center", paddingHorizontal: 20 },
   emptyTxt: { color: "#9aa0ae", fontSize: 15, textAlign: "center", marginTop: 40 },
 
   card: {
     backgroundColor: "rgba(255,255,255,0.06)",
-    borderRadius: 18, padding: 16, marginBottom: 12,
-    shadowColor: "#000", shadowOpacity: 0.18, shadowRadius: 12, elevation: 3,
-    borderWidth: 1, borderColor: "rgba(255,130,0,0.22)",
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: COLORS.orangeSoftBorder,
   },
   cardTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
 
   matchBadgeUpcoming: {
-    color: "#52b6fa", backgroundColor: "rgba(82,182,250,0.15)", borderColor: "rgba(82,182,250,0.4)",
-    borderWidth: 1, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, fontWeight: "900", fontSize: 12.5,
+    color: COLORS.blue,
+    backgroundColor: COLORS.blueSoftBg,
+    borderColor: COLORS.blueSoftBorder,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    fontWeight: "900",
+    fontSize: 12.5,
   },
   matchBadgePlayed: {
-    color: "#FF8200", backgroundColor: "rgba(255,130,0,0.12)", borderColor: "rgba(255,130,0,0.35)",
-    borderWidth: 1, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, fontWeight: "900", fontSize: 12.5,
+    color: COLORS.orange,
+    backgroundColor: COLORS.orangeSoftBg,
+    borderColor: COLORS.orangeSoftBorder,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    fontWeight: "900",
+    fontSize: 12.5,
   },
   matchDate: { color: "#d5d8df", fontWeight: "700", fontSize: 13.5 },
 
   venueRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 },
-  venueTxt: { color: "#cfd3db", fontWeight: "700", fontSize: 13.5 },
+  venueTxt: { color: COLORS.textMuted, fontWeight: "700", fontSize: 13.5 },
 
   vsRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 12 },
   teamCol: { flex: 1, alignItems: "center" },
-  teamName: { color: "#fff", fontWeight: "900", fontSize: 15, marginTop: 6 },
-  logoTeam: { width: 48, height: 48, borderRadius: 10, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200" },
-  vs: { color: "#FF8200", fontWeight: "900", fontSize: 16, marginHorizontal: 10 },
+  teamName: { color: COLORS.text, fontWeight: "900", fontSize: 15, marginTop: 6 },
+  logoTeam: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+    backgroundColor: "#fff",
+    borderWidth: 2,
+    borderColor: COLORS.orange,
+  },
+  vs: { color: COLORS.orange, fontWeight: "900", fontSize: 16, marginHorizontal: 10 },
 
   scoresRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 12 },
   teamScoreCol: { flex: 1, alignItems: "center" },
-  scoreTxt: { color: "#fff", fontWeight: "900", fontSize: 22, marginTop: 2, textShadowColor: "#0006", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
-  vsDash: { color: "#FF8200", fontWeight: "900", fontSize: 20, marginHorizontal: 10 },
+  scoreTxt: {
+    color: "#fff",
+    fontWeight: "900",
+    fontSize: 22,
+    marginTop: 2,
+    textShadowColor: "#0006",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  vsDash: { color: COLORS.orange, fontWeight: "900", fontSize: 20, marginHorizontal: 10 },
 
   resultRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12 },
-  resultBadge: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 10, shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 6, elevation: 2 },
+  resultBadge: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 10,
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 2,
+  },
   resultBadgeTxt: { color: "#fff", fontWeight: "900", letterSpacing: 0.6, fontSize: 13.5 },
-  boxscoreBtn: { flexDirection: "row", alignItems: "center", backgroundColor: "#FF8200", borderRadius: 10, paddingHorizontal: 12, paddingVertical: 7 },
+
+  boxscoreBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.orange,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
   boxscoreBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 13.5 },
 
-  calBtn: { marginTop: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#FF8200", borderRadius: 12, paddingVertical: 10 },
+  calBtn: {
+    marginTop: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.orange,
+    borderRadius: 12,
+    paddingVertical: 10,
+  },
   calBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 14.5 },
 
-  joinBtn: { marginTop: 10, flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#0ea5e9", borderRadius: 12, paddingVertical: 10 },
+  joinBtn: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.blue,
+    borderRadius: 12,
+    paddingVertical: 10,
+  },
   joinBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 14.5 },
 
-  // 🔻 NEW: style pour le bouton désinscription
   unsubscribeBtn: {
     marginTop: 10,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#ef4444",
+    backgroundColor: COLORS.danger,
     borderRadius: 12,
     paddingVertical: 10,
   },
 
-  disabledInfo: { color: "#9aa0ae", fontWeight: "700", fontSize: 12.5, textAlign: "center", marginTop: 6 },
+  disabledInfo: {
+    color: "#9aa0ae",
+    fontWeight: "700",
+    fontSize: 12.5,
+    textAlign: "center",
+    marginTop: 6,
+  },
 
   scrollTopBtn: {
-    position: "absolute", right: 18, bottom: 25, backgroundColor: "#101017EE", borderRadius: 25,
-    width: 50, height: 50, alignItems: "center", justifyContent: "center",
-    shadowColor: "#FF8200", shadowOpacity: 0.17, shadowRadius: 8, elevation: 3,
-    borderWidth: 2, borderColor: "#FF8200",
+    position: "absolute",
+    right: 18,
+    bottom: 25,
+    backgroundColor: "#101017EE",
+    borderRadius: 25,
+    width: 50,
+    height: 50,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: COLORS.orange,
+    shadowOpacity: 0.17,
+    shadowRadius: 8,
+    elevation: 3,
+    borderWidth: 2,
+    borderColor: COLORS.orange,
   },
-    // Compteur d'inscrits (pill visible)
+
+  // Compteur d'inscrits (pill visible) — moins flashy
   countPill: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#FDE68A",
-    borderColor: "#F59E0B",
+    backgroundColor: COLORS.amberPillBg,
+    borderColor: COLORS.amberPillBorder,
     borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 999,
   },
   countPillTxt: {
-    color: "#0F172A",
+    color: COLORS.slateDark,
     fontWeight: "900",
     fontSize: 12.5,
   },
 
-  // Bannière d’info quand non-inscriptible
+  // Bannière d’info — bleu doux
   infoBanner: {
     marginTop: 10,
     flexDirection: "row",
     gap: 8,
     alignItems: "flex-start",
-    backgroundColor: "#93C5FD",
-    borderColor: "#3B82F6",
+    backgroundColor: COLORS.infoBg,
+    borderColor: COLORS.infoBorder,
     borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 8,
@@ -922,10 +1178,9 @@ const styles = StyleSheet.create({
   },
   infoBannerTxt: {
     flex: 1,
-    color: "#0F172A",
+    color: COLORS.slateDark,
     fontWeight: "800",
     fontSize: 12.5,
     lineHeight: 18,
   },
-
 });
