@@ -1,7 +1,7 @@
 // app/screens/ActuDetailScreen.tsx
 "use client";
 
-import { useNavigation, useRoute } from "@react-navigation/native";
+import { useNavigation } from "@react-navigation/native";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -16,6 +16,7 @@ import {
   View,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
+import { useLocalSearchParams } from "expo-router";
 
 const logoComets = require("../../assets/images/iconComets.png");
 
@@ -23,12 +24,23 @@ type Article = {
   id: number;
   title: string;
   content: string;
-  image_url?: string;
+  image_url?: string | null;
   created_at?: string;
+  category?: string | null;
+  // tolère d'autres clés éventuelles renvoyées par l'API
+  [key: string]: any;
 };
 
-const TEAM_CATEGORIES = ["12U", "15U", "Seniors"] as const;
+/** Doit matcher l'admin */
+const CATEGORY_META = [
+  { value: "", label: "Autres", color: "#FF8200" },
+  { value: "12U", label: "12U", color: "#10b981" },
+  { value: "15U", label: "15U", color: "#3b82f6" },
+  { value: "Séniors", label: "Séniors", color: "#f59e0b" },
+] as const;
+type CatValue = (typeof CATEGORY_META)[number]["value"];
 
+/* =================== Helpers =================== */
 function stripHtml(html = "") {
   return html.replace(/(<([^>]+)>)/gi, "").replace(/&nbsp;/g, " ").trim();
 }
@@ -39,35 +51,105 @@ function formatDate(dateStr?: string) {
     ? dateStr
     : d.toLocaleDateString("fr-FR", { year: "numeric", month: "long", day: "numeric" });
 }
-function getTeamCat(title: string) {
-  const norm = (title || "").trim().toUpperCase();
-  for (const cat of TEAM_CATEGORIES) {
-    if (norm.startsWith(cat.toUpperCase())) return cat;
-  }
-  return "Autres";
+
+/** supprime accents, espaces, tirets/underscores, met en MAJ */
+function normalizeKey(input: string) {
+  return input
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // diacritiques
+    .replace(/[\s\-_]/g, "") // espaces/tirets/underscores
+    .toUpperCase();
 }
 
+/** lit la catégorie depuis l'objet (tolère plusieurs noms de clé) */
+function readCategory(a: any): string {
+  const raw = a?.category ?? a?.categorie ?? a?.team_category ?? "";
+  return typeof raw === "string" ? raw : String(raw ?? "");
+}
+
+/** DB -> valeur canonique ("" | "12U" | "15U" | "Séniors"). Fallback par titre si vide. */
+function getCatValue(a: Article): CatValue {
+  const raw = readCategory(a).trim();
+  if (raw) {
+    const key = normalizeKey(raw);
+    if (key === "12U") return "12U";
+    if (key === "15U") return "15U";
+    // toutes variantes: Seniors/Séniors/Senior/Sénior
+    if (key === "SENIOR" || key === "SENIORS") return "Séniors";
+    // valeur non reconnue -> Autres
+    return "";
+  }
+  // Fallback anciens posts : infère via le titre
+  const tk = normalizeKey(a.title || "");
+  if (tk.startsWith("12U")) return "12U";
+  if (tk.startsWith("15U")) return "15U";
+  if (tk.startsWith("SENIOR") || tk.startsWith("SENIORS")) return "Séniors";
+  return ""; // Autres
+}
+
+function catMetaOf(value: CatValue) {
+  return CATEGORY_META.find((c) => c.value === value);
+}
+/* =============================================== */
+
 export default function ActuDetailScreen() {
-  const route = useRoute<any>();
   const navigation = useNavigation();
-  const articleId = route.params?.articleId;
+  // ✅ Accepte articleId OU id, et gère les tableaux (Expo Router peut renvoyer string | string[])
+  const params = useLocalSearchParams<{ articleId?: string | string[]; id?: string | string[] }>();
+  const rawId = Array.isArray(params.articleId)
+    ? params.articleId[0]
+    : params.articleId ?? (Array.isArray(params.id) ? params.id[0] : params.id);
+  const articleId = rawId ? String(rawId) : undefined;
+
   const [article, setArticle] = useState<Article | null>(null);
   const [loading, setLoading] = useState(true);
+  const [paramError, setParamError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!articleId) return;
+    // Si pas d'ID → on stoppe le loader et on affiche une erreur propre
+    if (!articleId) {
+      setParamError("Aucun identifiant d’article reçu.");
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
     (async () => {
       try {
         setLoading(true);
-        const r = await fetch(`https://les-comets-honfleur.vercel.app/api/news/${articleId}`);
-        const data = await r.json();
-        setArticle(data);
-      } catch (e) {
-        setArticle(null);
+        setParamError(null);
+        const r = await fetch(
+          `https://les-comets-honfleur.vercel.app/api/news/${encodeURIComponent(articleId)}`
+        );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = (await r.json()) as Article | null;
+        if (!cancelled)
+          setArticle(
+            data
+              ? {
+                  ...data,
+                  image_url: data.image_url ?? null,
+                  // on ne perd pas la catégorie si elle existe sous d'autres clés
+                  category: data.category ?? data.categorie ?? data.team_category ?? null,
+                }
+              : null
+          );
+
+        // // Debug (optionnel) :
+        // if (__DEV__) {
+        //   console.log("[ActuDetail] raw category:", data?.category, data?.categorie, data?.team_category);
+        //   console.log("[ActuDetail] normalized:", data ? getCatValue(data as Article) : null);
+        // }
+      } catch {
+        if (!cancelled) setArticle(null);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [articleId]);
 
   const siteUrl = "https://les-comets-honfleur.vercel.app";
@@ -78,9 +160,9 @@ export default function ActuDetailScreen() {
   const shareLinks = [
     {
       label: "Facebook",
-      url: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(articleUrl)}&quote=${encodeURIComponent(
-        (article?.title || "") + " – " + excerpt
-      )}`,
+      url: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(
+        articleUrl
+      )}&quote=${encodeURIComponent((article?.title || "") + " – " + excerpt)}`,
       icon: "logo-facebook" as const,
     },
     {
@@ -97,32 +179,51 @@ export default function ActuDetailScreen() {
     },
     {
       label: "Email",
-      url: `mailto:?subject=${encodeURIComponent("À lire : " + (article?.title || ""))}&body=${encodeURIComponent(
+      url: `mailto:?subject=${encodeURIComponent(
+        "À lire : " + (article?.title || "")
+      )}&body=${encodeURIComponent(
         `Je voulais te partager cet article du club Les Comets d’Honfleur !\n\n${article?.title}\n\n${excerpt}\n\nLire : ${articleUrl}`
       )}`,
       icon: "mail-outline" as const,
     },
   ];
 
+  // === ÉTATS ===
   if (loading) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#0f1014" }}>
+      <View
+        style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#0f1014" }}
+      >
         <ActivityIndicator size="large" color="#FF8200" />
         <Text style={{ color: "#FF8200", fontWeight: "bold", marginTop: 18 }}>Chargement…</Text>
       </View>
     );
   }
 
-  if (!article) {
+  if (paramError) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#0f1014" }}>
-        <Text style={{ color: "#FF8200", fontWeight: "bold", fontSize: 18, textAlign: "center", paddingHorizontal: 24 }}>
-          Article introuvable ou supprimé 🥲
+      <View
+        style={{
+          flex: 1,
+          justifyContent: "center",
+          alignItems: "center",
+          backgroundColor: "#0f1014",
+          paddingHorizontal: 24,
+        }}
+      >
+        <Text style={{ color: "#FF8200", fontWeight: "bold", fontSize: 18, textAlign: "center" }}>
+          {paramError}
         </Text>
         <TouchableOpacity
-          onPress={() => (navigation as any).goBack()}
+          onPress={() => (navigation as any).goBack?.()}
           activeOpacity={0.9}
-          style={{ marginTop: 16, backgroundColor: "#FF8200", paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12 }}
+          style={{
+            marginTop: 16,
+            backgroundColor: "#FF8200",
+            paddingHorizontal: 18,
+            paddingVertical: 10,
+            borderRadius: 12,
+          }}
         >
           <Text style={{ color: "#fff", fontWeight: "900" }}>Retour aux actus</Text>
         </TouchableOpacity>
@@ -130,11 +231,50 @@ export default function ActuDetailScreen() {
     );
   }
 
+  if (!article) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          justifyContent: "center",
+          alignItems: "center",
+          backgroundColor: "#0f1014",
+          paddingHorizontal: 24,
+        }}
+      >
+        <Text style={{ color: "#FF8200", fontWeight: "bold", fontSize: 18, textAlign: "center" }}>
+          Article introuvable ou supprimé 🥲
+        </Text>
+        <TouchableOpacity
+          onPress={() => (navigation as any).goBack?.()}
+          activeOpacity={0.9}
+          style={{
+            marginTop: 16,
+            backgroundColor: "#FF8200",
+            paddingHorizontal: 18,
+            paddingVertical: 10,
+            borderRadius: 12,
+          }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "900" }}>Retour aux actus</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // === Pastille catégorie (alignée admin) ===
+  const cv = getCatValue(article);
+  const meta = catMetaOf(cv);
+  const badgeBg = meta ? `${meta.color}22` : "rgba(255,255,255,0.06)";
+  const badgeBorder = meta?.color ?? "#2b3141";
+  const badgeText = meta?.color ?? "#cfd3db";
+
+  // === RENDU ===
   return (
     <View style={{ flex: 1, backgroundColor: "#0f1014" }}>
       <StatusBar barStyle="light-content" />
 
-      {/* HERO (mêmes codes que ActusScreen) */}
+      {/* HERO */}
       <View
         style={[
           styles.hero,
@@ -146,12 +286,9 @@ export default function ActuDetailScreen() {
         <View style={styles.heroRow}>
           <TouchableOpacity
             onPress={() =>
-              // @ts-ignore
-              (navigation as any).canGoBack()
-                ? // @ts-ignore
-                  (navigation as any).goBack()
-                : // @ts-ignore
-                  (navigation as any).navigate("Home")
+              (navigation as any).canGoBack?.()
+                ? (navigation as any).goBack()
+                : (navigation as any).navigate?.("Home")
             }
             style={styles.backBtn}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -160,8 +297,6 @@ export default function ActuDetailScreen() {
           </TouchableOpacity>
 
           <Text style={styles.heroTitle}>Actualité du club</Text>
-
-          {/* espace symétrique */}
           <View style={{ width: 36 }} />
         </View>
 
@@ -169,51 +304,47 @@ export default function ActuDetailScreen() {
           <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
           <View style={{ flex: 1 }}>
             <Text style={styles.heroName}>Comets d’Honfleur</Text>
-            <Text style={styles.heroSub}>Article détaillée</Text>
+            <Text style={styles.heroSub}>Article détaillé</Text>
           </View>
         </View>
       </View>
 
       <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
-        {/* HERO IMAGE */}
         {article.image_url ? (
           <Image source={{ uri: article.image_url }} style={styles.heroImage} />
         ) : (
           <View style={[styles.heroImage, { backgroundColor: "#141821" }]} />
         )}
 
-        {/* CONTENU */}
         <View style={styles.body}>
-          {/* Chips (catégorie + date) */}
-          <View style={styles.chipsRow}>
-            <View style={styles.chip}>
-              <Text style={styles.chipTxt}>{getTeamCat(article.title)}</Text>
+          <View className="chips" style={styles.chipsRow}>
+            {/* Catégorie (couleur admin) */}
+            <View style={[styles.chip, { backgroundColor: badgeBg, borderColor: badgeBorder }]}>
+              <Text style={[styles.chipTxt, { color: badgeText }]}>{meta?.label ?? "Autres"}</Text>
             </View>
-            <View style={[styles.chip, { backgroundColor: "rgba(255,255,255,0.06)", borderColor: "#2b3141" }]}>
+
+            {/* Date */}
+            <View
+              style={[styles.chip, { backgroundColor: "rgba(255,255,255,0.06)", borderColor: "#2b3141" }]}
+            >
               <Icon name="time-outline" size={13} color="#cfd3db" />
               <Text style={[styles.chipTxt, { color: "#cfd3db" }]}>{formatDate(article.created_at)}</Text>
             </View>
           </View>
 
-          {/* Titre + contenu */}
           <Text style={styles.title}>{article.title}</Text>
           <Text style={styles.content}>{cleanContent}</Text>
 
-          {/* Boutons d’action */}
           <View style={styles.actionsRow}>
-            <TouchableOpacity
-              onPress={() => Linking.openURL(articleUrl)}
-              activeOpacity={0.9}
-              style={styles.primaryBtn}
-            >
+            <TouchableOpacity onPress={() => Linking.openURL(articleUrl)} activeOpacity={0.9} style={styles.primaryBtn}>
               <Icon name="open-outline" size={18} color="#fff" />
               <Text style={styles.primaryBtnTxt}>Ouvrir sur le site</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => (navigation as any).goBack()}
+              onPress={() => (navigation as any).goBack?.()}
               activeOpacity={0.9}
-              style={[styles.secondaryBtn]}
+              style={styles.secondaryBtn}
             >
               <Icon name="arrow-back-outline" size={18} color="#FF8200" />
               <Text style={styles.secondaryBtnTxt}>Retour</Text>
@@ -221,7 +352,6 @@ export default function ActuDetailScreen() {
           </View>
         </View>
 
-        {/* SHARE (boîte glass, sombre) */}
         <View style={styles.shareBox}>
           <Text style={styles.shareTitle}>📣 Partage cet article</Text>
           <View style={styles.shareLinks}>
@@ -244,7 +374,6 @@ export default function ActuDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  // === HERO (identiques à ActusScreen) ===
   hero: {
     backgroundColor: "#11131a",
     borderBottomWidth: 1,
@@ -285,35 +414,12 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: 1.1,
   },
-  heroProfileRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    gap: 12,
-  },
-  heroLogo: {
-    width: 56,
-    height: 56,
-    borderRadius: 14,
-    backgroundColor: "#fff",
-    borderWidth: 2,
-    borderColor: "#FF8200",
-  },
+  heroProfileRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 10, gap: 12 },
+  heroLogo: { width: 56, height: 56, borderRadius: 14, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200" },
   heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
   heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
 
-  // === IMAGE PRINCIPALE ===
-  heroImage: {
-    width: "92%",
-    alignSelf: "center",
-    height: 210,
-    borderRadius: 17,
-    marginTop: 14,
-    backgroundColor: "#0f1014",
-  },
-
-  // === CORPS ===
+  heroImage: { width: "92%", alignSelf: "center", height: 210, borderRadius: 17, marginTop: 14, backgroundColor: "#0f1014" },
   body: { paddingHorizontal: 16, paddingTop: 14 },
 
   chipsRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 },
@@ -330,19 +436,8 @@ const styles = StyleSheet.create({
   },
   chipTxt: { color: "#FF8200", fontWeight: "900", fontSize: 12.5 },
 
-  title: {
-    color: "#eaeef7",
-    fontWeight: "900",
-    fontSize: 22,
-    lineHeight: 26,
-    marginBottom: 8,
-  },
-  content: {
-    color: "#cfd3db",
-    fontSize: 15.5,
-    lineHeight: 22,
-    marginBottom: 18,
-  },
+  title: { color: "#eaeef7", fontWeight: "900", fontSize: 22, lineHeight: 26, marginBottom: 8 },
+  content: { color: "#cfd3db", fontSize: 15.5, lineHeight: 22, marginBottom: 18 },
 
   actionsRow: { flexDirection: "row", gap: 10, marginTop: 4, marginBottom: 6 },
   primaryBtn: {
@@ -368,7 +463,6 @@ const styles = StyleSheet.create({
   },
   secondaryBtnTxt: { color: "#FF8200", fontWeight: "900", fontSize: 13.5 },
 
-  // === PARTAGE (glass sombre) ===
   shareBox: {
     marginHorizontal: 16,
     marginTop: 14,
@@ -382,20 +476,8 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 3,
   },
-  shareTitle: {
-    color: "#eaeef7",
-    fontWeight: "900",
-    fontSize: 16,
-    marginBottom: 10,
-    textAlign: "center",
-  },
-  shareLinks: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    justifyContent: "center",
-    alignItems: "center",
-  },
+  shareTitle: { color: "#eaeef7", fontWeight: "900", fontSize: 16, marginBottom: 10, textAlign: "center" },
+  shareLinks: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center", alignItems: "center" },
   shareBtn: {
     flexDirection: "row",
     alignItems: "center",

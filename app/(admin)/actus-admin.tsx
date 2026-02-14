@@ -4,7 +4,8 @@
 import { Picker } from "@react-native-picker/picker";
 import * as ExpoFileSystem from "expo-file-system";
 import * as ExpoImagePicker from "expo-image-picker";
-import React, { useEffect, useState } from "react";
+import * as ImageManipulator from "expo-image-manipulator";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -27,42 +28,28 @@ import { useNavigation } from "@react-navigation/native";
 
 const logoComets = require("../../assets/images/iconComets.png");
 
-/**
- * On stocke la valeur "catégorie" sans le " - "
- * et on génère/parsons le préfixe du titre proprement.
- */
-const CATEGORY_PREFIXES: { value: string; prefix: string; label: string }[] = [
-  { value: "", label: "Aucune", prefix: "" },
-  { value: "12U", label: "12U", prefix: "12U - " },
-  { value: "15U", label: "15U", prefix: "15U - " },
-  { value: "Séniors", label: "Séniors", prefix: "Séniors - " },
+/** Catégories disponibles */
+const CATEGORY_META = [
+  { value: "", label: "Aucune", color: "#6b7280" },
+  { value: "12U", label: "12U", color: "#10b981" },
+  { value: "15U", label: "15U", color: "#3b82f6" },
+  { value: "Séniors", label: "Séniors", color: "#f59e0b" },
 ];
 
-function buildFullTitle(categoryValue: string, title: string) {
-  const pref = CATEGORY_PREFIXES.find((c) => c.value === categoryValue)?.prefix ?? "";
-  return pref + title.trim();
-}
-
-function splitTitleToCat(fullTitle: string) {
-  const hit = CATEGORY_PREFIXES
-    .filter((c) => c.prefix) // ignore catégorie vide
-    .find((c) => fullTitle.startsWith(c.prefix));
-
-  if (hit) {
-    return {
-      categoryValue: hit.value,
-      titleSansCat: fullTitle.slice(hit.prefix.length),
-    };
-  }
-  return { categoryValue: "", titleSansCat: fullTitle };
-}
+/** Onglets de filtre */
+const CATEGORY_TABS = [
+  { value: "__ALL__", label: "Toutes" },
+  { value: "12U", label: "12U" },
+  { value: "15U", label: "15U" },
+  { value: "Séniors", label: "Séniors" },
+];
 
 const initialForm = { title: "", content: "", image_url: "" };
 
 // ==================== NOTIFS CONFIG ====================
 const PRIMARY_API =
   process.env.EXPO_PUBLIC_PRIMARY_API || "https://les-comets-honfleur.vercel.app";
-const NOTIF_PATH = "/api/notifications/news"; // endpoint côté site
+const NOTIF_PATH = "/api/notifications/news";
 const PUSH_ARTICLE_SECRET = process.env.EXPO_PUBLIC_PUSH_ARTICLE_SECRET || "";
 
 function joinUrl(base: string, path: string) {
@@ -96,42 +83,74 @@ async function sendArticleNotification(payload: {
       },
       body: JSON.stringify(body),
     });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      console.warn(`[article notify] ${url} → ${res.status} ${text?.slice(0, 200)}`);
-      return false;
-    }
-    return true;
-  } catch (e: any) {
-    console.warn("[article notify] network error:", e?.message || e);
+    return res.ok;
+  } catch (e) {
+    console.warn("[article notify] network error:", e);
     return false;
   }
 }
 // ======================================================
 
+// ===== Helpers upload compat (sans blob) =====
+function base64ToUint8Array(base64: string) {
+  const binary =
+    (globalThis as any).atob
+      ? (globalThis as any).atob(base64)
+      : Buffer.from(base64, "base64").toString("binary");
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/** URI file:// → ArrayBuffer (fetch.arrayBuffer ou fallback FileSystem→base64) */
+async function uriToArrayBuffer(uri: string): Promise<ArrayBuffer> {
+  try {
+    const res = await fetch(uri);
+    if (typeof (res as any).arrayBuffer === "function") {
+      return await (res as any).arrayBuffer();
+    }
+  } catch {}
+  const b64 = await ExpoFileSystem.readAsStringAsync(uri, {
+    encoding: ExpoFileSystem.EncodingType.Base64,
+  });
+  return base64ToUint8Array(b64).buffer;
+}
+// ============================================
+
 export default function AdminActusScreen() {
   const { isAdmin } = useAdmin();
   const [newsList, setNewsList] = useState<any[]>([]);
   const [form, setForm] = useState(initialForm);
-  const [categoryValue, setCategoryValue] = useState<string>("");
+  const [categoryValue, setCategoryValue] = useState<string>(""); // champ du formulaire
   const [formError, setFormError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<string>("__ALL__"); // filtre de la liste
   const navigation = useNavigation();
 
-  async function fetchNews() {
+  const fetchNews = useCallback(async (filter: string) => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("news")
-      .select("*")
-      .order("created_at", { ascending: false });
-    if (!error && data) setNewsList(data);
-    setLoading(false);
-  }
+    try {
+      let q = supabase.from("news").select("*").order("created_at", { ascending: false });
+      if (filter !== "__ALL__") {
+        q = q.eq("category", filter);
+      }
+      const { data, error } = await q;
+      if (error) throw error;
+      setNewsList(data || []);
+    } catch (e) {
+      console.warn("fetchNews error:", e);
+      setNewsList([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (isAdmin) fetchNews();
-  }, [isAdmin]);
+    if (isAdmin) fetchNews(activeTab);
+  }, [isAdmin, activeTab, fetchNews]);
 
   async function handleImagePick() {
     try {
@@ -140,54 +159,48 @@ export default function AdminActusScreen() {
         Alert.alert("Permission refusée", "Autorise l'accès à la galerie photo !");
         return;
       }
+
       const result = await ExpoImagePicker.launchImageLibraryAsync({
         mediaTypes: ExpoImagePicker.MediaTypeOptions.Images,
-        quality: 0.72,
+        quality: 0.8,
         allowsEditing: true,
         aspect: [4, 3],
       });
       if (result.canceled || !result.assets?.[0]?.uri) return;
-      setUploading(true);
-      const uri = result.assets[0].uri;
-      const base64 = await ExpoFileSystem.readAsStringAsync(uri, {
-        encoding: ExpoFileSystem.EncodingType.Base64,
-      });
-      const fileName = `news/${Date.now()}_${Math.floor(Math.random() * 99999)}.jpg`;
-      const byteArray = (function base64ToUint8Array(base64: string) {
-        const bin = globalThis.atob
-          ? globalThis.atob(base64)
-          : Buffer.from(base64, "base64").toString("binary");
-        const bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        return bytes;
-      })(base64);
 
+      setUploading(true);
+      const srcUri = result.assets[0].uri;
+
+      // Normalisation: force JPEG + resize
+      const manip = await ImageManipulator.manipulateAsync(
+        srcUri,
+        [{ resize: { width: 1200 } }],
+        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+      );
+
+      const data = await uriToArrayBuffer(manip.uri);
+      const fileName = `news/${Date.now()}_${Math.floor(Math.random() * 99999)}.jpg`;
       const { error: uploadErr } = await supabase.storage
         .from("news-images")
-        .upload(fileName, byteArray, {
+        .upload(fileName, data, {
           contentType: "image/jpeg",
           cacheControl: "3600",
-          upsert: false,
-          duplex: "half",
         });
       if (uploadErr) throw uploadErr;
 
-      const { data: pub } = supabase.storage
-        .from("news-images")
-        .getPublicUrl(fileName);
+      const { data: pub } = supabase.storage.from("news-images").getPublicUrl(fileName);
       const publicUrl = pub?.publicUrl;
-      if (!publicUrl) throw new Error("URL de l'image introuvable.");
+      if (!publicUrl) throw new Error("URL introuvable");
 
       setForm((f) => ({ ...f, image_url: publicUrl }));
-      setUploading(false);
     } catch (e: any) {
+      Alert.alert("Erreur", e?.message || "Erreur lors de l'upload");
+    } finally {
       setUploading(false);
-      Alert.alert("Erreur", e.message || "Erreur lors de l'upload");
     }
   }
 
   async function handleSubmit() {
-    // Titre + contenu requis ; catégorie optionnelle
     if (!form.title.trim()) {
       setFormError("Merci de renseigner un titre d’article.");
       return;
@@ -199,67 +212,62 @@ export default function AdminActusScreen() {
     setFormError("");
     setLoading(true);
 
-    const fullTitle = buildFullTitle(categoryValue, form.title);
-
     try {
       if (editingId) {
-        // === UPDATE SANS NOTIF ===
         const { error } = await supabase
           .from("news")
-          .update({ ...form, title: fullTitle })
+          .update({
+            title: form.title.trim(),
+            content: form.content.trim(),
+            image_url: form.image_url || null,
+            category: categoryValue,
+          })
           .eq("id", editingId);
         if (error) throw error;
       } else {
-        // === INSERT + NOTIF ===
         const { data: inserted, error } = await supabase
           .from("news")
-          .insert([{ ...form, title: fullTitle }])
+          .insert([
+            {
+              title: form.title.trim(),
+              content: form.content.trim(),
+              image_url: form.image_url || null,
+              category: categoryValue,
+            },
+          ])
           .select("id")
           .single();
         if (error) throw error;
 
-        const newId = inserted?.id as number | undefined;
-
-        // Notification uniquement à la création
-        const ok = await sendArticleNotification(
-          newId
-            ? {
-                id: newId,
-                title: fullTitle,
-                content: form.content,
-                image_url: form.image_url || undefined,
-                route: `/actus/${newId}`,
-              }
-            : {
-                title: fullTitle,
-                content: form.content,
-                image_url: form.image_url || undefined,
-                route: "/actus",
-              }
-        );
-        if (!ok)
-          console.warn("[article notify] insert: le serveur n'a pas accepté la requête.");
+        if (inserted?.id) {
+          await sendArticleNotification({
+            id: inserted.id,
+            title: form.title.trim(),
+            content: form.content.trim(),
+            image_url: form.image_url || undefined,
+            route: `/actus/${inserted.id}`,
+          });
+        }
       }
 
-      // reset UI
       setForm(initialForm);
       setCategoryValue("");
       setEditingId(null);
-      fetchNews();
+      fetchNews(activeTab); // refresh avec filtre courant
     } catch (e: any) {
-      Alert.alert("Erreur", e.message || "Erreur lors de l’enregistrement");
+      Alert.alert("Erreur", e?.message || "Erreur lors de l’enregistrement");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   function handleEdit(news: any) {
-    const { categoryValue: catVal, titleSansCat } = splitTitleToCat(news.title || "");
     setForm({
-      title: titleSansCat,
+      title: news.title || "",
       content: news.content || "",
       image_url: news.image_url || "",
     });
-    setCategoryValue(catVal);
+    setCategoryValue(news.category || "");
     setEditingId(news.id);
     setFormError("");
   }
@@ -282,6 +290,7 @@ export default function AdminActusScreen() {
       },
     ]);
   }
+
   function handleCancelEdit() {
     setForm(initialForm);
     setCategoryValue("");
@@ -305,69 +314,60 @@ export default function AdminActusScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
       <StatusBar barStyle="light-content" />
-
-      {/* HERO */}
-      <View
-        style={[
-          styles.hero,
-          { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26 },
-        ]}
-      >
-        <View style={styles.heroStripe} />
-        <View style={styles.heroRow}>
-          <TouchableOpacity
-            onPress={() => (navigation as any)?.goBack?.()}
-            style={styles.backBtn}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Icon name="chevron-back" size={24} color="#FF8200" />
-          </TouchableOpacity>
-          <Text style={styles.heroTitle}>Actualités (admin)</Text>
-          <View style={{ width: 36 }} />
-        </View>
-        <View style={styles.heroProfileRow}>
-          <RNImage source={logoComets} style={styles.heroLogo} resizeMode="contain" />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.heroName}>Publie les infos du club</Text>
-            <Text style={styles.heroSub}>Catégorie, titre, contenu et image</Text>
-          </View>
-        </View>
-      </View>
-
-      {/* BODY */}
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <ScrollView contentContainerStyle={{ padding: 12, paddingBottom: 48 }}>
-          {/* FORM CARD */}
-          <View className="card" style={styles.card}>
+          {/* ===== Header (hero) rétabli ===== */}
+          <View style={[styles.hero, { marginBottom: 12, borderTopLeftRadius: 16, borderTopRightRadius: 16 }]}>
+            <View style={styles.heroStripe} />
+            <View style={{ paddingTop: 10, paddingBottom: 6 }}>
+              <View style={styles.heroRow}>
+                <TouchableOpacity
+                  onPress={() => (navigation as any)?.goBack?.()}
+                  style={styles.backBtn}
+                  activeOpacity={0.85}
+                >
+                  <Icon name="arrow-back" size={18} color="#FF8200" />
+                </TouchableOpacity>
+                <Text style={styles.heroTitle}>Administration — Actus</Text>
+                <View style={{ width: 36, height: 36 }} />
+              </View>
+
+              <View style={styles.heroProfileRow}>
+                <RNImage source={logoComets} style={styles.heroLogo} resizeMode="cover" />
+                <View>
+                  <Text style={styles.heroName}>Comets d’Honfleur</Text>
+                  <Text style={styles.heroSub}>Gestion des actualités & push</Text>
+                </View>
+              </View>
+            </View>
+          </View>
+
+          {/* ===== FORM ===== */}
+          <View style={styles.card}>
             {formError ? (
               <Text style={{ color: "#C50F0F", fontWeight: "bold", marginBottom: 8 }}>{formError}</Text>
             ) : null}
 
+            {/* Catégorie + Titre */}
             <View style={{ flexDirection: "row", gap: 10, marginBottom: 10 }}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.label}>Catégorie</Text>
-                <View
-                  style={{
-                    borderWidth: 1,
-                    borderColor: "#FF8200",
-                    borderRadius: 10,
-                    overflow: "hidden",
-                  }}
-                >
+                <View style={styles.pickerWrap}>
                   <Picker
                     selectedValue={categoryValue}
                     onValueChange={(val) => setCategoryValue(val)}
                     style={{ color: "#B36A00" }}
                   >
-                    {CATEGORY_PREFIXES.map((cat, idx) => (
+                    {CATEGORY_META.map((cat, idx) => (
                       <Picker.Item key={idx} label={cat.label} value={cat.value} />
                     ))}
                   </Picker>
                 </View>
               </View>
+
               <View style={{ flex: 2 }}>
                 <Text style={styles.label}>Titre</Text>
                 <TextInput
@@ -380,6 +380,7 @@ export default function AdminActusScreen() {
               </View>
             </View>
 
+            {/* Contenu */}
             <View style={{ marginBottom: 10 }}>
               <Text style={styles.label}>Contenu</Text>
               <TextInput
@@ -392,60 +393,74 @@ export default function AdminActusScreen() {
               />
             </View>
 
+            {/* Image */}
             <View>
               <Text style={styles.label}>Image (optionnel)</Text>
               <TouchableOpacity
                 style={styles.primaryBtn}
                 onPress={handleImagePick}
                 disabled={uploading}
-                activeOpacity={0.9}
               >
                 <Icon name="image-outline" size={16} color="#fff" />
                 <Text style={styles.primaryBtnTxt}>
                   {uploading ? "Envoi en cours..." : form.image_url ? "Changer l’image" : "Ajouter une image"}
                 </Text>
               </TouchableOpacity>
+
               {!!form.image_url && (
                 <RNImage
                   source={{ uri: form.image_url }}
-                  style={{
-                    width: 140,
-                    height: 100,
-                    borderRadius: 8,
-                    backgroundColor: "#22262f",
-                    alignSelf: "center",
-                    marginTop: 10,
-                  }}
+                  style={styles.preview}
                   resizeMode="cover"
                 />
               )}
             </View>
 
+            {/* Actions */}
             <View style={{ flexDirection: "row", gap: 10, marginTop: 14 }}>
               <TouchableOpacity
                 style={styles.primaryBtn}
                 onPress={handleSubmit}
                 disabled={loading}
-                activeOpacity={0.9}
               >
                 <Icon name="save-outline" size={16} color="#fff" />
                 <Text style={styles.primaryBtnTxt}>
                   {loading ? (editingId ? "Mise à jour…" : "Publication…") : editingId ? "Mettre à jour" : "Publier"}
                 </Text>
               </TouchableOpacity>
+
               {editingId && (
-                <TouchableOpacity
-                  style={styles.secondaryBtn}
-                  onPress={handleCancelEdit}
-                  activeOpacity={0.9}
-                >
+                <TouchableOpacity style={styles.secondaryBtn} onPress={handleCancelEdit}>
                   <Text style={styles.secondaryBtnTxt}>Annuler</Text>
                 </TouchableOpacity>
               )}
             </View>
           </View>
 
-          {/* LISTE DES ACTUS */}
+          {/* ===== Onglets de filtre (DÉPLACÉS sous le bloc édition) ===== */}
+          <View style={[styles.card, { paddingTop: 10, paddingBottom: 10 }]}>
+            <Text style={[styles.label, { marginBottom: 8 }]}>Filtrer les actus par catégorie</Text>
+            <View style={styles.tabsRow}>
+              {CATEGORY_TABS.map((t) => {
+                const isActive = t.value === activeTab;
+                return (
+                  <TouchableOpacity
+                    key={t.value}
+                    onPress={() => setActiveTab(t.value)}
+                    activeOpacity={0.9}
+                    style={[
+                      styles.tabBtn,
+                      isActive && styles.tabBtnActive,
+                    ]}
+                  >
+                    <Text style={[styles.tabTxt, isActive && styles.tabTxtActive]}>{t.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* ===== Liste des actus ===== */}
           {loading ? (
             <ActivityIndicator size="large" color="#FF8200" style={{ marginTop: 12 }} />
           ) : newsList.length === 0 ? (
@@ -453,36 +468,52 @@ export default function AdminActusScreen() {
               Aucune actualité publiée…
             </Text>
           ) : (
-            newsList.map((item) => (
-              <View style={styles.card} key={item.id}>
-                {!!item.image_url && (
-                  <RNImage source={{ uri: item.image_url }} style={styles.cardImg} resizeMode="cover" />
-                )}
-                <Text style={styles.cardTitleTxt}>{item.title}</Text>
-                <Text style={styles.cardBodyTxt}>{item.content}</Text>
-                <Text style={styles.cardDateTxt}>
-                  {item.created_at ? `Publié le ${new Date(item.created_at).toLocaleDateString("fr-FR")}` : ""}
-                </Text>
-                <View style={{ flexDirection: "row", gap: 12, marginTop: 8 }}>
-                  <TouchableOpacity
-                    onPress={() => handleEdit(item)}
-                    activeOpacity={0.9}
-                    style={[styles.actionBtn, { backgroundColor: "#FF8200" }]}
-                  >
-                    <Icon name="create-outline" size={16} color="#fff" />
-                    <Text style={styles.actionTxt}>Éditer</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => handleDelete(item.id)}
-                    activeOpacity={0.9}
-                    style={[styles.actionBtn, { backgroundColor: "#E53935" }]}
-                  >
-                    <Icon name="trash-outline" size={16} color="#fff" />
-                    <Text style={styles.actionTxt}>Supprimer</Text>
-                  </TouchableOpacity>
+            newsList.map((item) => {
+              const catMeta = CATEGORY_META.find((c) => c.value === item.category);
+              return (
+                <View key={item.id} style={styles.card}>
+                  {!!item.image_url && (
+                    <RNImage source={{ uri: item.image_url }} style={styles.cardImg} resizeMode="cover" />
+                  )}
+                  {item.category ? (
+                    <View
+                      style={[
+                        styles.badge,
+                        {
+                          borderColor: catMeta?.color ?? "#9aa0ae",
+                          backgroundColor: (catMeta?.color ?? "#9aa0ae") + "22",
+                        },
+                      ]}
+                    >
+                      <Text style={[styles.badgeTxt, { color: catMeta?.color ?? "#9aa0ae" }]}>
+                        {catMeta?.label || item.category}
+                      </Text>
+                    </View>
+                  ) : null}
+                  <Text style={styles.cardTitleTxt}>{item.title}</Text>
+                  <Text style={styles.cardBodyTxt}>{item.content}</Text>
+                  <Text style={styles.cardDateTxt}>
+                    {item.created_at ? `Publié le ${new Date(item.created_at).toLocaleDateString("fr-FR")}` : ""}
+                  </Text>
+                  <View style={{ flexDirection: "row", gap: 12, marginTop: 8 }}>
+                    <TouchableOpacity
+                      onPress={() => handleEdit(item)}
+                      style={[styles.actionBtn, { backgroundColor: "#FF8200" }]}
+                    >
+                      <Icon name="create-outline" size={16} color="#fff" />
+                      <Text style={styles.actionTxt}>Éditer</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => handleDelete(item.id)}
+                      style={[styles.actionBtn, { backgroundColor: "#E53935" }]}
+                    >
+                      <Icon name="trash-outline" size={16} color="#fff" />
+                      <Text style={styles.actionTxt}>Supprimer</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
-              </View>
-            ))
+              );
+            })
           )}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -491,7 +522,36 @@ export default function AdminActusScreen() {
 }
 
 const styles = StyleSheet.create({
-  hero: { backgroundColor: "#11131a", borderBottomWidth: 1, borderBottomColor: "#1f2230", paddingBottom: 10 },
+  // Tabs
+  tabsRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 0,
+    justifyContent: "space-between",
+  },
+  tabBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#2a2f3d",
+    backgroundColor: "#1b1e27",
+    alignItems: "center",
+  },
+  tabBtnActive: {
+    borderColor: "#FF8200",
+    backgroundColor: "rgba(255,130,0,0.15)",
+  },
+  tabTxt: { color: "#c7cad1", fontWeight: "800" },
+  tabTxtActive: { color: "#FF8200" },
+
+  // Header (hero)
+  hero: {
+    backgroundColor: "#11131a",
+    borderBottomWidth: 1,
+    borderBottomColor: "#1f2230",
+    paddingBottom: 10,
+  },
   heroStripe: {
     position: "absolute",
     right: -60,
@@ -513,12 +573,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#2a2f3d",
   },
-  heroTitle: { flex: 1, textAlign: "center", color: "#FF8200", fontSize: 20, fontWeight: "800", letterSpacing: 1.1 },
+  heroTitle: {
+    flex: 1,
+    textAlign: "center",
+    color: "#FF8200",
+    fontSize: 20,
+    fontWeight: "800",
+    letterSpacing: 1.1,
+  },
   heroProfileRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 10, gap: 12 },
-  heroLogo: { width: 56, height: 56, borderRadius: 14, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200" },
+  heroLogo: {
+    width: 56,
+    height: 56,
+    borderRadius: 14,
+    backgroundColor: "#fff",
+    borderWidth: 2,
+    borderColor: "#FF8200",
+  },
   heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
   heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
 
+  // Cards & inputs
   card: {
     backgroundColor: "rgba(255,255,255,0.06)",
     borderRadius: 18,
@@ -558,10 +633,36 @@ const styles = StyleSheet.create({
   secondaryBtnTxt: { color: "#111", fontWeight: "900", fontSize: 14.5 },
 
   cardImg: { width: "100%", height: 140, borderRadius: 10, backgroundColor: "#22262f", marginBottom: 10 },
-  cardTitleTxt: { color: "#FF8200", fontWeight: "900", fontSize: 17 },
+  cardTitleTxt: { color: "#eaeef7", fontWeight: "900", fontSize: 17, marginTop: 2 },
   cardBodyTxt: { color: "#e6e7eb", fontSize: 15, marginTop: 4 },
   cardDateTxt: { color: "#9aa0ae", fontSize: 12.5, marginTop: 6 },
 
-  actionBtn: { flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 10, paddingVertical: 9, paddingHorizontal: 12 },
+  badge: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    marginBottom: 6,
+  },
+  badgeTxt: { fontWeight: "900", fontSize: 12.5 },
+
+  actionBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+  },
   actionTxt: { color: "#fff", fontWeight: "900", fontSize: 13.5 },
+
+  // Preview image
+  preview: {
+    width: "100%",
+    height: 160,
+    borderRadius: 12,
+    backgroundColor: "#22262f",
+    marginTop: 10,
+  },
 });

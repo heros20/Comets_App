@@ -9,7 +9,9 @@
       "distribution": "internal",
       "env": {
         "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
-        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY",
+        "EXPO_PUBLIC_SUPABASE_URL":"https://ncqeaqymxdktlrdxxjlv.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY",
         "EXPO_PUBLIC_API_URL": "http://10.0.2.2:3000",
         "EXPO_DEBUG": "true"
       }
@@ -22,8 +24,10 @@
       },
       "env": {
         "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
-        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-        "EXPO_PUBLIC_API_URL": "http://192.168.1.42:3000",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY",
+        "EXPO_PUBLIC_SUPABASE_URL":"https://ncqeaqymxdktlrdxxjlv.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY",
+        "EXPO_PUBLIC_API_URL": "http://10.0.2.2:3000",
         "EXPO_DEBUG": "true"
       }
     },
@@ -35,8 +39,10 @@
       },
       "env": {
         "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
-        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-        "EXPO_PUBLIC_API_URL": "http://192.168.1.42:3000",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY",
+        "EXPO_PUBLIC_SUPABASE_URL":"https://ncqeaqymxdktlrdxxjlv.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY",
+        "EXPO_PUBLIC_API_URL": "http://10.0.2.2:3000",
         "EXPO_DEBUG": "true"
       }
     },
@@ -48,7 +54,9 @@
       },
       "env": {
         "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
-        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY",
+         "EXPO_PUBLIC_SUPABASE_URL":"https://ncqeaqymxdktlrdxxjlv.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY",
         "EXPO_PUBLIC_API_URL": "https://les-comets-honfleur.vercel.app",
         "EXPO_DEBUG": "false"
       }
@@ -61,8 +69,10 @@
         "gradleCommand": ":app:bundleRelease"
       },
       "env": {
-        "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
-        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+       "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY",
+         "EXPO_PUBLIC_SUPABASE_URL":"https://ncqeaqymxdktlrdxxjlv.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY",
         "EXPO_PUBLIC_API_URL": "https://les-comets-honfleur.vercel.app",
         "EXPO_DEBUG": "false"
       }
@@ -75,7 +85,9 @@
       },
       "env": {
         "NEXT_PUBLIC_SUPABASE_URL": "https://ncqeaqymxdktlrdxxjlv.supabase.co",
-        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY",
+         "EXPO_PUBLIC_SUPABASE_URL":"https://ncqeaqymxdktlrdxxjlv.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcWVhcXlteGRrdGxyZHh4amx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjU3NzAsImV4cCI6MjA2NjEwMTc3MH0.t4YX_DEAyzE6iy0JhIV66-GDXsSoqMj7UbRYKc3QJJY",
         "EXPO_PUBLIC_API_URL": "http://10.0.2.2:3000",
         "EXPO_DEBUG": "true"
       }

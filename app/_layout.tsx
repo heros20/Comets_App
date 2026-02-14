@@ -1,29 +1,31 @@
 // app/_layout.tsx
-import React, { useEffect } from "react";
-import { Platform } from "react-native";
+"use client";
+
 import { DarkTheme, DefaultTheme, ThemeProvider } from "@react-navigation/native";
+import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { useFonts } from "expo-font";
+import React, { useEffect } from "react";
 import "react-native-reanimated";
 
-import { useColorScheme } from "../hooks/useColorScheme";
-import { AdminProvider } from "../contexts/AdminContext";
 import PushGateway from "../components/PushGateway";
+import { AdminProvider } from "../contexts/AdminContext";
+import { useColorScheme } from "../hooks/useColorScheme";
 
-// 🔥 Firebase init (si tu l'utilises pour autre chose que les push Expo)
+// 🔥 Firebase init (si tu l'utilises)
 import { initFirebase } from "../utils/firebaseConfig";
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
 
+  // Fonts
   const [loaded] = useFonts({
     SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
   });
 
   // Initialise Firebase une seule fois
   useEffect(() => {
-    initFirebase();
+    initFirebase?.();
   }, []);
 
   if (!loaded) return null;
@@ -31,6 +33,7 @@ export default function RootLayout() {
   return (
     <AdminProvider>
       <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+        {/* Navigation principale */}
         <Stack
           screenOptions={{
             headerShown: false,
@@ -43,7 +46,7 @@ export default function RootLayout() {
           <Stack.Screen name="+not-found" />
         </Stack>
 
-        {/* Gestion token + handlers/chan notifs (centralisé dans PushGateway) */}
+        {/* Gestion centralisée des notifications (token, cold start, tap → router.push) */}
         <PushGateway />
 
         <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />

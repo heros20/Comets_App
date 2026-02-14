@@ -23,15 +23,14 @@ import { Picker } from "@react-native-picker/picker";
 import { useAdmin } from "../../contexts/AdminContext";
 import { supabase } from "../../supabase";
 
-// 🆕 PDF local
-import * as FileSystem from "expo-file-system";
+// PDF local
+import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import { Asset } from "expo-asset";
 
 const logoComets = require("../../assets/images/iconComets.png");
-// 🆕 PDF d’adhésion
-const ADHESION_PDF = require("../../assets/papiers/adhesion.pdf");
-
+const DOSSIER_MINEUR = require("../../assets/papiers/Mineur-inscription.pdf");
+const DOSSIER_MAJEUR = require("../../assets/papiers/Majeur-inscription.pdf");
 // === Badges ===
 const BADGE_ASSETS = {
   rookie: require("../../assets/badges/rookie.png"),
@@ -73,7 +72,7 @@ function normalizeName(str: string) {
     .toLowerCase();
 }
 
-type TabKey = "overview" | "edit" | "news";
+type TabKey = "overview" | "edit" | "security";
 
 // ===== Helpers date (FR <-> ISO) =====
 function maskBirthdateFR(raw: string) {
@@ -151,8 +150,7 @@ export default function ProfilPlayerScreen() {
   const [profile, setProfile] = useState<any>(null);
   const [players, setPlayers] = useState<any[]>([]);
   const [cotisations, setCotisations] = useState<any[]>([]);
-  const [youngPlayers, setYoungPlayers] = useState<any[]>([]); // 🆕
-  const [lastArticle, setLastArticle] = useState<any>(null);
+  const [youngPlayers, setYoungPlayers] = useState<any[]>([]);
 
   const [edit, setEdit] = useState(false);
   const [form, setForm] = useState<any>({});
@@ -164,14 +162,17 @@ export default function ProfilPlayerScreen() {
     typeof admin?.participations === "number" ? admin.participations : 0
   );
 
-  // mot de passe
+  // Sécurité (mdp)
   const [passwordEdit, setPasswordEdit] = useState(false);
   const [oldPassword, setOldPassword] = useState("");
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [showOld, setShowOld] = useState(false);
+  const [showNew, setShowNew] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
-  // pour éviter le “profil vide” après longue inactivité : on refetch sur focus
+  // Refetch sur focus (évite profil vide après inactivité)
   const lastFetchRef = useRef<number>(0);
 
   useEffect(() => {
@@ -182,7 +183,6 @@ export default function ProfilPlayerScreen() {
   useFocusEffect(
     useCallback(() => {
       const now = Date.now();
-      // Refetch si > 60s depuis le dernier fetch (ajuste si tu veux)
       if (!lastFetchRef.current || now - lastFetchRef.current > 60_000) {
         fetchAll(false);
       }
@@ -196,7 +196,7 @@ export default function ProfilPlayerScreen() {
       try {
         await supabase.auth.refreshSession();
       } catch {
-        // pas bloquant : certaines routes sont publiques, on continue
+        // non bloquant
       }
     }
     const {
@@ -214,17 +214,14 @@ export default function ProfilPlayerScreen() {
         ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
         : { "Content-Type": "application/json" };
 
-      // ⚠️ Important : on NE remet pas profile à null avant d’avoir tout reçu,
-      // pour éviter l’écran “vide” visuel en cas d’erreur ponctuelle.
-      const [userRes, playersRes, cotisRes, youngRes, articleRes] = await Promise.all([
+      // Ne pas remettre profile à null avant d’avoir tout reçu
+      const [userRes, playersRes, cotisRes, youngRes] = await Promise.all([
         fetch("https://les-comets-honfleur.vercel.app/api/me", { headers }),
         fetch("https://les-comets-honfleur.vercel.app/api/players", { headers }),
         fetch("https://les-comets-honfleur.vercel.app/api/cotisations", { headers }),
-        fetch("https://les-comets-honfleur.vercel.app/api/young_players", { headers }), // 🆕
-        fetch("https://les-comets-honfleur.vercel.app/api/news?limit=1", { headers }),
+        fetch("https://les-comets-honfleur.vercel.app/api/young_players", { headers }),
       ]);
 
-      // On parse même si une route tombe (try/catch individuel)
       const safeJson = async (r: Response) => {
         try {
           return await r.json();
@@ -233,18 +230,16 @@ export default function ProfilPlayerScreen() {
         }
       };
 
-      const [userJson, playersJson, cotisJson, youngJson, articleJson] = await Promise.all([
+      const [userJson, playersJson, cotisJson, youngJson] = await Promise.all([
         safeJson(userRes),
         safeJson(playersRes),
         safeJson(cotisRes),
         safeJson(youngRes),
-        safeJson(articleRes),
       ]);
 
       if (userRes.ok && userJson?.user) {
         setProfile(userJson.user);
-
-        // 🆕 met aussi à jour le form (pour éviter le form vide au retour)
+        // hydrate form
         setForm({
           email: userJson.user?.email ?? "",
           first_name: userJson.user?.first_name ?? "",
@@ -261,11 +256,11 @@ export default function ProfilPlayerScreen() {
         } else if (typeof admin?.participations === "number") {
           setParticipations(admin.participations);
         }
-      } // sinon : on garde le profile précédent (pas d’écran vide)
+      }
 
       if (playersRes.ok) setPlayers(playersJson || []);
       if (cotisRes.ok) setCotisations(cotisJson || []);
-if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data : []);      if (articleRes.ok) setLastArticle(articleJson?.[0] || null);
+      if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data : []);
 
       lastFetchRef.current = Date.now();
     } catch {
@@ -275,7 +270,7 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
     }
   };
 
-  // === Lien FFBS
+  // === Lien FFBS (d’après players)
   const ffbsLink = useMemo(() => {
     const f = profile?.first_name?.trim().toLowerCase();
     const l = profile?.last_name?.trim().toLowerCase();
@@ -296,60 +291,6 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
     return ageToCategorie(ageComputed);
   }, [ageComputed]);
 
-  // Helpers UI
-  const getArticleUrl = (id: number | string) => `https://les-comets-honfleur.vercel.app/actus/${id}`;
-  const getExcerpt = (text: string, n = 120) =>
-    (text || "").replace(/(<([^>]+)>)/gi, "").slice(0, n) + (text && text.length > n ? "…" : "");
-
-  const shareLink = (label: string, url: string, color: string, icon: string) => (
-    <TouchableOpacity
-      key={label}
-      onPress={() => Linking.openURL(url)}
-      style={[styles.shareBtn, { backgroundColor: color }]}
-      activeOpacity={0.89}
-    >
-      <Text style={{ fontSize: 19, marginRight: 7 }}>{icon}</Text>
-      <Text style={styles.shareLabel}>{label}</Text>
-    </TouchableOpacity>
-  );
-
-  function ShareLinksBox({ article }: { article: any }) {
-    if (!article) return null;
-    const url = getArticleUrl(article.id);
-    const excerpt = getExcerpt(article.content);
-
-    const fb = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}&quote=${encodeURIComponent(
-      article.title + " – " + excerpt
-    )}`;
-    const tw = `https://twitter.com/intent/tweet?url=${encodeURIComponent(url)}&text=${encodeURIComponent(
-      article.title + " – " + excerpt
-    )}`;
-    const li = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(url)}`;
-    const mail = `mailto:?subject=${encodeURIComponent(
-      "À lire : " + article.title
-    )}&body=${encodeURIComponent(
-      "Je voulais te partager cet article du club Les Comets d’Honfleur !\n\n" +
-        article.title +
-        "\n\n" +
-        excerpt +
-        "\n\nDécouvre l’article complet ici : " +
-        url
-    )}`;
-
-    return (
-      <View style={styles.shareBox}>
-        <Text style={styles.shareTitle}>📣 Partage cet article !</Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "center" }}>
-          {shareLink("Facebook", fb, "#1877F2", "📘")}
-          {shareLink("X (Twitter)", tw, "#181818", "🐦")}
-          {shareLink("LinkedIn", li, "#2155A5", "💼")}
-          {shareLink("Email", mail, "#FF8200", "✉️")}
-        </View>
-        <Text style={styles.shareFooter}>Avec les Comets, l’info fait toujours un home run !</Text>
-      </View>
-    );
-  }
-
   // === Gamification derived data
   const badge = useMemo(() => computeBadgeFromCount(participations), [participations]);
   const unlockedKeys = useMemo(
@@ -357,21 +298,15 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
     [participations]
   );
 
+  // === Helpers UI
   const handleChange = (field: string, value: any) => {
     setForm((prev: any) => ({ ...prev, [field]: value }));
   };
 
-  const handleSave = async () => {
+  // === Sauvegarde du profil (infos publiques, SANS mot de passe)
+  const handleSaveProfile = async () => {
     setSaving(true);
-    setPasswordError(null);
     try {
-      if (passwordEdit && (!oldPassword || password !== passwordConfirm)) {
-        setPasswordError(!oldPassword ? "Ancien mot de passe requis" : "La confirmation ne correspond pas");
-        setSaving(false);
-        return;
-      }
-
-      // 🔒 Valide la date FR côté client (si fournie)
       const dnFR = (form.date_naissance_fr || "").trim();
       if (dnFR) {
         if (!isValidFRDate(dnFR)) {
@@ -388,7 +323,6 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
         }
       }
 
-      // ✅ Validation
       if (form.position && !ALLOWED_POSITIONS.includes(form.position)) {
         Alert.alert("Position invalide", "Merci de sélectionner une position valide.");
         setSaving(false);
@@ -403,19 +337,18 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
         }
       }
 
-      const body: any = {
-        first_name: form.first_name,
-        last_name: form.last_name,
-        ...(form.position ? { position: form.position } : {}),
-        ...(form.numero_maillot ? { numero_maillot: Number(form.numero_maillot) } : {}),
-        ...(dnFR ? { date_naissance: frToISO(dnFR) } : {}),
-        ...(passwordEdit ? { oldPassword, password } : {}),
-      };
-
       const token = await ensureSession();
       const headers = token
         ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
         : { "Content-Type": "application/json" };
+
+      const body: any = {
+        first_name: form.first_name,
+        last_name: form.last_name,
+        ...(form.position ? { position: form.position } : { position: null }),
+        ...(form.numero_maillot ? { numero_maillot: Number(form.numero_maillot) } : { numero_maillot: null }),
+        ...(dnFR ? { date_naissance: frToISO(dnFR) } : { date_naissance: null }),
+      };
 
       const res = await fetch("https://les-comets-honfleur.vercel.app/api/me", {
         method: "PATCH",
@@ -425,18 +358,11 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
       const json = await res.json();
 
       if (!res.ok) {
-        if (json?.error === "Ancien mot de passe incorrect") {
-          setPasswordError("Ancien mot de passe incorrect");
-        } else if (json?.error) {
-          Alert.alert("Erreur", json.error);
-        } else {
-          Alert.alert("Erreur", "Mise à jour impossible.");
-        }
+        Alert.alert("Erreur", json?.error || "Mise à jour impossible.");
         setSaving(false);
         return;
       }
 
-      // ✅ Prend le user rafraîchi renvoyé par l’API
       if (json?.user) {
         setProfile(json.user);
         setForm((prev: any) => ({
@@ -448,16 +374,9 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
           categorie: json.user.categorie ?? "",
           date_naissance_fr: isoToFR(json.user.date_naissance) ?? "",
         }));
-      } else {
-        setProfile({ ...profile, ...body, date_naissance: body.date_naissance ?? profile?.date_naissance });
       }
 
       setEdit(false);
-      setPassword("");
-      setPasswordConfirm("");
-      setOldPassword("");
-      setPasswordEdit(false);
-      setPasswordError(null);
       setActiveTab("overview");
       Alert.alert("Succès", "Profil mis à jour !");
     } catch {
@@ -466,7 +385,61 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
     setSaving(false);
   };
 
-  const handleCancel = () => {
+  // === Changement de mot de passe (onglet Sécurité)
+  const handleChangePassword = async () => {
+    setSaving(true);
+    setPasswordError(null);
+    try {
+      if (!passwordEdit) {
+        setSaving(false);
+        return;
+      }
+      if (!oldPassword) {
+        setPasswordError("Ancien mot de passe requis");
+        setSaving(false);
+        return;
+      }
+      if (password !== passwordConfirm) {
+        setPasswordError("La confirmation ne correspond pas");
+        setSaving(false);
+        return;
+      }
+
+      const token = await ensureSession();
+      const headers = token
+        ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+        : { "Content-Type": "application/json" };
+
+      const res = await fetch("https://les-comets-honfleur.vercel.app/api/me", {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ oldPassword, password }),
+      });
+      const json = await res.json();
+
+      if (!res.ok) {
+        if (json?.error === "Ancien mot de passe incorrect") {
+          setPasswordError("Ancien mot de passe incorrect");
+        } else {
+          setPasswordError(json?.error || "Mise à jour du mot de passe impossible.");
+        }
+        setSaving(false);
+        return;
+      }
+
+      setPassword("");
+      setPasswordConfirm("");
+      setOldPassword("");
+      setPasswordEdit(false);
+      setPasswordError(null);
+      Alert.alert("Succès", "Mot de passe mis à jour !");
+    } catch {
+      Alert.alert("Erreur", "Impossible de mettre à jour le mot de passe.");
+    }
+    setSaving(false);
+  };
+
+  const handleCancelProfile = () => {
     setEdit(false);
     setActiveTab("overview");
     setForm({
@@ -479,11 +452,6 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
       categorie: profile?.categorie ?? "",
       player_link: profile?.player_link ?? "",
     });
-    setPassword("");
-    setPasswordConfirm("");
-    setOldPassword("");
-    setPasswordEdit(false);
-    setPasswordError(null);
   };
 
   const handleDelete = async () => {
@@ -496,9 +464,11 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
           text: "Supprimer",
           style: "destructive",
           onPress: async () => {
-            const token = await ensureSession();
-            const headers = token ? { Authorization: `Bearer ${token}` } : {};
-            await fetch("https://les-comets-honfleur.vercel.app/api/me", { method: "DELETE", headers });
+            try {
+              const token = await ensureSession();
+              const headers = token ? { Authorization: `Bearer ${token}` } : {};
+              await fetch("https://les-comets-honfleur.vercel.app/api/me", { method: "DELETE", headers });
+            } catch {}
             logout();
           },
         },
@@ -508,27 +478,22 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
 
   // === COTISATION: logique “payée” étendue avec young_players
   const hasCotisation = () => {
-    // Priorité au nom/prénom depuis admin (comme demandé)
     const fAdmin = normalizeName(admin?.first_name);
     const lAdmin = normalizeName(admin?.last_name);
     const fProfile = normalizeName(profile?.first_name);
     const lProfile = normalizeName(profile?.last_name);
 
-    // Prends d’abord admin si dispo, sinon profil
     const f = fAdmin || fProfile;
     const l = lAdmin || lProfile;
 
-    // 1) Déjà payé via table cotisations
     const cotisationOk = (cotisations || []).some(
       (c) => normalizeName(c.prenom) === f && normalizeName(c.nom) === l
     );
 
-    // 2) Présent dans players (= inscrit effectif)
     const playersOk = (players || []).some(
       (p) => normalizeName(p.first_name) === f && normalizeName(p.last_name) === l
     );
 
-    // 3) 🆕 Présent dans young_players ⇒ considéré payé
     const youngOk = (youngPlayers || []).some(
       (yp) => normalizeName(yp.first_name) === f && normalizeName(yp.last_name) === l
     );
@@ -536,48 +501,58 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
     return cotisationOk || playersOk || youngOk;
   };
 
-  // 🆕 Téléchargement/partage du PDF d’adhésion (inchangé)
-  const handleAdhesionDownload = async () => {
-    try {
-      if (Platform.OS === "web") {
-        Alert.alert(
-          "Non disponible sur web",
-          "Le téléchargement local n’est pas disponible ici. Récupère le PDF depuis le site si besoin."
-        );
-        return;
-      }
+// ——— Remplace TOUTE la fonction handleAdhesionDownload par ceci :
 
-      const asset = Asset.fromModule(ADHESION_PDF);
-      await asset.downloadAsync();
-      const src = asset.localUri || asset.uri;
-      if (!src) {
-        Alert.alert("Erreur", "PDF introuvable dans le bundle.");
-        return;
-      }
-
-      const dest = FileSystem.documentDirectory + "adhesion_les_comets.pdf";
-      try {
-        const info = await FileSystem.getInfoAsync(dest);
-        if (info.exists) {
-          await FileSystem.deleteAsync(dest, { idempotent: true });
-        }
-      } catch {}
-      await FileSystem.copyAsync({ from: src, to: dest });
-
-      const canShare = await Sharing.isAvailableAsync();
-      if (canShare) {
-        await Sharing.shareAsync(dest, {
-          dialogTitle: "Adhésion – Les Comets",
-          mimeType: "application/pdf",
-          UTI: "com.adobe.pdf",
-        });
-      } else {
-        await Linking.openURL(dest);
-      }
-    } catch {
-      Alert.alert("Erreur", "Impossible d’ouvrir le PDF d’adhésion.");
+// Téléchargement/partage d'un PDF local (générique)
+const downloadLocalPdf = async (pdfModule: any, outName: string) => {
+  try {
+    if (Platform.OS === "web") {
+      Alert.alert(
+        "Non disponible sur web",
+        "Le téléchargement local n’est pas disponible ici. Récupère le PDF depuis le site si besoin."
+      );
+      return;
     }
-  };
+
+    const asset = Asset.fromModule(pdfModule);
+    await asset.downloadAsync();
+    const src = asset.localUri || asset.uri;
+    if (!src) {
+      Alert.alert("Erreur", "PDF introuvable dans le bundle.");
+      return;
+    }
+
+    const dest = FileSystem.documentDirectory + outName;
+    try {
+      const info = await FileSystem.getInfoAsync(dest);
+      if (info.exists) {
+        await FileSystem.deleteAsync(dest, { idempotent: true });
+      }
+    } catch {}
+
+    await FileSystem.copyAsync({ from: src, to: dest });
+
+    const canShare = await Sharing.isAvailableAsync();
+    if (canShare) {
+      await Sharing.shareAsync(dest, {
+        dialogTitle: "Documents d’adhésion – Les Comets",
+        mimeType: "application/pdf",
+        UTI: "com.adobe.pdf",
+      });
+    } else {
+      await Linking.openURL(dest);
+    }
+  } catch {
+    Alert.alert("Erreur", "Impossible d’ouvrir le PDF.");
+  }
+};
+
+const handleDownloadMineur = () =>
+  downloadLocalPdf(DOSSIER_MINEUR, "dossier_mineur_les_comets.pdf");
+
+const handleDownloadMajeur = () =>
+  downloadLocalPdf(DOSSIER_MAJEUR, "dossier_majeur_les_comets.pdf");
+
 
   if (loading)
     return (
@@ -616,23 +591,24 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
     </View>
   );
 
-  const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) => {
-    const active = activeTab === id;
-    return (
-      <TouchableOpacity
-        onPress={() => {
-          setActiveTab(id);
-          if (id === "edit") setEdit(true);
-          else setEdit(false);
-        }}
-        style={[styles.tabBtn, active && { backgroundColor: "#FF8200", borderColor: "#FF8200" }]}
-        activeOpacity={0.9}
-      >
-        <Text style={[styles.tabIcon, active && { color: "#fff" }]}>{icon}</Text>
-        <Text style={[styles.tabLabel, active && { color: "#fff" }]}>{label}</Text>
-      </TouchableOpacity>
-    );
-  };
+const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) => {
+  const active = activeTab === id;
+  return (
+    <TouchableOpacity
+      onPress={() => {
+        setActiveTab(id);
+        if (id === "edit") setEdit(true);
+        else setEdit(false);
+      }}
+      style={[styles.tabBtn, active && { backgroundColor: "#FF8200", borderColor: "#FF8200" }]}
+      activeOpacity={0.9}
+    >
+      <Text style={[styles.tabIcon, active && { color: "#fff" }]}>{String(icon)}</Text>
+      <Text style={[styles.tabLabel, active && { color: "#fff" }]}>{label}</Text>
+    </TouchableOpacity>
+  );
+};
+
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
@@ -712,7 +688,7 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
         <View style={styles.tabs}>
           <Tab id="overview" label="Aperçu" icon="🏠" />
           <Tab id="edit" label="Éditer" icon="✏️" />
-          <Tab id="news" label="Actu" icon="📰" />
+          <Tab id="security" label="Sécurité" icon="🔒" />
         </View>
       </View>
 
@@ -846,29 +822,37 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
               )}
             </View>
 
-            {/* Bloc “Documents d’adhésion” */}
-            <View style={styles.card}>
+            {/* Documents d’adhésion */}
+           <View style={styles.card}>
               <Text style={styles.sectionTitle}>📎 Documents d’adhésion</Text>
-              <Text style={{ color: "#cdd2dc", marginBottom: 10 }}>
-                Télécharge le dossier à imprimer et à ramener au club à la prochaine séance.
+              <Text style={{ color: "#98a0ae", fontSize: 13, fontStyle: "italic", marginBottom: 10, textAlign: "center" }}>
+                Choisis et télécharge ton dossier d’inscription selon ton âge.
               </Text>
 
-              <TouchableOpacity style={styles.payBtn} onPress={handleAdhesionDownload} activeOpacity={0.9}>
+
+
+              <TouchableOpacity style={styles.payBtn} onPress={handleDownloadMineur} activeOpacity={0.9}>
                 <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 17 }}>
-                  Télécharger le dossier (PDF)
+                 Dossier d’inscription – Mineur (PDF)
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={[styles.payBtn, { marginTop: 10 }]} onPress={handleDownloadMajeur} activeOpacity={0.9}>
+                <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 17 }}>
+                  Dossier d’inscription – Majeur (PDF)
                 </Text>
               </TouchableOpacity>
 
               <View style={{ marginTop: 10, opacity: 0.8 }}>
                 <Text style={{ color: "#98a0ae", fontSize: 12.5 }}>
-                  Format: PDF • Taille: ~quelques Mo • Ouvrable avec ton lecteur PDF
+                  Format: PDF • Ouvrable avec n’importe quel lecteur PDF
                 </Text>
               </View>
             </View>
           </>
         )}
 
-        {/* ÉDITER — version moderne */}
+        {/* ÉDITER — version moderne (sans mdp) */}
         {activeTab === "edit" && (
           <View style={styles.cardModern}>
             <View style={styles.headerModern}>
@@ -980,10 +964,34 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
               </View>
             </View>
 
-            {/* Divider */}
-            <View style={styles.divider} />
+            {/* Actions */}
+            <View style={styles.actionRow}>
+              <TouchableOpacity
+                style={[styles.btn, styles.btnSave, saving && styles.btnDisabled]}
+                onPress={handleSaveProfile}
+                disabled={saving}
+              >
+                <Text style={styles.btnSaveText}>Sauvegarder</Text>
+              </TouchableOpacity>
 
-            {/* Switch mot de passe */}
+              <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={handleCancelProfile}>
+                <Text style={styles.btnGhostText}>Annuler</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* SÉCURITÉ */}
+        {activeTab === "security" && (
+          <View style={styles.cardModern}>
+            <View style={styles.headerModern}>
+              <Text style={styles.headerTitle}>Sécurité du compte</Text>
+              <Text style={styles.headerSubtitle}>
+                Modifie ton mot de passe et gère la suppression du compte.
+              </Text>
+            </View>
+
+            {/* Toggle mdp */}
             <TouchableOpacity
               onPress={() => setPasswordEdit(!passwordEdit)}
               style={styles.passwordToggle}
@@ -1003,6 +1011,7 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
 
             {passwordEdit && (
               <View style={{ gap: 10, marginTop: 6 }}>
+                {/* Ancien mdp */}
                 <View style={styles.fieldRow}>
                   <Icon name="key-outline" size={18} style={styles.iconLeft} />
                   <TextInput
@@ -1010,10 +1019,15 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
                     onChangeText={setOldPassword}
                     placeholder="Ancien mot de passe"
                     placeholderTextColor="#8d93a3"
-                    secureTextEntry
+                    secureTextEntry={!showOld}
                     style={styles.inputModern}
                   />
+                  <TouchableOpacity onPress={() => setShowOld((v) => !v)}>
+                    <Icon name={showOld ? "eye-off-outline" : "eye-outline"} size={20} color="#FF8200" />
+                  </TouchableOpacity>
                 </View>
+
+                {/* Nouveau mdp */}
                 <View style={styles.fieldRow}>
                   <Icon name="shield-checkmark-outline" size={18} style={styles.iconLeft} />
                   <TextInput
@@ -1021,10 +1035,15 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
                     onChangeText={setPassword}
                     placeholder="Nouveau mot de passe"
                     placeholderTextColor="#8d93a3"
-                    secureTextEntry
+                    secureTextEntry={!showNew}
                     style={styles.inputModern}
                   />
+                  <TouchableOpacity onPress={() => setShowNew((v) => !v)}>
+                    <Icon name={showNew ? "eye-off-outline" : "eye-outline"} size={20} color="#FF8200" />
+                  </TouchableOpacity>
                 </View>
+
+                {/* Confirmation */}
                 <View style={styles.fieldRow}>
                   <Icon name="shield-outline" size={18} style={styles.iconLeft} />
                   <TextInput
@@ -1032,15 +1051,19 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
                     onChangeText={setPasswordConfirm}
                     placeholder="Confirmation"
                     placeholderTextColor="#8d93a3"
-                    secureTextEntry
+                    secureTextEntry={!showConfirm}
                     style={styles.inputModern}
                   />
+                  <TouchableOpacity onPress={() => setShowConfirm((v) => !v)}>
+                    <Icon name={showConfirm ? "eye-off-outline" : "eye-outline"} size={20} color="#FF8200" />
+                  </TouchableOpacity>
                 </View>
+
                 {passwordError && <Text style={styles.errorText}>{passwordError}</Text>}
               </View>
             )}
 
-            {/* Actions */}
+            {/* Actions sécurité */}
             <View style={styles.actionRow}>
               <TouchableOpacity
                 style={[
@@ -1048,49 +1071,35 @@ if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data
                   styles.btnSave,
                   (saving || (passwordEdit && (password !== passwordConfirm || !oldPassword))) && styles.btnDisabled,
                 ]}
-                onPress={handleSave}
+                onPress={handleChangePassword}
                 disabled={saving || (passwordEdit && (password !== passwordConfirm || !oldPassword))}
               >
-                <Text style={styles.btnSaveText}>Sauvegarder</Text>
+                <Text style={styles.btnSaveText}>
+                  {passwordEdit ? "Mettre à jour le mot de passe" : "Rien à sauvegarder"}
+                </Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={handleCancel}>
+              <TouchableOpacity
+                style={[styles.btn, styles.btnGhost]}
+                onPress={() => {
+                  setPasswordEdit(false);
+                  setPassword("");
+                  setPasswordConfirm("");
+                  setOldPassword("");
+                  setPasswordError(null);
+                  setShowOld(false);
+                  setShowNew(false);
+                  setShowConfirm(false);
+                }}
+              >
                 <Text style={styles.btnGhostText}>Annuler</Text>
               </TouchableOpacity>
             </View>
 
+            {/* Suppression de compte */}
             <TouchableOpacity style={styles.btnDangerOutline} onPress={handleDelete}>
               <Text style={styles.btnDangerOutlineText}>Supprimer mon compte</Text>
             </TouchableOpacity>
-          </View>
-        )}
-
-        {/* ACTU */}
-        {activeTab === "news" && lastArticle && (
-          <View style={styles.card}>
-            {lastArticle.image_url ? (
-              <Image source={{ uri: lastArticle.image_url }} style={styles.articleImg} resizeMode="cover" />
-            ) : null}
-            <Text style={styles.articleDate}>
-              {lastArticle.created_at &&
-                new Date(lastArticle.created_at).toLocaleDateString("fr-FR", {
-                  year: "numeric",
-                  month: "long",
-                  day: "numeric",
-                })}
-            </Text>
-            <Text style={styles.articleTitle}>{lastArticle.title}</Text>
-            <Text numberOfLines={5} style={styles.articleExcerpt}>
-              {getExcerpt(lastArticle.content, 180)}
-            </Text>
-            <TouchableOpacity
-              style={styles.readMoreBtn}
-              // @ts-ignore
-              onPress={() => (navigation as any).navigate("ActuDetail", { articleId: lastArticle.id })}
-            >
-              <Text style={styles.readMoreText}>Lire l’article</Text>
-            </TouchableOpacity>
-            <ShareLinksBox article={lastArticle} />
           </View>
         )}
 
@@ -1270,7 +1279,7 @@ const styles = StyleSheet.create({
   progressFill: { height: "100%", borderRadius: 12 },
   progressHelp: { color: "#b9bdc8", fontSize: 12.5, fontWeight: "600" },
 
-  // ⬇️ Fix overflow du lien FFBS
+  // Stats
   statRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1303,7 +1312,6 @@ const styles = StyleSheet.create({
   },
 
   wallLabel: { color: "#fff", fontWeight: "800", fontSize: 12, marginTop: 7 },
-  wallSub: { color: "#9aa0ae", fontSize: 11, marginTop: 2 },
 
   // Paiement
   cotisationOk: {
@@ -1335,79 +1343,10 @@ const styles = StyleSheet.create({
     alignSelf: "center",
   },
 
-  // Form legacy
+  // Texte
   sectionTitle: { color: "#FF8200", fontWeight: "900", fontSize: 16, marginBottom: 8 },
-  input: {
-    backgroundColor: "rgba(255,255,255,0.96)",
-    borderColor: "#FF8200",
-    borderWidth: 1.3,
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 10,
-    color: "#222",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  rowSwitch: { flexDirection: "row", alignItems: "center", marginBottom: 6 },
-  switchLabel: { marginLeft: 8, color: "#FF8200", fontWeight: "800" },
 
-  saveBtn: { backgroundColor: "#27A02C", borderRadius: 12, padding: 15, alignItems: "center", marginTop: 12 },
-  saveBtnText: { color: "#FFF", fontWeight: "bold", fontSize: 18, letterSpacing: 0.8 },
-  cancelBtn: { backgroundColor: "#BBB", borderRadius: 12, padding: 14, alignItems: "center", marginTop: 10 },
-  cancelBtnText: { color: "#FFF", fontWeight: "bold", fontSize: 16 },
-  deleteBtn: { backgroundColor: "#F44336", borderRadius: 12, padding: 14, alignItems: "center", marginTop: 12 },
-  deleteBtnText: { color: "#FFF", fontWeight: "bold", fontSize: 16, letterSpacing: 0.6 },
-
-  // Article
-  articleImg: {
-    width: "100%",
-    height: 170,
-    borderRadius: 12,
-    marginBottom: 11,
-    backgroundColor: "#22262f",
-  },
-  articleTitle: { color: "#FF8200", fontWeight: "bold", fontSize: 19, marginBottom: 4 },
-  articleDate: { color: "#c7cad1", fontWeight: "600", fontSize: 12.5, marginBottom: 6 },
-  articleExcerpt: { color: "#e6e7eb", fontSize: 15, marginBottom: 8 },
-  readMoreBtn: {
-    backgroundColor: "#FF8200",
-    paddingVertical: 9,
-    paddingHorizontal: 21,
-    borderRadius: 12,
-    alignItems: "center",
-    alignSelf: "flex-start",
-    marginTop: 4,
-    marginBottom: 2,
-  },
-  readMoreText: { color: "#fff", fontWeight: "bold", fontSize: 15, letterSpacing: 0.8 },
-
-  // Partage
-  shareBox: {
-    backgroundColor: "rgba(255,130,0,0.07)",
-    borderRadius: 14,
-    marginTop: 14,
-    padding: 12,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255,130,0,0.25)",
-  },
-  shareTitle: { fontWeight: "900", color: "#FF8200", fontSize: 15, marginBottom: 8 },
-  shareBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderRadius: 11,
-    paddingVertical: 8,
-    paddingHorizontal: 13,
-    margin: 5,
-    shadowColor: "#000",
-    shadowOpacity: 0.09,
-    shadowRadius: 3,
-    elevation: 1,
-  },
-  shareLabel: { color: "#fff", fontWeight: "bold", fontSize: 15, letterSpacing: 0.5 },
-  shareFooter: { fontSize: 12.5, color: "#FF8200", marginTop: 8, fontWeight: "700" },
-
-  // Moderne (Éditer)
+  // Moderne (Éditer + Sécurité)
   cardModern: {
     width: "100%",
     maxWidth: 520,

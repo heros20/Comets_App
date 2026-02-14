@@ -349,13 +349,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     marginTop: 12,
     borderWidth: 1,
-    borderColor: "##D96B00",
+    borderColor: "#D96B00",
     shadowColor: "#000",
     shadowOpacity: 0.18,
     shadowRadius: 12,
     elevation: 3,
   },
-  adminBtnTxt: { backgroundColor: "##D96B00", color: "#fff", fontWeight: "900", fontSize: 14.5, letterSpacing: 0.5, textTransform: "uppercase" },
+  adminBtnTxt: { backgroundColor: "#D96B00", color: "#fff", fontWeight: "900", fontSize: 14.5, letterSpacing: 0.5, textTransform: "uppercase" },
 
   // Footnote
   footNote: {

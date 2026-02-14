@@ -3,7 +3,13 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import * as Calendar from "expo-calendar";
 import * as Notifications from "expo-notifications";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Alert,
   Animated,
@@ -75,7 +81,11 @@ async function fetchWithTimeout(url: string, init?: RequestInit, ms = 3000) {
     clearTimeout(id);
   }
 }
-async function apiTry<T>(base: string, path: string, init?: RequestInit): Promise<T> {
+async function apiTry<T>(
+  base: string,
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
   const url = `${base}${path}`;
   const res = await fetchWithTimeout(url, init);
   let json: any = null;
@@ -93,7 +103,11 @@ async function apiGet<T>(path: string): Promise<T> {
   }
 }
 async function apiPost<T>(path: string, body: any): Promise<T> {
-  const init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const init = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
   try {
     return await apiTry<T>(PRIMARY_API, path, init);
   } catch {
@@ -111,6 +125,7 @@ const LOGO_MAP: Record<string, any> = {
   "Le Havre": require("../../assets/images/Le_Havre.png"),
   Rouen: require("../../assets/images/Rouen.jpg"),
   Honfleur: require("../../assets/images/Honfleur.png"),
+  "Saint-Lô": require("../../assets/images/Saint-Lô.jpg"),
 };
 
 // === Badges ===
@@ -143,7 +158,13 @@ function computeBadgeFromCount(count: number) {
     const inTier = Math.max(0, Math.min(span, count - tier.min));
     progress = inTier / span;
   }
-  return { key: tier.key as TierKey, label: tier.label, color: tier.color, nextAt: next?.min ?? null, progress };
+  return {
+    key: tier.key as TierKey,
+    label: tier.label,
+    color: tier.color,
+    nextAt: next?.min ?? null,
+    progress,
+  };
 }
 function hexToRgba(hex: string, alpha = 0.33) {
   const m = hex.replace("#", "").match(/^([0-9a-f]{6})$/i);
@@ -193,25 +214,34 @@ type PlannedGame = {
 };
 type ParticipationsGET = { matchIds: string[] };
 type ParticipatePOST = { ok: boolean; participations: number };
-type Eligibility = { eligible: boolean | null; category: "Seniors" | "15U" | "12U" | null };
+type Eligibility = {
+  eligible: boolean | null;
+  category: "Seniors" | "15U" | "12U" | null;
+};
 
 // ================== Local storage ==================
 const storageKey = (adminId: string | number) => `comets:joined:${adminId}`;
 const TTL_MS = 10 * 60 * 1000;
 type JoinedCache = { map: Record<string, boolean>; ts: number };
 
-async function readJoinedFromStorage(adminId: string | number): Promise<JoinedCache | null> {
+async function readJoinedFromStorage(
+  adminId: string | number,
+): Promise<JoinedCache | null> {
   try {
     const raw = await AsyncStorage.getItem(storageKey(adminId));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (parsed && parsed.map && typeof parsed.ts === "number") return parsed as JoinedCache;
+    if (parsed && parsed.map && typeof parsed.ts === "number")
+      return parsed as JoinedCache;
     return null;
   } catch {
     return null;
   }
 }
-async function writeJoinedToStorage(adminId: string | number, map: Record<string, boolean>) {
+async function writeJoinedToStorage(
+  adminId: string | number,
+  map: Record<string, boolean>,
+) {
   try {
     const payload: JoinedCache = { map, ts: Date.now() };
     await AsyncStorage.setItem(storageKey(adminId), JSON.stringify(payload));
@@ -227,7 +257,15 @@ type ToastData = {
   nextAt: number | null;
   progress: number;
 };
-function BadgeCoin({ size, borderColor, source }: { size: number; borderColor: string; source: any }) {
+function BadgeCoin({
+  size,
+  borderColor,
+  source,
+}: {
+  size: number;
+  borderColor: string;
+  source: any;
+}) {
   return (
     <View
       style={{
@@ -243,26 +281,56 @@ function BadgeCoin({ size, borderColor, source }: { size: number; borderColor: s
       }}
     >
       {source ? (
-        <Image source={source} resizeMode="cover" style={{ width: "100%", height: "100%" }} />
+        <Image
+          source={source}
+          resizeMode="cover"
+          style={{ width: "100%", height: "100%" }}
+        />
       ) : (
         <Text style={{ fontSize: size * 0.42 }}>🏅</Text>
       )}
     </View>
   );
 }
-function CometsToast({ visible, data, onClose }: { visible: boolean; data: ToastData | null; onClose: () => void }) {
+function CometsToast({
+  visible,
+  data,
+  onClose,
+}: {
+  visible: boolean;
+  data: ToastData | null;
+  onClose: () => void;
+}) {
   const translateY = useRef(new Animated.Value(120)).current;
   const opacity = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (visible) {
       Animated.parallel([
-        Animated.timing(translateY, { toValue: 0, duration: 280, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 1, duration: 220, useNativeDriver: true }),
+        Animated.timing(translateY, {
+          toValue: 0,
+          duration: 280,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 220,
+          useNativeDriver: true,
+        }),
       ]).start();
       const id = setTimeout(() => {
         Animated.parallel([
-          Animated.timing(translateY, { toValue: 120, duration: 240, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
-          Animated.timing(opacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+          Animated.timing(translateY, {
+            toValue: 120,
+            duration: 240,
+            easing: Easing.in(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.timing(opacity, {
+            toValue: 0,
+            duration: 200,
+            useNativeDriver: true,
+          }),
         ]).start(() => onClose());
       }, 2700);
       return () => clearTimeout(id);
@@ -272,7 +340,15 @@ function CometsToast({ visible, data, onClose }: { visible: boolean; data: Toast
   return (
     <View
       pointerEvents="box-none"
-      style={{ position: "absolute", left: 0, right: 0, bottom: 0, alignItems: "center", paddingBottom: 18, paddingHorizontal: 12 }}
+      style={{
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: 0,
+        alignItems: "center",
+        paddingBottom: 18,
+        paddingHorizontal: 12,
+      }}
     >
       <Animated.View
         style={{
@@ -288,14 +364,42 @@ function CometsToast({ visible, data, onClose }: { visible: boolean; data: Toast
         }}
       >
         <View style={{ flexDirection: "row", alignItems: "center" }}>
-          <BadgeCoin size={58} borderColor={data.badgeColor} source={BADGE_ASSETS[data.badgeKey]} />
+          <BadgeCoin
+            size={58}
+            borderColor={data.badgeColor}
+            source={BADGE_ASSETS[data.badgeKey]}
+          />
           <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={{ fontWeight: "900", fontSize: 16, color: data.badgeColor }}>{data.badgeLabel}</Text>
-            <Text style={{ color: COLORS.text, fontWeight: "700", fontSize: 13, marginTop: 2 }}>
-              {data.participations} participation{data.participations > 1 ? "s" : ""} enregistrée
+            <Text
+              style={{
+                fontWeight: "900",
+                fontSize: 16,
+                color: data.badgeColor,
+              }}
+            >
+              {data.badgeLabel}
+            </Text>
+            <Text
+              style={{
+                color: COLORS.text,
+                fontWeight: "700",
+                fontSize: 13,
+                marginTop: 2,
+              }}
+            >
+              {data.participations} participation
+              {data.participations > 1 ? "s" : ""} enregistrée
               {data.participations > 1 ? "s" : ""} 🎉
             </Text>
-            <View style={{ height: 8, borderRadius: 6, backgroundColor: "#242937", marginTop: 8, overflow: "hidden" }}>
+            <View
+              style={{
+                height: 8,
+                borderRadius: 6,
+                backgroundColor: "#242937",
+                marginTop: 8,
+                overflow: "hidden",
+              }}
+            >
               <View
                 style={{
                   height: "100%",
@@ -305,11 +409,23 @@ function CometsToast({ visible, data, onClose }: { visible: boolean; data: Toast
                 }}
               />
             </View>
-            <Text style={{ color: "#9aa0ae", fontWeight: "700", fontSize: 11.5, marginTop: 6 }}>
-              {data.nextAt === null ? "Palier max atteint" : `Prochain titre à ${data.nextAt} participations`}
+            <Text
+              style={{
+                color: "#9aa0ae",
+                fontWeight: "700",
+                fontSize: 11.5,
+                marginTop: 6,
+              }}
+            >
+              {data.nextAt === null
+                ? "Palier max atteint"
+                : `Prochain titre à ${data.nextAt} participations`}
             </Text>
           </View>
-          <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <TouchableOpacity
+            onPress={onClose}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
             <Icon name="close" size={18} color="#cfd3db" />
           </TouchableOpacity>
         </View>
@@ -328,10 +444,14 @@ export default function MatchsScreen() {
   const [loading, setLoading] = useState(true);
   const [loadingPlanned, setLoadingPlanned] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [selectedTab, setSelectedTab] = useState<"upcoming" | "played">("upcoming");
+  const [selectedTab, setSelectedTab] = useState<"upcoming" | "played">(
+    "upcoming",
+  );
 
   // filtres catégorie (par défaut Seniors)
-  const [catFilter, setCatFilter] = useState<"Seniors" | "15U" | "12U">("Seniors");
+  const [catFilter, setCatFilter] = useState<"Seniors" | "15U" | "12U">(
+    "Seniors",
+  );
 
   const [joined, setJoined] = useState<Record<string, boolean>>({});
   const [posting, setPosting] = useState<Record<string, boolean>>({});
@@ -339,7 +459,10 @@ export default function MatchsScreen() {
   const [hydratingJoined, setHydratingJoined] = useState(false);
 
   // ÉLIGIBILITÉ + catégorie
-  const [elig, setElig] = useState<Eligibility>({ eligible: null, category: null });
+  const [elig, setElig] = useState<Eligibility>({
+    eligible: null,
+    category: null,
+  });
 
   // Comptes d'inscrits par match (cache locale)
   const [counts, setCounts] = useState<Record<string, number>>({});
@@ -364,7 +487,10 @@ export default function MatchsScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const { data, error } = await supabase.from("games").select("*").order("date", { ascending: true });
+        const { data, error } = await supabase
+          .from("games")
+          .select("*")
+          .order("date", { ascending: true });
         if (error) setErrorMsg("Erreur Supabase (joués) : " + error.message);
         else setGames((data as Game[]) ?? []);
       } catch (e: any) {
@@ -378,7 +504,10 @@ export default function MatchsScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const { data, error } = await supabase.from("matches_planned").select("*").order("date", { ascending: true });
+        const { data, error } = await supabase
+          .from("matches_planned")
+          .select("*")
+          .order("date", { ascending: true });
         if (error) setErrorMsg("Erreur Supabase (à venir) : " + error.message);
         else setPlannedGames((data as PlannedGame[]) ?? []);
       } catch (e: any) {
@@ -399,12 +528,17 @@ export default function MatchsScreen() {
     try {
       let apiMap: Record<string, boolean> = {};
       try {
-        const res = await apiGet<ParticipationsGET>(`/api/matches/participations?adminId=${admin.id}`);
+        const res = await apiGet<ParticipationsGET>(
+          `/api/matches/participations?adminId=${admin.id}`,
+        );
         (res.matchIds || []).forEach((mid) => {
           apiMap[String(mid)] = true;
         });
       } catch {}
-      const merged: Record<string, boolean> = { ...(local?.map || {}), ...(apiMap || {}) };
+      const merged: Record<string, boolean> = {
+        ...(local?.map || {}),
+        ...(apiMap || {}),
+      };
       setJoined(merged);
       await writeJoinedToStorage(admin.id, merged);
     } finally {
@@ -432,7 +566,7 @@ export default function MatchsScreen() {
         }
       })();
       if (admin?.id) hydrateJoined();
-    }, [admin?.id, hydrateJoined])
+    }, [admin?.id, hydrateJoined]),
   );
 
   // ===== Comptage des inscrits (par match) =====
@@ -462,10 +596,16 @@ export default function MatchsScreen() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const playedGames = useMemo(
-    () => games.filter((g) => g.result === "W" || g.result === "L" || g.result === "T"),
-    [games]
+    () =>
+      games.filter(
+        (g) => g.result === "W" || g.result === "L" || g.result === "T",
+      ),
+    [games],
   );
-  const upcomingGames = useMemo(() => plannedGames.filter((pg) => new Date(pg.date) >= today), [plannedGames]);
+  const upcomingGames = useMemo(
+    () => plannedGames.filter((pg) => new Date(pg.date) >= today),
+    [plannedGames],
+  );
 
   // filtre catégorie appliqué aux à-venir
   const filteredUpcoming = useMemo(() => {
@@ -474,7 +614,10 @@ export default function MatchsScreen() {
 
   // Compteurs pour sous-onglets
   const catCounts = useMemo(() => {
-    const base = { Seniors: 0, "15U": 0, "12U": 0 } as Record<"Seniors" | "15U" | "12U", number>;
+    const base = { Seniors: 0, "15U": 0, "12U": 0 } as Record<
+      "Seniors" | "15U" | "12U",
+      number
+    >;
     upcomingGames.forEach((m) => {
       const c = (m.categorie ?? "") as "Seniors" | "15U" | "12U" | "";
       if (c === "Seniors" || c === "15U" || c === "12U") base[c] += 1;
@@ -492,7 +635,9 @@ export default function MatchsScreen() {
         Alert.alert("Permission requise", "Autorisez l’accès au calendrier.");
         return;
       }
-      const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+      const calendars = await Calendar.getCalendarsAsync(
+        Calendar.EntityTypes.EVENT,
+      );
       const defaultCal = calendars.find((cal) => cal.allowsModifications);
       if (!defaultCal) {
         Alert.alert("Erreur", "Aucun calendrier modifiable trouvé.");
@@ -505,7 +650,9 @@ export default function MatchsScreen() {
         title: `Match ${match.categorie ? `[${match.categorie}] ` : ""}Comets vs ${match.opponent}`,
         startDate: baseDate,
         endDate,
-        location: match.is_home ? "Stade de Honfleur" : `Déplacement - ${match.opponent}`,
+        location: match.is_home
+          ? "Stade de Honfleur"
+          : `Déplacement - ${match.opponent}`,
         notes: match.note || "",
         alarms: [{ relativeOffset: -60 }],
         timeZone: "Europe/Paris",
@@ -522,10 +669,20 @@ export default function MatchsScreen() {
       Alert.alert("Connexion requise", "Connecte-toi pour participer.");
       return;
     }
-    const catOk = !match.categorie || (elig.category !== null && match.categorie === elig.category);
+    const catOk =
+      !match.categorie ||
+      (elig.category !== null && match.categorie === elig.category);
     if (elig.eligible !== true || !catOk) {
-      if (!catOk) Alert.alert("Catégorie non autorisée", `Ce match est ${match.categorie ?? "?"} — ton profil est ${elig.category ?? "?"}.`);
-      else Alert.alert("Profil joueur requis", "Ton profil (admins) doit correspondre à un joueur dans players ou young_players (prénom/nom).");
+      if (!catOk)
+        Alert.alert(
+          "Catégorie non autorisée",
+          `Ce match est ${match.categorie ?? "?"} — ton profil est ${elig.category ?? "?"}.`,
+        );
+      else
+        Alert.alert(
+          "Profil joueur requis",
+          "Ton profil (admins) doit correspondre à un joueur dans players ou young_players (prénom/nom).",
+        );
       return;
     }
     const mid = String(match.id);
@@ -533,7 +690,10 @@ export default function MatchsScreen() {
 
     setPosting((p) => ({ ...p, [mid]: true }));
     try {
-      const res = await apiPost<ParticipatePOST>(`/api/matches/${mid}/participate`, { adminId: admin.id });
+      const res = await apiPost<ParticipatePOST>(
+        `/api/matches/${mid}/participate`,
+        { adminId: admin.id },
+      );
       setJoined((j) => {
         const upd = { ...j, [mid]: true };
         writeJoinedToStorage(admin.id, upd);
@@ -543,7 +703,9 @@ export default function MatchsScreen() {
       setCounts((c) => ({ ...c, [mid]: (c[mid] ?? 0) + 1 }));
 
       if (setAdmin && typeof res?.participations === "number") {
-        setAdmin((prev: any) => (prev ? { ...prev, participations: res.participations } : prev));
+        setAdmin((prev: any) =>
+          prev ? { ...prev, participations: res.participations } : prev,
+        );
       }
       const b = computeBadgeFromCount(res.participations);
       setToastData({
@@ -579,7 +741,10 @@ export default function MatchsScreen() {
         onPress: async () => {
           setPosting((p) => ({ ...p, [mid]: true }));
           try {
-            await apiPost<{ ok: boolean }>(`/api/matches/${mid}/unparticipate`, { adminId: admin.id });
+            await apiPost<{ ok: boolean }>(
+              `/api/matches/${mid}/unparticipate`,
+              { adminId: admin.id },
+            );
             setJoined((j) => {
               const upd = { ...j };
               delete upd[mid];
@@ -607,8 +772,11 @@ export default function MatchsScreen() {
     const isJoined = !!joined[mid];
     const isPosting = !!posting[mid];
 
-    const catOk = !item.categorie || (elig.category !== null && item.categorie === elig.category);
-    const joinDisabled = isJoined || isPosting || !(elig.eligible === true && catOk);
+    const catOk =
+      !item.categorie ||
+      (elig.category !== null && item.categorie === elig.category);
+    const joinDisabled =
+      isJoined || isPosting || !(elig.eligible === true && catOk);
     const count = counts[mid] ?? 0;
 
     // Raison(s) claire(s) de non inscription
@@ -622,7 +790,9 @@ export default function MatchsScreen() {
         reasons.push("Vérification du profil en cours…");
       }
       if (!catOk) {
-        reasons.push(`Match réservé ${item.categorie ?? "?"} — ton profil est ${elig.category ?? "?"}.`);
+        reasons.push(
+          `Match réservé ${item.categorie ?? "?"} — ton profil est ${elig.category ?? "?"}.`,
+        );
       }
       if (isJoined) {
         reasons.push("Tu es déjà inscrit à ce match ✅");
@@ -647,26 +817,76 @@ export default function MatchsScreen() {
         </View>
 
         <View style={styles.venueRow}>
-          <Icon name={item.is_home ? "home" : "airplane-outline"} size={18} color={item.is_home ? COLORS.orange : COLORS.blue} />
-          <Text style={styles.venueTxt}>{item.is_home ? "À domicile" : "Extérieur"}</Text>
+          <Icon
+            name={item.is_home ? "home" : "airplane-outline"}
+            size={18}
+            color={item.is_home ? COLORS.orange : COLORS.blue}
+          />
+          <Text style={styles.venueTxt}>
+            {item.is_home ? "À domicile" : "Extérieur"}
+          </Text>
         </View>
 
         {/* VS */}
         <View style={styles.vsRow}>
+          {/* LEFT (home) */}
           <View style={styles.teamCol}>
-            <Image source={LOGO_MAP["Honfleur"]} style={styles.logoTeam} />
-            <Text style={[styles.teamName, { color: COLORS.orange }]}>Honfleur</Text>
-          </View>
-          <Text style={styles.vs}>VS</Text>
-          <View style={styles.teamCol}>
-            {getOpponentLogo(item.opponent) ? (
-              <Image source={getOpponentLogo(item.opponent)} style={styles.logoTeam} />
+            {item.is_home ? (
+              <>
+                <Image source={LOGO_MAP["Honfleur"]} style={styles.logoTeam} />
+                <Text style={[styles.teamName, { color: COLORS.orange }]}>
+                  Honfleur
+                </Text>
+              </>
             ) : (
-              <View style={[styles.logoTeam]} />
+              <>
+                {getOpponentLogo(item.opponent) ? (
+                  <Image
+                    source={getOpponentLogo(item.opponent)}
+                    style={styles.logoTeam}
+                  />
+                ) : (
+                  <View style={[styles.logoTeam]} />
+                )}
+                <Text
+                  style={[styles.teamName, { color: COLORS.blue }]}
+                  numberOfLines={1}
+                >
+                  {item.opponent}
+                </Text>
+              </>
             )}
-            <Text style={[styles.teamName, { color: COLORS.blue }]} numberOfLines={1}>
-              {item.opponent}
-            </Text>
+          </View>
+
+          <Text style={styles.vs}>VS</Text>
+
+          {/* RIGHT (away) */}
+          <View style={styles.teamCol}>
+            {item.is_home ? (
+              <>
+                {getOpponentLogo(item.opponent) ? (
+                  <Image
+                    source={getOpponentLogo(item.opponent)}
+                    style={styles.logoTeam}
+                  />
+                ) : (
+                  <View style={[styles.logoTeam]} />
+                )}
+                <Text
+                  style={[styles.teamName, { color: COLORS.blue }]}
+                  numberOfLines={1}
+                >
+                  {item.opponent}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Image source={LOGO_MAP["Honfleur"]} style={styles.logoTeam} />
+                <Text style={[styles.teamName, { color: COLORS.orange }]}>
+                  Honfleur
+                </Text>
+              </>
+            )}
           </View>
         </View>
 
@@ -698,7 +918,14 @@ export default function MatchsScreen() {
             </Text>
           )}
           {!!item.note && (
-            <Text style={{ color: COLORS.orange, fontWeight: "bold", fontSize: 12.5 }} numberOfLines={2}>
+            <Text
+              style={{
+                color: COLORS.orange,
+                fontWeight: "bold",
+                fontSize: 12.5,
+              }}
+              numberOfLines={2}
+            >
               {item.note}
             </Text>
           )}
@@ -707,7 +934,11 @@ export default function MatchsScreen() {
         {/* Bannière d’info si inscription impossible */}
         {reasons.length > 0 && !isJoined && (
           <View style={styles.infoBanner}>
-            <Icon name="information-circle-outline" size={18} color={COLORS.slateDark} />
+            <Icon
+              name="information-circle-outline"
+              size={18}
+              color={COLORS.slateDark}
+            />
             <Text style={styles.infoBannerTxt}>{reasons.join(" ")}</Text>
           </View>
         )}
@@ -717,13 +948,22 @@ export default function MatchsScreen() {
           style={styles.calBtn}
           activeOpacity={0.88}
           onPress={() =>
-            Alert.alert("Ajouter au calendrier", "Ajouter ce match à votre calendrier ?", [
-              { text: "Annuler", style: "cancel" },
-              { text: "Oui", onPress: () => addMatchToCalendar(item) },
-            ])
+            Alert.alert(
+              "Ajouter au calendrier",
+              "Ajouter ce match à votre calendrier ?",
+              [
+                { text: "Annuler", style: "cancel" },
+                { text: "Oui", onPress: () => addMatchToCalendar(item) },
+              ],
+            )
           }
         >
-          <Icon name="calendar-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
+          <Icon
+            name="calendar-outline"
+            size={18}
+            color="#fff"
+            style={{ marginRight: 8 }}
+          />
           <Text style={styles.calBtnTxt}>Ajouter au calendrier</Text>
         </TouchableOpacity>
 
@@ -742,8 +982,15 @@ export default function MatchsScreen() {
             ]}
             activeOpacity={0.9}
           >
-            <Icon name="baseball-outline" size={18} color="#fff" style={{ marginRight: 7 }} />
-            <Text style={styles.joinBtnTxt}>{isPosting ? "Inscription…" : "Je participe"}</Text>
+            <Icon
+              name="baseball-outline"
+              size={18}
+              color="#fff"
+              style={{ marginRight: 7 }}
+            />
+            <Text style={styles.joinBtnTxt}>
+              {isPosting ? "Inscription…" : "Je participe"}
+            </Text>
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
@@ -752,8 +999,15 @@ export default function MatchsScreen() {
             style={[styles.unsubscribeBtn, { opacity: isPosting ? 0.7 : 1 }]}
             activeOpacity={0.9}
           >
-            <Icon name="close-circle-outline" size={18} color="#fff" style={{ marginRight: 7 }} />
-            <Text style={styles.joinBtnTxt}>{isPosting ? "Désinscription…" : "Me désinscrire"}</Text>
+            <Icon
+              name="close-circle-outline"
+              size={18}
+              color="#fff"
+              style={{ marginRight: 7 }}
+            />
+            <Text style={styles.joinBtnTxt}>
+              {isPosting ? "Désinscription…" : "Me désinscrire"}
+            </Text>
           </TouchableOpacity>
         )}
       </View>
@@ -769,11 +1023,19 @@ export default function MatchsScreen() {
     const rightName = TEAM_NAMES[awayTeam] || awayTeam;
 
     const homeIsHonfleur = leftName === "Honfleur";
-    const leftLogo = homeIsHonfleur ? LOGO_MAP["Honfleur"] : getOpponentLogo(leftName);
-    const rightLogo = !homeIsHonfleur ? LOGO_MAP["Honfleur"] : getOpponentLogo(rightName);
+    const leftLogo = homeIsHonfleur
+      ? LOGO_MAP["Honfleur"]
+      : getOpponentLogo(leftName);
+    const rightLogo = !homeIsHonfleur
+      ? LOGO_MAP["Honfleur"]
+      : getOpponentLogo(rightName);
 
-    const leftScore = g.is_home ? g.team_score ?? "--" : g.opponent_score ?? "--";
-    const rightScore = g.is_home ? g.opponent_score ?? "--" : g.team_score ?? "--";
+    const leftScore = g.is_home
+      ? (g.team_score ?? "--")
+      : (g.opponent_score ?? "--");
+    const rightScore = g.is_home
+      ? (g.opponent_score ?? "--")
+      : (g.team_score ?? "--");
 
     return (
       <View style={styles.card}>
@@ -783,14 +1045,26 @@ export default function MatchsScreen() {
         </View>
 
         <View style={styles.venueRow}>
-          <Icon name={g.is_home ? "home" : "airplane-outline"} size={18} color={g.is_home ? COLORS.orange : COLORS.blue} />
-          <Text style={styles.venueTxt}>{g.is_home ? "À domicile" : "Extérieur"}</Text>
+          <Icon
+            name={g.is_home ? "home" : "airplane-outline"}
+            size={18}
+            color={g.is_home ? COLORS.orange : COLORS.blue}
+          />
+          <Text style={styles.venueTxt}>
+            {g.is_home ? "À domicile" : "Extérieur"}
+          </Text>
         </View>
 
         <View style={styles.scoresRow}>
           <View style={styles.teamScoreCol}>
             {leftLogo && <Image source={leftLogo} style={styles.logoTeam} />}
-            <Text style={[styles.teamName, { color: homeIsHonfleur ? COLORS.orange : COLORS.blue }]} numberOfLines={1}>
+            <Text
+              style={[
+                styles.teamName,
+                { color: homeIsHonfleur ? COLORS.orange : COLORS.blue },
+              ]}
+              numberOfLines={1}
+            >
               {leftName}
             </Text>
             <Text style={styles.scoreTxt}>{leftScore}</Text>
@@ -800,7 +1074,13 @@ export default function MatchsScreen() {
 
           <View style={styles.teamScoreCol}>
             {rightLogo && <Image source={rightLogo} style={styles.logoTeam} />}
-            <Text style={[styles.teamName, { color: !homeIsHonfleur ? COLORS.orange : COLORS.blue }]} numberOfLines={1}>
+            <Text
+              style={[
+                styles.teamName,
+                { color: !homeIsHonfleur ? COLORS.orange : COLORS.blue },
+              ]}
+              numberOfLines={1}
+            >
               {rightName}
             </Text>
             <Text style={styles.scoreTxt}>{rightScore}</Text>
@@ -808,13 +1088,27 @@ export default function MatchsScreen() {
         </View>
 
         <View style={styles.resultRow}>
-          <View style={[styles.resultBadge, { backgroundColor: resultColor(g.result) }]}>
+          <View
+            style={[
+              styles.resultBadge,
+              { backgroundColor: resultColor(g.result) },
+            ]}
+          >
             <Text style={styles.resultBadgeTxt}>{resultLabel(g.result)}</Text>
           </View>
           {!!g.boxscore_link && (
-            <TouchableOpacity style={styles.boxscoreBtn} onPress={() => Linking.openURL(g.boxscore_link)} activeOpacity={0.9}>
+            <TouchableOpacity
+              style={styles.boxscoreBtn}
+              onPress={() => Linking.openURL(g.boxscore_link)}
+              activeOpacity={0.9}
+            >
               <Text style={styles.boxscoreBtnTxt}>Boxscore FFBS</Text>
-              <Icon name="open-outline" size={18} color="#fff" style={{ marginLeft: 4 }} />
+              <Icon
+                name="open-outline"
+                size={18}
+                color="#fff"
+                style={{ marginLeft: 4 }}
+              />
             </TouchableOpacity>
           )}
         </View>
@@ -822,7 +1116,9 @@ export default function MatchsScreen() {
     );
   };
 
-  const isLoadingList = (selectedTab === "played" && loading) || (selectedTab === "upcoming" && loadingPlanned);
+  const isLoadingList =
+    (selectedTab === "played" && loading) ||
+    (selectedTab === "upcoming" && loadingPlanned);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.bg }}>
@@ -835,14 +1131,25 @@ export default function MatchsScreen() {
           borderBottomWidth: 1,
           borderBottomColor: COLORS.surfaceBorder,
           paddingBottom: 10,
-          paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26,
+          paddingTop:
+            Platform.OS === "android"
+              ? (StatusBar.currentHeight || 0) + 14
+              : 26,
         }}
       >
-        <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12 }}>
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            paddingHorizontal: 12,
+          }}
+        >
           <TouchableOpacity
             onPress={() =>
               // @ts-ignore
-              (navigation as any).canGoBack() ? (navigation as any).goBack() : (navigation as any).navigate("Home")
+              (navigation as any).canGoBack()
+                ? (navigation as any).goBack()
+                : (navigation as any).navigate("Home")
             }
             style={{
               width: 36,
@@ -875,9 +1182,20 @@ export default function MatchsScreen() {
         </View>
 
         {/* Onglets haut : joués / à venir */}
-        <View style={{ flexDirection: "row", paddingHorizontal: 12, paddingTop: 10, gap: 8 }}>
+        <View
+          style={{
+            flexDirection: "row",
+            paddingHorizontal: 12,
+            paddingTop: 10,
+            gap: 8,
+          }}
+        >
           {[
-            { label: "Matchs à venir", key: "upcoming", icon: "calendar-outline" },
+            {
+              label: "Matchs à venir",
+              key: "upcoming",
+              icon: "calendar-outline",
+            },
             { label: "Matchs joués", key: "played", icon: "list-outline" },
           ].map((tab) => {
             const active = selectedTab === tab.key;
@@ -886,7 +1204,10 @@ export default function MatchsScreen() {
                 key={tab.key}
                 onPress={() => {
                   setSelectedTab(tab.key as any);
-                  flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+                  flatListRef.current?.scrollToOffset({
+                    offset: 0,
+                    animated: true,
+                  });
                 }}
                 style={{
                   flex: 1,
@@ -901,7 +1222,11 @@ export default function MatchsScreen() {
                 }}
                 activeOpacity={0.9}
               >
-                <Icon name={tab.icon as any} size={16} color={active ? "#fff" : COLORS.orange} />
+                <Icon
+                  name={tab.icon as any}
+                  size={16}
+                  color={active ? "#fff" : COLORS.orange}
+                />
                 <Text
                   style={{
                     color: active ? "#fff" : COLORS.orange,
@@ -920,7 +1245,15 @@ export default function MatchsScreen() {
 
         {/* Sous-onglets catégorie (Seniors par défaut) */}
         {selectedTab === "upcoming" && (
-          <View style={{ flexDirection: "row", gap: 8, paddingHorizontal: 12, paddingTop: 10, flexWrap: "wrap" }}>
+          <View
+            style={{
+              flexDirection: "row",
+              gap: 8,
+              paddingHorizontal: 12,
+              paddingTop: 10,
+              flexWrap: "wrap",
+            }}
+          >
             {(["Seniors", "15U", "12U"] as const).map((f) => {
               const active = catFilter === f;
               return (
@@ -928,11 +1261,18 @@ export default function MatchsScreen() {
                   key={f}
                   onPress={() => {
                     setCatFilter(f);
-                    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+                    flatListRef.current?.scrollToOffset({
+                      offset: 0,
+                      animated: true,
+                    });
                   }}
                   style={{
-                    backgroundColor: active ? COLORS.orange : "rgba(255,255,255,0.06)",
-                    borderColor: active ? COLORS.orange : COLORS.orangeSoftBorder,
+                    backgroundColor: active
+                      ? COLORS.orange
+                      : "rgba(255,255,255,0.06)",
+                    borderColor: active
+                      ? COLORS.orange
+                      : COLORS.orangeSoftBorder,
                     borderWidth: 1,
                     borderRadius: 999,
                     paddingVertical: 8,
@@ -940,7 +1280,12 @@ export default function MatchsScreen() {
                   }}
                   activeOpacity={0.9}
                 >
-                  <Text style={{ color: active ? "#fff" : COLORS.text, fontWeight: active ? "900" : "800" }}>
+                  <Text
+                    style={{
+                      color: active ? "#fff" : COLORS.text,
+                      fontWeight: active ? "900" : "800",
+                    }}
+                  >
                     {f} ({catCounts[f]})
                   </Text>
                 </TouchableOpacity>
@@ -967,15 +1312,34 @@ export default function MatchsScreen() {
               data={dataToShow}
               keyExtractor={(it: any) => String(it.id)}
               contentContainerStyle={{ padding: 14, paddingBottom: 36 }}
-              ListEmptyComponent={<Text style={styles.emptyTxt}>{selectedTab === "upcoming" ? `Aucun match en ${catFilter} à venir.` : "Aucun match joué à afficher."}</Text>}
-              renderItem={({ item }) => (selectedTab === "upcoming" ? <UpcomingCard item={item as PlannedGame} /> : <PlayedCard g={item as Game} />)}
-              onScroll={(e) => setShowScrollTop(e.nativeEvent.contentOffset.y > 240)}
+              ListEmptyComponent={
+                <Text style={styles.emptyTxt}>
+                  {selectedTab === "upcoming"
+                    ? `Aucun match en ${catFilter} à venir.`
+                    : "Aucun match joué à afficher."}
+                </Text>
+              }
+              renderItem={({ item }) =>
+                selectedTab === "upcoming" ? (
+                  <UpcomingCard item={item as PlannedGame} />
+                ) : (
+                  <PlayedCard g={item as Game} />
+                )
+              }
+              onScroll={(e) =>
+                setShowScrollTop(e.nativeEvent.contentOffset.y > 240)
+              }
               scrollEventThrottle={16}
             />
             {showScrollTop && (
               <TouchableOpacity
                 style={styles.scrollTopBtn}
-                onPress={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: true })}
+                onPress={() =>
+                  flatListRef.current?.scrollToOffset({
+                    offset: 0,
+                    animated: true,
+                  })
+                }
                 activeOpacity={0.8}
               >
                 <Icon name="chevron-up" size={30} color={COLORS.orange} />
@@ -986,7 +1350,14 @@ export default function MatchsScreen() {
       </View>
 
       {/* TOAST */}
-      <CometsToast visible={toastVisible} data={toastData} onClose={() => { setToastVisible(false); setToastData(null); }} />
+      <CometsToast
+        visible={toastVisible}
+        data={toastData}
+        onClose={() => {
+          setToastVisible(false);
+          setToastData(null);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -995,8 +1366,18 @@ export default function MatchsScreen() {
 const styles = StyleSheet.create({
   loaderBox: { flex: 1, alignItems: "center", justifyContent: "center" },
   loaderTxt: { color: COLORS.orange, fontWeight: "bold", fontSize: 18 },
-  errorTxt: { color: "tomato", fontSize: 15, textAlign: "center", paddingHorizontal: 20 },
-  emptyTxt: { color: "#9aa0ae", fontSize: 15, textAlign: "center", marginTop: 40 },
+  errorTxt: {
+    color: "tomato",
+    fontSize: 15,
+    textAlign: "center",
+    paddingHorizontal: 20,
+  },
+  emptyTxt: {
+    color: "#9aa0ae",
+    fontSize: 15,
+    textAlign: "center",
+    marginTop: 40,
+  },
 
   card: {
     backgroundColor: "rgba(255,255,255,0.06)",
@@ -1010,7 +1391,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.orangeSoftBorder,
   },
-  cardTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  cardTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
 
   matchBadgeUpcoming: {
     color: COLORS.blue,
@@ -1036,12 +1421,27 @@ const styles = StyleSheet.create({
   },
   matchDate: { color: "#d5d8df", fontWeight: "700", fontSize: 13.5 },
 
-  venueRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 },
+  venueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 8,
+  },
   venueTxt: { color: COLORS.textMuted, fontWeight: "700", fontSize: 13.5 },
 
-  vsRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 12 },
+  vsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 12,
+  },
   teamCol: { flex: 1, alignItems: "center" },
-  teamName: { color: COLORS.text, fontWeight: "900", fontSize: 15, marginTop: 6 },
+  teamName: {
+    color: COLORS.text,
+    fontWeight: "900",
+    fontSize: 15,
+    marginTop: 6,
+  },
   logoTeam: {
     width: 48,
     height: 48,
@@ -1050,9 +1450,19 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: COLORS.orange,
   },
-  vs: { color: COLORS.orange, fontWeight: "900", fontSize: 16, marginHorizontal: 10 },
+  vs: {
+    color: COLORS.orange,
+    fontWeight: "900",
+    fontSize: 16,
+    marginHorizontal: 10,
+  },
 
-  scoresRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 12 },
+  scoresRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 12,
+  },
   teamScoreCol: { flex: 1, alignItems: "center" },
   scoreTxt: {
     color: "#fff",
@@ -1063,9 +1473,19 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 4,
   },
-  vsDash: { color: COLORS.orange, fontWeight: "900", fontSize: 20, marginHorizontal: 10 },
+  vsDash: {
+    color: COLORS.orange,
+    fontWeight: "900",
+    fontSize: 20,
+    marginHorizontal: 10,
+  },
 
-  resultRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12 },
+  resultRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 12,
+  },
   resultBadge: {
     paddingHorizontal: 14,
     paddingVertical: 6,
@@ -1075,7 +1495,12 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 2,
   },
-  resultBadgeTxt: { color: "#fff", fontWeight: "900", letterSpacing: 0.6, fontSize: 13.5 },
+  resultBadgeTxt: {
+    color: "#fff",
+    fontWeight: "900",
+    letterSpacing: 0.6,
+    fontSize: 13.5,
+  },
 
   boxscoreBtn: {
     flexDirection: "row",

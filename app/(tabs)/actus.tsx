@@ -1,21 +1,22 @@
 // app/screens/ActusScreen.tsx
 "use client";
 
+import { useNavigation } from "@react-navigation/native";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  Image,
   ActivityIndicator,
-  StyleSheet,
-  StatusBar,
-  Platform,
   Animated,
+  Image,
+  Platform,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { useNavigation } from "@react-navigation/native";
 import Icon from "react-native-vector-icons/Ionicons";
+import { markArticleRead } from "../lib/newsNotifyStore"; // garde
 
 const logoComets = require("../../assets/images/iconComets.png");
 
@@ -23,34 +24,74 @@ type Article = {
   id: number;
   title: string;
   content: string;
-  image_url?: string;
+  image_url?: string | null;
   created_at: string;
+  category?: string | null; // ⇦ NOUVEAU : catégorie depuis la DB
 };
 
-const TEAM_CATEGORIES = ["12U", "15U", "Seniors"] as const;
+/** Doit matcher l’admin */
+const CATEGORY_META = [
+  { value: "", label: "Autres", color: "#FF8200" },
+  { value: "12U", label: "12U", color: "#10b981" },
+  { value: "15U", label: "15U", color: "#3b82f6" },
+  { value: "Séniors", label: "Séniors", color: "#f59e0b" },
+] as const;
 
+type CatValue = (typeof CATEGORY_META)[number]["value"] | "Autres";
+
+const PAGE_SIZE = 20;
+
+/** Helpers */
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return dateStr;
   return d.toLocaleDateString("fr-FR", { year: "numeric", month: "long", day: "numeric" });
 }
+
 function stripHtml(html: string) {
   return (html || "").replace(/(<([^>]+)>)/gi, "").replace(/&nbsp;/g, " ");
 }
+
 function excerpt(text: string, n = 200) {
   const t = stripHtml(text).trim();
   return t.length > n ? t.slice(0, n) + "…" : t;
 }
-function getYear(str: string) {
-  const y = new Date(str).getFullYear();
-  return Number.isFinite(y) ? y : new Date().getFullYear();
+
+/** Saison = année suivante dès septembre. */
+function getSeasonYear(str: string) {
+  const d = new Date(str);
+  if (isNaN(d.getTime())) return new Date().getFullYear();
+  const y = d.getFullYear();
+  const m = d.getMonth(); // 0..11 ; 8 = septembre
+  return m >= 8 ? y + 1 : y;
 }
-function getTeamCat(title: string): string {
-  const norm = (title || "").trim().toUpperCase();
-  for (const cat of TEAM_CATEGORIES) {
-    if (norm.startsWith(cat.toUpperCase())) return cat;
+
+/** Normalise une catégorie “valeur” (DB) à partir de l’article */
+function getCatValue(a: Article): CatValue {
+  // 1) Si DB fournit la catégorie, on la normalise
+  const raw = (a.category ?? "").trim();
+  if (raw) {
+    // tolère "Seniors" sans accent en DB
+    if (/^s(e|é)niors$/i.test(raw)) return "Séniors";
+    if (/^12u$/i.test(raw)) return "12U";
+    if (/^15u$/i.test(raw)) return "15U";
+    // autre string custom => "Autres"
+    const known = CATEGORY_META.some(c => c.value.toLowerCase() === raw.toLowerCase());
+    return known ? (CATEGORY_META.find(c => c.value.toLowerCase() === raw.toLowerCase())!.value) : "Autres";
   }
-  return "Autres";
+
+  // 2) Fallback: inférer via le titre (compat anciens articles)
+  const norm = (a.title || "").trim().toUpperCase();
+  if (norm.startsWith("12U")) return "12U";
+  if (norm.startsWith("15U")) return "15U";
+  if (norm.startsWith("SENIORS") || norm.startsWith("SÉNIORS")) return "Séniors";
+
+  // 3) Sans info explicite → valeur vide (Autres)
+  return "";
+}
+
+function catMetaOf(value: CatValue) {
+  return CATEGORY_META.find(c => c.value === value);
 }
 
 export default function ActusScreen() {
@@ -58,16 +99,13 @@ export default function ActusScreen() {
   const [articles, setArticles] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Scroll to top
   const scrollRef = useRef<ScrollView>(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
-  // Filtres
   const [selectedSeason, setSelectedSeason] = useState<string>("ALL");
-  const [selectedCat, setSelectedCat] = useState<string>("ALL");
+  const [selectedCat, setSelectedCat] = useState<CatValue | "ALL">("ALL");
   const [page, setPage] = useState(1);
-  const PAGE_SIZE = 20;
 
   useEffect(() => {
     (async () => {
@@ -75,10 +113,17 @@ export default function ActusScreen() {
         const r = await fetch("https://les-comets-honfleur.vercel.app/api/news");
         const data = await r.json();
         const sorted = Array.isArray(data)
-          ? data.sort(
-              (a, b) =>
-                new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-            )
+          ? data
+              .map((x: any) => ({
+                ...x,
+                // sécurité typage
+                image_url: x.image_url ?? null,
+                category: x.category ?? null,
+              }))
+              .sort(
+                (a: Article, b: Article) =>
+                  new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+              )
           : [];
         setArticles(sorted);
       } finally {
@@ -87,28 +132,45 @@ export default function ActusScreen() {
     })();
   }, []);
 
-  // Années & onglets
-  const years = useMemo(() => {
-    const coll = Array.from(new Set(articles.map((a) => getYear(a.created_at)))).sort((a, b) => b - a);
-    return coll.length ? coll : [new Date().getFullYear()];
+  // Saisons d’après les articles
+  const seasons = useMemo(() => {
+    const set = new Set<number>(articles.map((a) => getSeasonYear(a.created_at)));
+    const arr = Array.from(set).sort((a, b) => b - a);
+    return arr.length ? arr : [getSeasonYear(new Date().toISOString())];
   }, [articles]);
-  const seasonTabs = useMemo(() => ["ALL", ...years.map(String)], [years]);
-  const categories = useMemo(() => ["ALL", ...TEAM_CATEGORIES, "Autres"], []);
 
+  const seasonTabs = useMemo(() => ["ALL", ...seasons.map(String)], [seasons]);
+
+  // Catégories = ALL + (valeurs admin) + Autres (si besoin)
+  const hasAutres = useMemo(() => {
+    return articles.some((a) => getCatValue(a) === "Autres");
+  }, [articles]);
+
+  const categoryTabs: (CatValue | "ALL")[] = useMemo(() => {
+    const base: (CatValue | "ALL")[] = ["ALL", ...CATEGORY_META.map((c) => c.value)];
+    return hasAutres ? [...base, "Autres"] : base;
+  }, [hasAutres]);
+
+  // Onglet saison par défaut = saison courante
+  useEffect(() => {
+    setSelectedSeason(String(getSeasonYear(new Date().toISOString())));
+  }, []);
+
+  // Reset pagination et catégorie quand on change de saison
   useEffect(() => {
     setPage(1);
     setSelectedCat("ALL");
   }, [selectedSeason]);
 
-  const catLabel = (cat: string) => (cat === "ALL" ? "Toutes les catégories" : cat);
-
-  // Filtrage
   const filtered = useMemo(() => {
     return articles.filter((a) => {
-      const cat = getTeamCat(a.title);
-      const y = String(getYear(a.created_at));
-      const seasonOk = selectedSeason === "ALL" ? true : y === selectedSeason;
-      const catOk = selectedCat === "ALL" ? true : cat === selectedCat;
+      const catVal = getCatValue(a); // "", "12U", "15U", "Séniors", "Autres"
+      const s = String(getSeasonYear(a.created_at));
+      const seasonOk = selectedSeason === "ALL" ? true : s === selectedSeason;
+      const catOk =
+        selectedCat === "ALL"
+          ? true
+          : catVal === selectedCat;
       return seasonOk && catOk;
     });
   }, [articles, selectedSeason, selectedCat]);
@@ -117,7 +179,6 @@ export default function ActusScreen() {
   const start = (page - 1) * PAGE_SIZE;
   const end = page * PAGE_SIZE;
 
-  // Scroll handler
   const handleScroll = (event: any) => {
     const y = event.nativeEvent.contentOffset.y;
     if (y > 300 && !showScrollTop) {
@@ -147,6 +208,12 @@ export default function ActusScreen() {
     </TouchableOpacity>
   );
 
+  const catLabel = (v: CatValue | "ALL") => {
+    if (v === "ALL") return "Toutes les catégories";
+    if (v === "Autres") return "Autres";
+    return CATEGORY_META.find((c) => c.value === v)?.label ?? "Autres";
+  };
+
   return (
     <View style={{ flex: 1, backgroundColor: "#0f1014" }}>
       <StatusBar barStyle="light-content" />
@@ -160,16 +227,12 @@ export default function ActusScreen() {
       >
         <View style={styles.heroStripe} />
 
-        {/* Ligne top : back + titre */}
         <View style={styles.heroRow}>
           <TouchableOpacity
             onPress={() =>
-              // @ts-ignore
               (navigation as any).canGoBack()
-                ? // @ts-ignore
-                  (navigation as any).goBack()
-                : // @ts-ignore
-                  (navigation as any).navigate("Home")
+                ? (navigation as any).goBack()
+                : (navigation as any).navigate("Home")
             }
             style={styles.backBtn}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -179,11 +242,9 @@ export default function ActusScreen() {
 
           <Text style={styles.heroTitle}>Actualités des Comets</Text>
 
-          {/* espace symétrique */}
           <View style={{ width: 36 }} />
         </View>
 
-        {/* Logo + sous-titres */}
         <View style={styles.heroProfileRow}>
           <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
           <View style={{ flex: 1 }}>
@@ -214,8 +275,13 @@ export default function ActusScreen() {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={[styles.tabsRow, { paddingTop: 8, paddingRight: 12 }]}
         >
-          {categories.map((c) => (
-            <FilterTab key={c} label={catLabel(c)} active={selectedCat === c} onPress={() => setSelectedCat(c)} />
+          {categoryTabs.map((c) => (
+            <FilterTab
+              key={String(c)}
+              label={catLabel(c)}
+              active={selectedCat === c}
+              onPress={() => setSelectedCat(c)}
+            />
           ))}
         </ScrollView>
       </View>
@@ -237,43 +303,68 @@ export default function ActusScreen() {
           scrollEventThrottle={16}
           contentContainerStyle={styles.listContainer}
         >
-          {filtered.slice(start, end).map((a) => (
-            <TouchableOpacity
-              key={a.id}
-              activeOpacity={0.94}
-              style={styles.card}
-              // @ts-ignore
-              onPress={() => (navigation as any).navigate("ActuDetail", { articleId: a.id })}
-            >
-              {a.image_url ? (
-                <Image source={{ uri: a.image_url }} style={styles.cardImage} />
-              ) : (
-                <View style={[styles.cardImage, { backgroundColor: "#141821" }]} />
-              )}
+          {filtered.slice(start, end).map((a) => {
+            const cv = getCatValue(a); // valeur
+            const meta = catMetaOf(cv);
+            const badgeBg =
+              meta ? `${meta.color}22` : "rgba(255,255,255,0.06)";
+            const badgeBorder = meta?.color ?? "#2b3141";
+            const badgeText = meta?.color ?? "#cfd3db";
 
-              <View style={styles.cardBody}>
-                <View style={styles.chipsRow}>
-                  <View style={styles.chip}>
-                    <Text style={styles.chipTxt}>{getTeamCat(a.title)}</Text>
+            return (
+              <TouchableOpacity
+                key={a.id}
+                activeOpacity={0.94}
+                style={styles.card}
+                onPress={async () => {
+                  await markArticleRead(a.id); // optimiste
+                  (navigation as any).navigate("ActuDetail", { articleId: a.id });
+                }}
+              >
+                {a.image_url ? (
+                  <Image source={{ uri: a.image_url }} style={styles.cardImage} />
+                ) : (
+                  <View style={[styles.cardImage, { backgroundColor: "#141821" }]} />
+                )}
+
+                <View style={styles.cardBody}>
+                  <View style={styles.chipsRow}>
+                    {/* Catégorie (colorée) */}
+                    <View
+                      style={[
+                        styles.chip,
+                        {
+                          backgroundColor: badgeBg,
+                          borderColor: badgeBorder,
+                        },
+                      ]}
+                    >
+                      <Text style={[styles.chipTxt, { color: badgeText }]}>
+                        {meta?.label ?? "Autres"}
+                      </Text>
+                    </View>
+
+                    {/* Date */}
+                    <View
+                      style={[styles.chip, { backgroundColor: "rgba(255,255,255,0.06)", borderColor: "#2b3141" }]}
+                    >
+                      <Icon name="time-outline" size={13} color="#cfd3db" />
+                      <Text style={[styles.chipTxt, { color: "#cfd3db" }]}>{formatDate(a.created_at)}</Text>
+                    </View>
                   </View>
-                  <View style={[styles.chip, { backgroundColor: "rgba(255,255,255,0.06)", borderColor: "#2b3141" }]}>
-                    <Icon name="time-outline" size={13} color="#cfd3db" />
-                    <Text style={[styles.chipTxt, { color: "#cfd3db" }]}>{formatDate(a.created_at)}</Text>
+
+                  <Text style={styles.cardTitle}>{a.title}</Text>
+                  <Text style={styles.cardExcerpt}>{excerpt(a.content, 180)}</Text>
+
+                  <View style={styles.readRow}>
+                    <Text style={styles.readBtnTxt}>Lire l’article</Text>
+                    <Icon name="chevron-forward" size={18} color="#fff" />
                   </View>
                 </View>
+              </TouchableOpacity>
+            );
+          })}
 
-                <Text style={styles.cardTitle}>{a.title}</Text>
-                <Text style={styles.cardExcerpt}>{excerpt(a.content, 180)}</Text>
-
-                <View style={styles.readRow}>
-                  <Text style={styles.readBtnTxt}>Lire l’article</Text>
-                  <Icon name="chevron-forward" size={18} color="#fff" />
-                </View>
-              </View>
-            </TouchableOpacity>
-          ))}
-
-          {/* Pagination */}
           {pageCount > 1 && (
             <View style={styles.pagination}>
               <TouchableOpacity
@@ -300,8 +391,10 @@ export default function ActusScreen() {
         </ScrollView>
       )}
 
-      {/* Scroll-to-top */}
-      <Animated.View pointerEvents={showScrollTop ? "auto" : "none"} style={[styles.scrollTopWrap, { opacity: fadeAnim }]}>
+      <Animated.View
+        pointerEvents={showScrollTop ? "auto" : "none"}
+        style={[styles.scrollTopWrap, { opacity: fadeAnim }]}
+      >
         <TouchableOpacity style={styles.scrollTopBtn} onPress={scrollToTop} activeOpacity={0.85}>
           <Icon name="chevron-up" size={26} color="#fff" />
         </TouchableOpacity>
@@ -311,7 +404,6 @@ export default function ActusScreen() {
 }
 
 const styles = StyleSheet.create({
-  // HERO
   hero: {
     backgroundColor: "#11131a",
     borderBottomWidth: 1,
@@ -370,13 +462,7 @@ const styles = StyleSheet.create({
   heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
   heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
 
-  // Tabs (recyclés style Comets)
-  tabsRow: {
-    flexDirection: "row",
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingTop: 10,
-  },
+  tabsRow: { flexDirection: "row", gap: 8, paddingHorizontal: 12, paddingTop: 10 },
   tabBtn: {
     backgroundColor: "#141821",
     borderWidth: 1,
@@ -391,15 +477,12 @@ const styles = StyleSheet.create({
   tabBtnText: { color: "#FF8200", fontWeight: "900", fontSize: 13.5, letterSpacing: 0.3 },
   tabBtnTextActive: { color: "#fff" },
 
-  // Loader / Empty
   loaderBox: { flex: 1, alignItems: "center", justifyContent: "center" },
   loaderTxt: { color: "#FF8200", marginTop: 14, fontWeight: "bold", fontSize: 16 },
   emptyTxt: { color: "#9aa0ae", fontSize: 15, textAlign: "center" },
 
-  // List
   listContainer: { paddingHorizontal: 12, paddingBottom: 38 },
 
-  // Card (glass)
   card: {
     backgroundColor: "rgba(255,255,255,0.06)",
     borderRadius: 18,
@@ -432,13 +515,7 @@ const styles = StyleSheet.create({
   },
   chipTxt: { color: "#FF8200", fontWeight: "900", fontSize: 12.5 },
 
-  cardTitle: {
-    color: "#eaeef7",
-    fontWeight: "900",
-    fontSize: 18,
-    lineHeight: 22,
-    marginBottom: 6,
-  },
+  cardTitle: { color: "#eaeef7", fontWeight: "900", fontSize: 18, lineHeight: 22, marginBottom: 6 },
   cardExcerpt: { color: "#cfd3db", fontSize: 14.5, lineHeight: 20 },
 
   readRow: {
@@ -454,7 +531,6 @@ const styles = StyleSheet.create({
   },
   readBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 13.5 },
 
-  // Pagination
   pagination: {
     flexDirection: "row",
     justifyContent: "center",
@@ -472,13 +548,7 @@ const styles = StyleSheet.create({
   pagBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 14 },
   pagIndicator: { color: "#FF8200", fontWeight: "900", fontSize: 14 },
 
-  // Scroll to top
-  scrollTopWrap: {
-    position: "absolute",
-    right: 18,
-    bottom: 25,
-    zIndex: 50,
-  },
+  scrollTopWrap: { position: "absolute", right: 18, bottom: 25, zIndex: 50 },
   scrollTopBtn: {
     width: 50,
     height: 50,

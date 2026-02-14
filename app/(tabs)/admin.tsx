@@ -20,27 +20,32 @@ const logoComets = require("../../assets/images/iconComets.png");
 
 type AdminLink = { label: string; icon: string; route: string };
 
-// 📨 Messagerie seule
+// Messagerie seule
 const adminLinksMessaging: AdminLink[] = [
   { label: "Messages reçus", icon: "mail-unread-outline", route: "/messages" },
 ];
 
-// ⚾ Gestion des matchs
+// Gestion des matchs
 const adminLinksMatchs: AdminLink[] = [
   { label: "Inscriptions aux matchs", icon: "list-outline", route: "/MatchsAdminScreen" },
   { label: "Matchs à venir", icon: "calendar-outline", route: "/matchs-admin" },
 ];
 
-// 📰 Contenus & médias
+// Contenus et médias
 const adminLinksContent: AdminLink[] = [
   { label: "Actualités", icon: "newspaper-outline", route: "/actus-admin" },
   { label: "Galerie", icon: "images-outline", route: "/AdminGalleryScreen" },
 ];
 
-// 👥 Membres
+// Membres
 const adminLinksMembers: AdminLink[] = [
   { label: "Jeunes (12U/15U)", icon: "school-outline", route: "/(admin)/youngPlayers" },
   { label: "Membres", icon: "people-outline", route: "/membres-admin" },
+];
+
+// Finances
+const adminLinksFinance: AdminLink[] = [
+  { label: "Cotisations", icon: "card-outline", route: "/(admin)/cotisation" },
 ];
 
 export default function AdminMenuScreen() {
@@ -96,13 +101,13 @@ export default function AdminMenuScreen() {
 
           <View style={{ flex: 1 }}>
             <Text style={styles.heroName}>Espace Admin</Text>
-            <Text style={styles.heroEmail}>Gestion du club • Outils & contenus</Text>
+            <Text style={styles.heroEmail}>Gestion du club • Outils et contenus</Text>
             <View style={styles.heroChips}>
               <View style={[styles.chip, { backgroundColor: "#FFD7A1" }]}>
-                <Text style={styles.chipTxt}>🔐 Rôle : Admin</Text>
+                <Text style={styles.chipTxt}>Rôle : Admin</Text>
               </View>
               <View style={[styles.chip, { backgroundColor: "#D1F3FF" }]}>
-                <Text style={[styles.chipTxt, { color: "#0C7499" }]}>⚙️ Actions rapides</Text>
+                <Text style={[styles.chipTxt, { color: "#0C7499" }]}>Actions rapides</Text>
               </View>
             </View>
           </View>
@@ -117,7 +122,7 @@ export default function AdminMenuScreen() {
         <View style={styles.cardIntro}>
           <Text style={styles.introTxt}>
             Bienvenue dans le centre de contrôle des Comets. Publie une actu, gère les matchs, la
-            galerie et les membres — tout en un clin d’œil.
+            galerie et les membres, tout en un clin d’œil.
           </Text>
         </View>
 
@@ -137,8 +142,8 @@ export default function AdminMenuScreen() {
           ))}
         </View>
 
-        {/* Contenus & médias */}
-        <Text style={[styles.sectionTitle, { marginTop: 22 }]}>Contenus & Médias</Text>
+        {/* Contenus et médias */}
+        <Text style={[styles.sectionTitle, { marginTop: 22 }]}>Contenus et médias</Text>
         <View style={styles.linksWrap}>
           {adminLinksContent.map(({ label, icon, route }) => (
             <AdminLinkItem key={label} label={label} icon={icon} route={route} />
@@ -153,13 +158,20 @@ export default function AdminMenuScreen() {
           ))}
         </View>
 
+        {/* Finances */}
+        <Text style={[styles.sectionTitle, { marginTop: 22 }]}>Finances</Text>
+        <View style={styles.linksWrap}>
+          {adminLinksFinance.map(({ label, icon, route }) => (
+            <AdminLinkItem key={label} label={label} icon={icon} route={route} />
+          ))}
+        </View>
+
         <View style={{ height: 20 }} />
       </ScrollView>
     </View>
   );
 }
 
-// 🔹 Factorisation d’un lien Admin
 function AdminLinkItem({ label, icon, route }: AdminLink) {
   return (
     <TouchableOpacity
@@ -177,7 +189,7 @@ function AdminLinkItem({ label, icon, route }: AdminLink) {
 }
 
 const styles = StyleSheet.create({
-  // === HERO (aligné sur Profil/Actus/Galerie) ===
+  // HERO
   hero: {
     backgroundColor: "#11131a",
     paddingBottom: 14,
@@ -253,7 +265,7 @@ const styles = StyleSheet.create({
     borderColor: "#FF8200",
   },
 
-  // === BODY ===
+  // BODY
   body: { padding: 14, paddingBottom: 28, backgroundColor: "#0f1014" },
 
   // Intro card

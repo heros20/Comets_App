@@ -34,14 +34,45 @@ type GalleryItem = {
   created_at: string;
 };
 
+// ---- Helpers compat ----
 function base64ToUint8Array(base64: string) {
-  const binary_string = globalThis.atob
-    ? globalThis.atob(base64)
-    : Buffer.from(base64, "base64").toString("binary");
-  const len = binary_string.length;
+  const binary =
+    (globalThis as any).atob
+      ? (globalThis as any).atob(base64)
+      : Buffer.from(base64, "base64").toString("binary");
+  const len = binary.length;
   const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) bytes[i] = binary_string.charCodeAt(i);
+  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
+}
+
+/**
+ * Convertit une file:// URI en ArrayBuffer, avec fallback robuste
+ * 1) fetch(uri).arrayBuffer() si dispo
+ * 2) sinon FileSystem.readAsStringAsync(..., base64) -> Uint8Array.buffer
+ */
+async function uriToArrayBuffer(uri: string): Promise<ArrayBuffer> {
+  try {
+    const res = await fetch(uri);
+    // Certaines versions RN n'ont pas blob(), mais ont arrayBuffer()
+    if (typeof (res as any).arrayBuffer === "function") {
+      return await (res as any).arrayBuffer();
+    }
+    // Dernier ressort si blob existe quand même
+    if (typeof (res as any).blob === "function") {
+      const b = await (res as any).blob();
+      if (typeof (b as any).arrayBuffer === "function") {
+        return await (b as any).arrayBuffer();
+      }
+    }
+  } catch {
+    // on tente le fallback FS
+  }
+  // Fallback FileSystem -> base64
+  const b64 = await FileSystem.readAsStringAsync(uri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+  return base64ToUint8Array(b64).buffer;
 }
 
 export default function AdminGalleryScreen({ navigation }: any) {
@@ -70,44 +101,51 @@ export default function AdminGalleryScreen({ navigation }: any) {
     if (uploading) return;
     setUploading(true);
     try {
+      // 1) Permissions
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) {
         Alert.alert("Permission refusée", "Autorise l'accès à la galerie photo !");
-        setUploading(false);
         return;
       }
-      const result = await ImagePicker.launchImageLibraryAsync({
+
+      // 2) Picker — rétro-compatible (évite MediaType qui est undefined chez toi)
+      const pick = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
-        quality: 0.5,
-        selectionLimit: 1,
+        quality: 0.8,
+        selectionLimit: 1, // ignoré si non supporté, sans gravité
       });
-      if (result.canceled || !result.assets?.length) {
-        setUploading(false);
-        return;
-      }
-      const asset = result.assets[0];
-      if (!asset.uri) { setUploading(false); return; }
 
+      if (!pick || pick.canceled || !pick.assets?.length) return;
+
+      const asset = pick.assets[0];
+      if (!asset?.uri) return;
+
+      // 3) Normalisation (force JPEG pour HEIC iOS) + resize
       const manip = await ImageManipulator.manipulateAsync(
         asset.uri,
         [{ resize: { width: 900 } }],
-        { compress: 0.27, format: ImageManipulator.SaveFormat.JPEG }
+        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
       );
-      const base64 = await FileSystem.readAsStringAsync(manip.uri, { encoding: FileSystem.EncodingType.Base64 });
-      const byteArray = base64ToUint8Array(base64);
-      const fileName = `gallery/${Date.now()}_${Math.floor(Math.random() * 99999)}.jpg`;
 
+      // 4) URI -> ArrayBuffer (compat totale, sans blob())
+      const data = await uriToArrayBuffer(manip.uri);
+
+      // 5) Nom + meta
+      const fileName = `gallery/${Date.now()}_${Math.floor(Math.random() * 99999)}.jpg`;
+      const contentType = "image/jpeg";
+
+      // 6) Upload Supabase (ArrayBuffer direct)
       const { error: uploadErr } = await supabase.storage
         .from("news-images")
-        .upload(fileName, byteArray, {
-          contentType: "image/jpeg",
+        .upload(fileName, data, {
+          contentType,
           cacheControl: "3600",
           upsert: false,
-          duplex: "half",
         });
       if (uploadErr) throw uploadErr;
 
+      // 7) URL publique + insert DB
       const { data: pub } = supabase.storage.from("news-images").getPublicUrl(fileName);
       const publicUrl = pub?.publicUrl;
       if (!publicUrl) throw new Error("URL de l'image introuvable.");
@@ -118,19 +156,21 @@ export default function AdminGalleryScreen({ navigation }: any) {
       if (insertErr) throw insertErr;
 
       setLegend("");
-      fetchGallery();
+      await fetchGallery();
       Alert.alert("Image ajoutée !", "L'image a bien été ajoutée à la galerie.");
     } catch (e: any) {
-      Alert.alert("Erreur", e.message || "Erreur lors de l'ajout.");
+      console.log("upload_error(AdminGalleryScreen):", e);
+      Alert.alert("Erreur", e?.message || "Erreur lors de l'ajout.");
+    } finally {
+      setUploading(false);
     }
-    setUploading(false);
   }
 
   async function handleDeleteImage(id: number, url: string) {
     if (uploading) return;
     Alert.alert(
       "Supprimer l'image",
-      "Tu es sûr de vouloir supprimer cette image ?",
+      "Tu es sûr de vouloir supprimer cette image ?",
       [
         { text: "Annuler", style: "cancel" },
         {
