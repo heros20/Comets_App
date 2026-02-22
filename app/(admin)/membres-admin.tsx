@@ -146,6 +146,7 @@ export default function MembresAdminScreen() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({
             email,
             password,
@@ -206,6 +207,7 @@ export default function MembresAdminScreen() {
         {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({ id }),
         }
       );

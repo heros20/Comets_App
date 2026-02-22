@@ -34,6 +34,10 @@ type Row = {
   admins: AdminInfo | null; // ← jointure
 };
 
+type RawRow = Omit<Row, "admins"> & {
+  admins: AdminInfo | AdminInfo[] | null;
+};
+
 export default function CometsLeaderboardScreen() {
   const { admin, isAdmin } = useAdmin();
   const [rows, setRows] = useState<Row[]>([]);
@@ -61,7 +65,14 @@ export default function CometsLeaderboardScreen() {
       console.log("leaderboard error:", error.message);
       setRows([]);
     } else {
-      setRows((data ?? []) as Row[]);
+      const normalizedRows: Row[] = ((data ?? []) as RawRow[]).map((r) => ({
+        admin_id: r.admin_id,
+        best_score: r.best_score,
+        total_runs: r.total_runs,
+        last_run_at: r.last_run_at,
+        admins: Array.isArray(r.admins) ? (r.admins[0] ?? null) : (r.admins ?? null),
+      }));
+      setRows(normalizedRows);
     }
     setLoading(false);
   };

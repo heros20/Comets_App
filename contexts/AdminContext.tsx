@@ -66,7 +66,7 @@ async function ensureAndroidChannel() {
     name: "default",
     importance: Notifications.AndroidImportance.MAX,
     vibrationPattern: [250, 250, 250, 250],
-    sound: true,
+    sound: "default",
   });
 }
 
@@ -165,6 +165,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch(`${API_BASE}/api/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email, password }),
       });
       if (!res.ok) return false;
@@ -177,6 +178,8 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         id: data.id as string,
         role: data.role as Role,
         participations: (data.participations as number) ?? 0,
+        first_name: (data.first_name as string | undefined) ?? undefined,
+        last_name: (data.last_name as string | undefined) ?? undefined,
       };
       await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(sess));
       setAdmin(sess);
@@ -194,6 +197,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch(`${API_BASE}/api/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email, password }),
       });
       return res.ok;
@@ -243,3 +247,6 @@ export function useAdmin() {
   if (!ctx) throw new Error("useAdmin must be used within AdminProvider");
   return ctx;
 }
+
+
+

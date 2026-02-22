@@ -3,7 +3,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
-import { useEffect } from "react";
+import { router } from "expo-router";
+import { useEffect, useRef } from "react";
 import { Platform } from "react-native";
 import { useAdmin } from "../contexts/AdminContext";
 import { supabase } from "../supabase";
@@ -17,6 +18,8 @@ if (!__notifInitDone) {
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowAlert: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
       shouldPlaySound: true,
       shouldSetBadge: false,
     }),
@@ -64,9 +67,57 @@ async function registerForPushNotificationsAsync() {
 
 const STORAGE_KEY = "expo_push_token_cached";
 
+type PushData = {
+  route?: unknown;
+  appRoute?: unknown;
+  articleId?: unknown;
+  id?: unknown;
+};
+
+function toStringValue(v: unknown): string | null {
+  if (typeof v === "string") return v;
+  if (typeof v === "number") return String(v);
+  return null;
+}
+
+function resolvePushTarget(data: unknown): string | null {
+  const d = (data && typeof data === "object" ? (data as PushData) : {}) as PushData;
+
+  const explicitArticleId = toStringValue(d.articleId) ?? toStringValue(d.id);
+  const route = toStringValue(d.route);
+  const appRoute = toStringValue(d.appRoute);
+
+  if (explicitArticleId) {
+    return `/ActuDetail?articleId=${encodeURIComponent(explicitArticleId)}`;
+  }
+
+  if (route) {
+    // Les notifs news envoient souvent une route web: /actus/:id
+    const m = route.match(/^\/actus\/([^/?#]+)/i);
+    if (m?.[1]) {
+      return `/ActuDetail?articleId=${encodeURIComponent(m[1])}`;
+    }
+  }
+
+  if (appRoute && appRoute.startsWith("/")) {
+    return appRoute;
+  }
+
+  if (route) {
+    // Compat: routes web -> routes app
+    if (/^\/galerie(?:\/|$)/i.test(route)) return "/GalleryScreen";
+    if (/^\/calendrier(?:\/|$)/i.test(route)) return "/matchs";
+    if (/^\/actus(?:\/|$)/i.test(route)) return "/(tabs)/actus";
+    if (route.startsWith("/")) return route;
+  }
+
+  return null;
+}
+
 export default function PushGateway() {
   const { admin, isAdmin } = useAdmin();
   const email = admin?.email ?? null;
+  const handledRequestIdsRef = useRef(new Set<string>());
 
   useEffect(() => {
     let mounted = true;
@@ -96,25 +147,52 @@ export default function PushGateway() {
       }
     })();
 
+    return () => {
+      mounted = false;
+    };
+  }, [isAdmin, email]);
+
+  useEffect(() => {
+    const openFromResponse = (response: Notifications.NotificationResponse | null) => {
+      if (!response) return;
+
+      const reqId = response.notification.request.identifier;
+      if (reqId && handledRequestIdsRef.current.has(reqId)) return;
+      if (reqId) handledRequestIdsRef.current.add(reqId);
+
+      console.log("🧭 Action notif:", JSON.stringify(response, null, 2));
+      const data = response.notification.request.content.data;
+      const target = resolvePushTarget(data);
+
+      if (!target) return;
+
+      try {
+        router.push(target as any);
+        (Notifications as any).clearLastNotificationResponseAsync?.().catch(() => {});
+      } catch (e) {
+        console.warn("⚠️ Navigation notif impossible:", target, e);
+      }
+    };
+
+    // Cas app fermée: ouverture via tap sur notif
+    Notifications.getLastNotificationResponseAsync()
+      .then(openFromResponse)
+      .catch((e) => console.warn("⚠️ getLastNotificationResponseAsync error:", e));
+
     // Listeners (foreground + réponse)
     const subReceived = Notifications.addNotificationReceivedListener((n) => {
       console.log("🔔 Notif reçue (foreground):", JSON.stringify(n, null, 2));
     });
-    const subResponse = Notifications.addNotificationResponseReceivedListener(
-      (response) => {
-        console.log("🧭 Action notif:", JSON.stringify(response, null, 2));
-        const route = response?.notification?.request?.content?.data?.route;
-        // TIP: si tu utilises expo-router:
-        // if (route) router.push(route);
-      }
-    );
+
+    const subResponse = Notifications.addNotificationResponseReceivedListener((response) => {
+      openFromResponse(response);
+    });
 
     return () => {
-      mounted = false;
       subReceived.remove();
       subResponse.remove();
     };
-  }, [isAdmin, email]);
+  }, []);
 
   return null;
 }

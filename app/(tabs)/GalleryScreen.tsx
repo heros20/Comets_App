@@ -19,6 +19,7 @@ import {
   View,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
+import { sortGalleryNewest } from "../lib/gallerySort";
 
 const logoComets = require("../../assets/images/iconComets.png");
 const GALLERY_API = "https://les-comets-honfleur.vercel.app/api/gallery";
@@ -27,7 +28,7 @@ type GalleryItem = {
   id?: number | string;
   url: string;
   legend?: string | null;
-  created_at?: string;
+  created_at?: string | null;
 };
 
 export default function GalleryScreen() {
@@ -58,7 +59,7 @@ export default function GalleryScreen() {
       try {
         const r = await fetch(GALLERY_API);
         const data = await r.json();
-        setGallery(Array.isArray(data) ? data : []);
+        setGallery(Array.isArray(data) ? sortGalleryNewest(data as GalleryItem[]) : []);
       } catch (e) {
         setGallery([]);
       } finally {

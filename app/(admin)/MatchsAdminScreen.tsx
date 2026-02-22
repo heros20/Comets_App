@@ -54,8 +54,8 @@ async function apiTry<T>(base: string, path: string, init?: RequestInit): Promis
 // ⚡ Un seul chemin, mais on “race” les 2 hosts pour minimiser la latence perçue
 async function apiGetFastestHost<T>(path: string): Promise<T> {
   return await Promise.race([
-    apiTry<T>(PRIMARY_API, path, { method: "GET" }),
-    apiTry<T>(FALLBACK_API, path, { method: "GET" }),
+    apiTry<T>(PRIMARY_API, path, { method: "GET", credentials: "include" }),
+    apiTry<T>(FALLBACK_API, path, { method: "GET", credentials: "include" }),
   ]);
 }
 
@@ -71,6 +71,11 @@ type ApiItem = {
   note: string | null;
   count: number;
   participants: Participant[];
+  non_count?: number;
+  non_participants?: Participant[];
+  pending_count?: number;
+  pending_participants?: Participant[];
+  eligible_count?: number;
   categorie?: string | null;
 };
 type ApiResp = { items: ApiItem[] };
@@ -85,6 +90,11 @@ type AdminMatchItem = {
   note: string | null;
   count: number;
   participants: Participant[];
+  non_count: number;
+  non_participants: Participant[];
+  pending_count: number;
+  pending_participants: Participant[];
+  eligible_count: number;
   categorie: Category;
 };
 
@@ -134,6 +144,11 @@ export default function MatchsAdminScreen() {
       note: m.note ?? null,
       count: m.count ?? 0,
       participants: Array.isArray(m.participants) ? m.participants : [],
+      non_count: Number(m.non_count ?? 0),
+      non_participants: Array.isArray(m.non_participants) ? m.non_participants : [],
+      pending_count: Number(m.pending_count ?? 0),
+      pending_participants: Array.isArray(m.pending_participants) ? m.pending_participants : [],
+      eligible_count: Number(m.eligible_count ?? 0),
       categorie: normalizeCategory(m.categorie),
     }));
     setItems(normalized);
@@ -167,6 +182,21 @@ export default function MatchsAdminScreen() {
       setRefreshing(false);
     }
   }, [hydrate]);
+
+  // comptage par catégorie
+  const categoryCounts = useMemo(() => {
+    const base = { Seniors: 0, "15U": 0, "12U": 0 } as Record<Category, number>;
+    items.forEach((it) => {
+      const cat = it.categorie;
+      if (base[cat] !== undefined) base[cat] += 1;
+    });
+    return base;
+  }, [items]);
+
+  // filtrage par onglet
+  const filteredItems = useMemo(() => {
+    return items.filter((it) => it.categorie === catFilter);
+  }, [items, catFilter]);
 
   if (!isAdmin) {
     return (
@@ -252,21 +282,6 @@ export default function MatchsAdminScreen() {
     </View>
   );
 
-  // comptage par catégorie
-  const categoryCounts = useMemo(() => {
-    const base = { Seniors: 0, "15U": 0, "12U": 0 } as Record<Category, number>;
-    items.forEach((it) => {
-      const cat = it.categorie;
-      if (base[cat] !== undefined) base[cat] += 1;
-    });
-    return base;
-  }, [items]);
-
-  // filtrage par onglet
-  const filteredItems = useMemo(() => {
-    return items.filter((it) => it.categorie === catFilter);
-  }, [items, catFilter]);
-
   const ItemCard = ({ it }: { it: AdminMatchItem }) => {
     const isOpen = !!expanded[it.match_id];
     return (
@@ -281,33 +296,87 @@ export default function MatchsAdminScreen() {
             {!!it.note && <Text style={styles.noteTxt}>{it.note}</Text>}
           </View>
 
-          <View style={styles.countBadge}>
-            <Icon name="people-outline" size={16} color="#FF8200" />
-            <Text style={styles.countTxt}>{it.count}</Text>
+          <View style={styles.countStack}>
+            <View style={styles.countBadgeYes}>
+              <Text style={styles.countBadgeTxt}>
+                {it.count} participe{it.count > 1 ? "nt" : ""}
+              </Text>
+            </View>
+            <View style={styles.countBadgeNo}>
+              <Text style={styles.countBadgeTxtMuted}>
+                {it.non_count} ne participe{it.non_count > 1 ? "nt" : ""} pas
+              </Text>
+            </View>
+            <View style={styles.countBadgePending}>
+              <Text style={styles.countBadgeTxtPending}>
+                {it.pending_count} en attente
+              </Text>
+            </View>
           </View>
         </View>
 
         <TouchableOpacity onPress={() => toggle(it.match_id)} activeOpacity={0.9} style={styles.toggleBtn}>
           <Text style={styles.toggleTxt}>
-            {isOpen ? "Masquer les participants" : "Voir les participants"}
+            {isOpen ? "Masquer les listes" : "Voir les listes"}
           </Text>
           <Icon name={isOpen ? "chevron-up" : "chevron-down"} size={18} color="#fff" />
         </TouchableOpacity>
 
         {isOpen && (
           <View style={styles.participantsWrap}>
-            {it.participants.length === 0 ? (
-              <Text style={styles.emptyTxt}>Aucun inscrit pour le moment.</Text>
-            ) : (
-              it.participants.map((p) => (
-                <View key={p.id} style={styles.participantRow}>
-                  <Icon name="person-circle-outline" size={18} color="#cfd3db" />
-                  <Text style={styles.participantName}>
-                    {p.first_name || "—"} {p.last_name || ""}
-                  </Text>
-                </View>
-              ))
-            )}
+            <View style={styles.sectionBoxYes}>
+              <Text style={styles.sectionTitleYes}>
+                Participants ({it.count}/{it.eligible_count})
+              </Text>
+              {it.participants.length === 0 ? (
+                <Text style={styles.emptyTxt}>Aucun inscrit pour le moment.</Text>
+              ) : (
+                it.participants.map((p) => (
+                  <View key={`yes-${it.match_id}-${p.id}`} style={styles.participantRow}>
+                    <Icon name="person-circle-outline" size={18} color="#cfd3db" />
+                    <Text style={styles.participantName}>
+                      {p.first_name || "-"} {p.last_name || ""}
+                    </Text>
+                  </View>
+                ))
+              )}
+            </View>
+
+            <View style={styles.sectionBoxNo}>
+              <Text style={styles.sectionTitleNo}>
+                Ne participent pas ({it.non_count}/{it.eligible_count})
+              </Text>
+              {it.non_participants.length === 0 ? (
+                <Text style={styles.emptyTxt}>Aucun membre n&apos;a indiqué qu&apos;il ne participe pas.</Text>
+              ) : (
+                it.non_participants.map((p) => (
+                  <View key={`no-${it.match_id}-${p.id}`} style={styles.participantRow}>
+                    <Icon name="person-circle-outline" size={18} color="#cfd3db" />
+                    <Text style={styles.participantName}>
+                      {p.first_name || "-"} {p.last_name || ""}
+                    </Text>
+                  </View>
+                ))
+              )}
+            </View>
+
+            <View style={styles.sectionBoxPending}>
+              <Text style={styles.sectionTitlePending}>
+                En attente ({it.pending_count}/{it.eligible_count})
+              </Text>
+              {it.pending_participants.length === 0 ? (
+                <Text style={styles.emptyTxt}>Aucun membre en attente.</Text>
+              ) : (
+                it.pending_participants.map((p) => (
+                  <View key={`pending-${it.match_id}-${p.id}`} style={styles.participantRow}>
+                    <Icon name="person-circle-outline" size={18} color="#cfd3db" />
+                    <Text style={styles.participantName}>
+                      {p.first_name || "-"} {p.last_name || ""}
+                    </Text>
+                  </View>
+                ))
+              )}
+            </View>
           </View>
         )}
       </View>
@@ -454,19 +523,38 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
   },
 
-  countBadge: {
+  countStack: {
     marginLeft: "auto",
-    flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-end",
     gap: 6,
-    backgroundColor: "rgba(255,130,0,0.12)",
-    borderWidth: 1,
-    borderColor: "rgba(255,130,0,0.35)",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 12,
   },
-  countTxt: { color: "#FF8200", fontWeight: "900" },
+  countBadgeYes: {
+    backgroundColor: "rgba(16,185,129,0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(16,185,129,0.4)",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  countBadgeNo: {
+    backgroundColor: "rgba(148,163,184,0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.4)",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  countBadgePending: {
+    backgroundColor: "rgba(59,130,246,0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(59,130,246,0.4)",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  countBadgeTxt: { color: "#10B981", fontWeight: "900", fontSize: 11.5 },
+  countBadgeTxtMuted: { color: "#cbd5e1", fontWeight: "900", fontSize: 11.5 },
+  countBadgeTxtPending: { color: "#93c5fd", fontWeight: "900", fontSize: 11.5 },
 
   toggleBtn: {
     marginTop: 10,
@@ -483,6 +571,33 @@ const styles = StyleSheet.create({
   toggleTxt: { color: "#fff", fontWeight: "800" },
 
   participantsWrap: { marginTop: 10, gap: 8 },
+  sectionBoxYes: {
+    backgroundColor: "rgba(16,185,129,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(16,185,129,0.28)",
+    borderRadius: 12,
+    padding: 10,
+    gap: 8,
+  },
+  sectionBoxNo: {
+    backgroundColor: "rgba(148,163,184,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.28)",
+    borderRadius: 12,
+    padding: 10,
+    gap: 8,
+  },
+  sectionBoxPending: {
+    backgroundColor: "rgba(59,130,246,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(59,130,246,0.28)",
+    borderRadius: 12,
+    padding: 10,
+    gap: 8,
+  },
+  sectionTitleYes: { color: "#6ee7b7", fontWeight: "900", fontSize: 12, textTransform: "uppercase" },
+  sectionTitleNo: { color: "#cbd5e1", fontWeight: "900", fontSize: 12, textTransform: "uppercase" },
+  sectionTitlePending: { color: "#93c5fd", fontWeight: "900", fontSize: 12, textTransform: "uppercase" },
   participantRow: {
     flexDirection: "row",
     alignItems: "center",

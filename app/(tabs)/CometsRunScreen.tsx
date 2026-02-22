@@ -35,6 +35,13 @@ try { Haptics = require("expo-haptics"); } catch {}
 let NavigationBar: any = null;
 try { NavigationBar = require("expo-navigation-bar"); } catch {}
 
+const PRIMARY_API =
+  process.env.EXPO_PUBLIC_API_URL ??
+  (__DEV__ ? "http://10.0.2.2:3000" : "https://les-comets-honfleur.vercel.app");
+const FALLBACK_API = "https://les-comets-honfleur.vercel.app";
+const COMETS_RUN_OVERTAKE_PATH = "/api/notifications/comets-run-overtake";
+const PUSH_COMETS_RUN_SECRET = process.env.EXPO_PUBLIC_PUSH_COMETS_RUN_SECRET || "";
+
 const { width: W0, height: H0 } = Dimensions.get("window");
 const SCREEN_W = Math.max(W0, H0);
 const SCREEN_H_INIT = Math.max(W0, H0);
@@ -242,6 +249,48 @@ function activeMapForScore(score: number): MapName {
   if (score >= MAP_SWITCH_AT.terre_to_jupiter) return "jupiter";
   if (score >= MAP_SWITCH_AT.base_to_terre) return "terre";
   return "base";
+}
+
+function joinUrl(base: string, path: string) {
+  return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+async function notifyCometsRunOvertake(payload: {
+  byAdminId: string;
+  previousBest: number;
+  newBest: number;
+}) {
+  const urls = Array.from(
+    new Set(
+      [PRIMARY_API, FALLBACK_API]
+        .map((base) => String(base ?? "").trim())
+        .filter(Boolean)
+        .map((base) => joinUrl(base, COMETS_RUN_OVERTAKE_PATH)),
+    ),
+  );
+
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(PUSH_COMETS_RUN_SECRET ? { "x-hook-secret": PUSH_COMETS_RUN_SECRET } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) return true;
+
+      const text = await res.text().catch(() => "");
+      console.log("[CometsRun notify] non-ok:", url, res.status, text.slice(0, 200));
+    } catch (e) {
+      console.log("[CometsRun notify] network error:", url, (e as any)?.message ?? e);
+    }
+  }
+
+  return false;
 }
 
 // ================= Component =================
@@ -573,7 +622,8 @@ export default function CometsRunnerScreen() {
       .maybeSingle();
     if (errGet) console.log("get profile error:", errGet.message);
 
-    const newBest = Math.max(finalScore, current?.best_score ?? 0);
+    const previousBest = Math.max(0, Math.floor(Number(current?.best_score ?? 0)));
+    const newBest = Math.max(finalScore, previousBest);
     const { error: errUp } = await supabase.from("game_profiles").upsert({
       admin_id: adminId,
       display_name: adminName,
@@ -582,6 +632,16 @@ export default function CometsRunnerScreen() {
       last_run_at: new Date().toISOString(),
     });
     if (errUp) console.log("upsert profile error:", errUp.message);
+
+    if (!errUp && !errGet && newBest > previousBest) {
+      notifyCometsRunOvertake({
+        byAdminId: adminId,
+        previousBest,
+        newBest,
+      }).catch((e) => {
+        console.log("notify overtake error:", (e as any)?.message ?? e);
+      });
+    }
 
     if (newBest > (best || 0)) {
       setBest(newBest);
@@ -1435,11 +1495,11 @@ function circleCircleCollide(
   {/* 1. Barre compacte */}
   <View style={styles.headerSlimRow}>
     <Pressable
-      onPress={() => (gameState === "running" ? pauseGame() : routerBack())}
+      onPress={routerBack}
       style={styles.iconBtnSlim}
       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
     >
-      <Icon name={gameState === "running" ? "pause" : "chevron-back"} size={18} color="#FF8200" />
+      <Icon name="chevron-back" size={18} color="#FF8200" />
     </Pressable>
 
     <View style={styles.titleRowSlim}>
@@ -1922,7 +1982,7 @@ function circleCircleCollide(
 
 // ---- Helpers de rendu (hors composant) ----
 function renderGroundStripes({ SCREEN_W, GROUND_Y, groundOffsetRef, settings }: any) {
-  const stripes: JSX.Element[] = [];
+  const stripes: React.ReactElement[] = [];
   const stripeSpan = STRIPE_W * 3;
   const offset = -((groundOffsetRef.current % stripeSpan) | 0);
   for (let x = -stripeSpan; x < SCREEN_W + stripeSpan; x += stripeSpan) {
@@ -1946,7 +2006,7 @@ function renderGroundStripes({ SCREEN_W, GROUND_Y, groundOffsetRef, settings }: 
 }
 
 function renderFence({ SCREEN_W, GROUND_Y, fenceOffsetRef, settings }: any) {
-  const posts: JSX.Element[] = [];
+  const posts: React.ReactElement[] = [];
   const span = 52;
   const offset = -((fenceOffsetRef.current % span) | 0);
   for (let x = -span; x < SCREEN_W + span; x += span) {

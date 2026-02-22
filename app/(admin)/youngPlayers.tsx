@@ -489,9 +489,7 @@ export default function YoungPlayersAdminScreen() {
           keyExtractor={(it) => String(it.id)} // ← toujours string
           contentContainerStyle={{ padding: 14, paddingBottom: 30 }}
           ListEmptyComponent={
-            !loading && (
-              <Text style={styles.emptyTxt}>Aucun jeune (12U/15U) pour le moment.</Text>
-            )
+            !loading ? <Text style={styles.emptyTxt}>Aucun jeune (12U/15U) pour le moment.</Text> : null
           }
           renderItem={renderItem}
           refreshControl={

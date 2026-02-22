@@ -1,7 +1,7 @@
 // app/screens/AdminGalleryScreen.tsx
 "use client";
 
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
@@ -22,17 +22,85 @@ import {
   View,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
+import { sortGalleryNewest } from "../lib/gallerySort";
 import { useAdmin } from "../../contexts/AdminContext";
 import { supabase } from "../../supabase";
 
 const logoComets = require("../../assets/images/iconComets.png");
 
 type GalleryItem = {
-  id: number;
+  id: number | string;
   url: string;
   legend: string | null;
-  created_at: string;
+  created_at?: string | null;
 };
+
+const PRIMARY_API =
+  process.env.EXPO_PUBLIC_API_URL ??
+  (__DEV__ ? "http://10.0.2.2:3000" : "https://les-comets-honfleur.vercel.app");
+const FALLBACK_API = "https://les-comets-honfleur.vercel.app";
+
+type GalleryCreatePayload = {
+  url: string;
+  legend?: string;
+};
+
+type GalleryFetchResponse = GalleryItem[] | { error?: string };
+
+function trimSlash(s: string) {
+  return s.replace(/\/+$/, "");
+}
+
+async function fetchWithTimeout(url: string, init?: RequestInit, ms = 6000) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+async function postGalleryRecord(payload: GalleryCreatePayload) {
+  const doPost = async (base: string) => {
+    const res = await fetchWithTimeout(`${trimSlash(base)}/api/gallery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(payload),
+    });
+    const json: any = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(json?.error ?? `HTTP ${res.status}`);
+    }
+    return json;
+  };
+
+  try {
+    return await doPost(PRIMARY_API);
+  } catch (e) {
+    if (trimSlash(PRIMARY_API) === trimSlash(FALLBACK_API)) throw e;
+    return await doPost(FALLBACK_API);
+  }
+}
+
+async function fetchGalleryRecords() {
+  const doGet = async (base: string): Promise<GalleryItem[]> => {
+    const res = await fetchWithTimeout(`${trimSlash(base)}/api/gallery`, { method: "GET" });
+    const json: GalleryFetchResponse = await res.json().catch(() => []);
+    if (!res.ok) {
+      throw new Error((json as any)?.error ?? `HTTP ${res.status}`);
+    }
+    return Array.isArray(json) ? (json as GalleryItem[]) : [];
+  };
+
+  try {
+    return await doGet(PRIMARY_API);
+  } catch (e) {
+    if (trimSlash(PRIMARY_API) === trimSlash(FALLBACK_API)) throw e;
+    return await doGet(FALLBACK_API);
+  }
+}
 
 // ---- Helpers compat ----
 function base64ToUint8Array(base64: string) {
@@ -85,12 +153,15 @@ export default function AdminGalleryScreen({ navigation }: any) {
 
   async function fetchGallery() {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("gallery")
-      .select("*")
-      .order("created_at", { ascending: false });
-    if (!error && data) setGallery(data);
-    setLoading(false);
+    try {
+      const rows = await fetchGalleryRecords();
+      setGallery(sortGalleryNewest(rows));
+    } catch (e) {
+      console.log("fetch_gallery_error(AdminGalleryScreen):", e);
+      setGallery([]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -145,15 +216,16 @@ export default function AdminGalleryScreen({ navigation }: any) {
         });
       if (uploadErr) throw uploadErr;
 
-      // 7) URL publique + insert DB
+      // 7) URL publique + insert via API site (declenche push galerie)
       const { data: pub } = supabase.storage.from("news-images").getPublicUrl(fileName);
       const publicUrl = pub?.publicUrl;
       if (!publicUrl) throw new Error("URL de l'image introuvable.");
 
-      const { error: insertErr } = await supabase
-        .from("gallery")
-        .insert([{ url: publicUrl, legend }]);
-      if (insertErr) throw insertErr;
+      const trimmedLegend = legend.trim();
+      const payload: GalleryCreatePayload = trimmedLegend
+        ? { url: publicUrl, legend: trimmedLegend }
+        : { url: publicUrl };
+      await postGalleryRecord(payload);
 
       setLegend("");
       await fetchGallery();
@@ -277,7 +349,15 @@ export default function AdminGalleryScreen({ navigation }: any) {
               {!!item.legend && <Text style={styles.legend}>{item.legend}</Text>}
               <TouchableOpacity
                 style={[styles.actionBtn, { backgroundColor: "#E53935", alignSelf: "flex-end", marginTop: 8 }]}
-                onPress={() => handleDeleteImage(item.id, item.url)}
+                onPress={() => {
+                  const numericId =
+                    typeof item.id === "number" ? item.id : Number(item.id);
+                  if (!Number.isFinite(numericId)) {
+                    Alert.alert("Erreur", "Impossible de supprimer: identifiant invalide.");
+                    return;
+                  }
+                  handleDeleteImage(numericId, item.url);
+                }}
                 activeOpacity={0.9}
                 disabled={uploading}
               >

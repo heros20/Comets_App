@@ -63,7 +63,7 @@ function computeBadgeFromCount(count: number) {
   return { label: tier.label, key: tier.key as TierKey, color: tier.color, nextAt: next?.min ?? null, progress };
 }
 
-function normalizeName(str: string) {
+function normalizeName(str?: string | null) {
   return (str || "")
     .toString()
     .normalize("NFD")
@@ -214,12 +214,14 @@ export default function ProfilPlayerScreen() {
         ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
         : { "Content-Type": "application/json" };
 
-      // Ne pas remettre profile Ã  null avant dâ€™avoir tout reÃ§u
+      const requestInit: RequestInit = { headers, credentials: "include" };
+
+      // Ne pas remettre profile à null avant d'avoir tout reçu
       const [userRes, playersRes, cotisRes, youngRes] = await Promise.all([
-        fetch("https://les-comets-honfleur.vercel.app/api/me", { headers }),
-        fetch("https://les-comets-honfleur.vercel.app/api/players", { headers }),
-        fetch("https://les-comets-honfleur.vercel.app/api/cotisations", { headers }),
-        fetch("https://les-comets-honfleur.vercel.app/api/young_players", { headers }),
+        fetch("https://les-comets-honfleur.vercel.app/api/me", requestInit),
+        fetch("https://les-comets-honfleur.vercel.app/api/players", requestInit),
+        fetch("https://les-comets-honfleur.vercel.app/api/cotisations", requestInit),
+        fetch("https://les-comets-honfleur.vercel.app/api/young_players", requestInit),
       ]);
 
       const safeJson = async (r: Response) => {
@@ -256,6 +258,18 @@ export default function ProfilPlayerScreen() {
         } else if (typeof admin?.participations === "number") {
           setParticipations(admin.participations);
         }
+      } else {
+        // Garde un minimum d'infos visibles même si /api/me répond 401/404
+        setForm((prev: any) => ({
+          email: prev?.email || admin?.email || "",
+          first_name: prev?.first_name || admin?.first_name || "",
+          last_name: prev?.last_name || admin?.last_name || "",
+          date_naissance_fr: prev?.date_naissance_fr || "",
+          position: prev?.position || "",
+          numero_maillot: prev?.numero_maillot || "",
+          categorie: prev?.categorie || "",
+          player_link: prev?.player_link || "",
+        }));
       }
 
       if (playersRes.ok) setPlayers(playersJson || []);
@@ -270,7 +284,7 @@ export default function ProfilPlayerScreen() {
     }
   };
 
-  // === Lien FFBS (dâ€™aprÃ¨s players)
+  // === Lien FFBS (d'après players)
   const ffbsLink = useMemo(() => {
     const f = profile?.first_name?.trim().toLowerCase();
     const l = profile?.last_name?.trim().toLowerCase();
@@ -338,9 +352,8 @@ export default function ProfilPlayerScreen() {
       }
 
       const token = await ensureSession();
-      const headers = token
-        ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
-        : { "Content-Type": "application/json" };
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers.Authorization = `Bearer ${token}`;
 
       const body: any = {
         first_name: form.first_name,
@@ -353,6 +366,7 @@ export default function ProfilPlayerScreen() {
       const res = await fetch("https://les-comets-honfleur.vercel.app/api/me", {
         method: "PATCH",
         headers,
+        credentials: "include",
         body: JSON.stringify(body),
       });
       const json = await res.json();
@@ -406,13 +420,13 @@ export default function ProfilPlayerScreen() {
       }
 
       const token = await ensureSession();
-      const headers = token
-        ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
-        : { "Content-Type": "application/json" };
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers.Authorization = `Bearer ${token}`;
 
       const res = await fetch("https://les-comets-honfleur.vercel.app/api/me", {
         method: "PATCH",
         headers,
+        credentials: "include",
         body: JSON.stringify({ oldPassword, password }),
       });
       const json = await res.json();
@@ -466,8 +480,9 @@ export default function ProfilPlayerScreen() {
           onPress: async () => {
             try {
               const token = await ensureSession();
-              const headers = token ? { Authorization: `Bearer ${token}` } : {};
-              await fetch("https://les-comets-honfleur.vercel.app/api/me", { method: "DELETE", headers });
+              const headers: Record<string, string> = {};
+              if (token) headers.Authorization = `Bearer ${token}`;
+              await fetch("https://les-comets-honfleur.vercel.app/api/me", { method: "DELETE", headers, credentials: "include" });
             } catch {}
             logout();
           },
@@ -1457,3 +1472,7 @@ const styles = StyleSheet.create({
   },
   btnDangerOutlineText: { color: "#ff6b6b", fontWeight: "900" },
 });
+
+
+
+

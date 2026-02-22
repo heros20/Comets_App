@@ -2,7 +2,7 @@
 "use client";
 
 import { Picker } from "@react-native-picker/picker";
-import * as ExpoFileSystem from "expo-file-system";
+import * as ExpoFileSystem from "expo-file-system/legacy";
 import * as ExpoImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import React, { useCallback, useEffect, useState } from "react";
@@ -607,6 +607,13 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   label: { color: "#c7cad1", fontWeight: "800", marginBottom: 6 },
+  pickerWrap: {
+    backgroundColor: "#fff",
+    borderColor: "#FFD197",
+    borderWidth: 1.2,
+    borderRadius: 12,
+    overflow: "hidden",
+  },
   input: {
     backgroundColor: "#fff",
     borderColor: "#FFD197",

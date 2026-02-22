@@ -18,7 +18,8 @@ import { useAdmin } from "../../contexts/AdminContext";
 
 const logoComets = require("../../assets/images/iconComets.png");
 
-type AdminLink = { label: string; icon: string; route: string };
+type AdminRoute = Parameters<typeof router.push>[0];
+type AdminLink = { label: string; icon: string; route: AdminRoute };
 
 // Messagerie seule
 const adminLinksMessaging: AdminLink[] = [

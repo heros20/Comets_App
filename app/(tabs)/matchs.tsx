@@ -87,7 +87,7 @@ async function apiTry<T>(
   init?: RequestInit,
 ): Promise<T> {
   const url = `${base}${path}`;
-  const res = await fetchWithTimeout(url, init);
+  const res = await fetchWithTimeout(url, { credentials: "include", ...(init ?? {}) });
   let json: any = null;
   try {
     json = await res.json();
@@ -212,7 +212,7 @@ type PlannedGame = {
   note?: string | null;
   categorie?: "Seniors" | "15U" | "12U";
 };
-type ParticipationsGET = { matchIds: string[] };
+type ParticipationsGET = { matchIds: string[]; declinedMatchIds?: string[] };
 type ParticipatePOST = { ok: boolean; participations: number };
 type Eligibility = {
   eligible: boolean | null;
@@ -221,7 +221,6 @@ type Eligibility = {
 
 // ================== Local storage ==================
 const storageKey = (adminId: string | number) => `comets:joined:${adminId}`;
-const TTL_MS = 10 * 60 * 1000;
 type JoinedCache = { map: Record<string, boolean>; ts: number };
 
 async function readJoinedFromStorage(
@@ -454,6 +453,7 @@ export default function MatchsScreen() {
   );
 
   const [joined, setJoined] = useState<Record<string, boolean>>({});
+  const [declined, setDeclined] = useState<Record<string, boolean>>({});
   const [posting, setPosting] = useState<Record<string, boolean>>({});
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [hydratingJoined, setHydratingJoined] = useState(false);
@@ -522,11 +522,11 @@ export default function MatchsScreen() {
     if (!admin?.id) return;
     const local = await readJoinedFromStorage(admin.id);
     if (local?.map) setJoined(local.map);
-    if (local && Date.now() - local.ts < TTL_MS) return;
 
     setHydratingJoined(true);
     try {
       let apiMap: Record<string, boolean> = {};
+      let apiDeclinedMap: Record<string, boolean> = {};
       try {
         const res = await apiGet<ParticipationsGET>(
           `/api/matches/participations?adminId=${admin.id}`,
@@ -534,13 +534,19 @@ export default function MatchsScreen() {
         (res.matchIds || []).forEach((mid) => {
           apiMap[String(mid)] = true;
         });
+        (res.declinedMatchIds || []).forEach((mid) => {
+          apiDeclinedMap[String(mid)] = true;
+        });
       } catch {}
       const merged: Record<string, boolean> = {
         ...(local?.map || {}),
         ...(apiMap || {}),
       };
       setJoined(merged);
+      setDeclined(apiDeclinedMap);
       await writeJoinedToStorage(admin.id, merged);
+    } catch {
+      setDeclined({});
     } finally {
       setHydratingJoined(false);
     }
@@ -552,6 +558,8 @@ export default function MatchsScreen() {
       (async () => {
         if (!admin?.id) {
           setElig({ eligible: null, category: null });
+          setJoined({});
+          setDeclined({});
           return;
         }
         try {
@@ -699,6 +707,11 @@ export default function MatchsScreen() {
         writeJoinedToStorage(admin.id, upd);
         return upd;
       });
+      setDeclined((d) => {
+        const upd = { ...d };
+        delete upd[mid];
+        return upd;
+      });
       // incrémente le compteur local
       setCounts((c) => ({ ...c, [mid]: (c[mid] ?? 0) + 1 }));
 
@@ -723,43 +736,55 @@ export default function MatchsScreen() {
       setPosting((p) => ({ ...p, [mid]: false }));
     }
   }
-
-  // Unparticipate (désinscription)
+  // Unparticipate / mark as not participating
   async function handleUnparticipate(match: PlannedGame) {
     if (!admin?.id) {
-      Alert.alert("Connexion requise", "Connecte-toi pour te désinscrire.");
+      Alert.alert("Connexion requise", "Connecte-toi pour te desinscrire.");
       return;
     }
-    const mid = String(match.id);
-    if (!joined[mid]) return;
 
-    Alert.alert("Me désinscrire", "Tu te désinscris de ce match ?", [
-      { text: "Annuler", style: "cancel" },
-      {
-        text: "Oui",
-        style: "destructive",
-        onPress: async () => {
-          setPosting((p) => ({ ...p, [mid]: true }));
-          try {
-            await apiPost<{ ok: boolean }>(
-              `/api/matches/${mid}/unparticipate`,
-              { adminId: admin.id },
-            );
-            setJoined((j) => {
-              const upd = { ...j };
-              delete upd[mid];
-              writeJoinedToStorage(admin.id, upd);
-              return upd;
-            });
-            setCounts((c) => ({ ...c, [mid]: Math.max(0, (c[mid] ?? 1) - 1) }));
-          } catch (e: any) {
-            Alert.alert("Oups", e?.message ?? "Impossible de te désinscrire");
-          } finally {
-            setPosting((p) => ({ ...p, [mid]: false }));
-          }
+    const mid = String(match.id);
+    const wasJoined = !!joined[mid];
+    const wasDeclined = !!declined[mid];
+    if (wasDeclined) return;
+
+    const submit = async () => {
+      setPosting((p) => ({ ...p, [mid]: true }));
+      try {
+        await apiPost<{ ok: boolean }>(`/api/matches/${mid}/unparticipate`, {
+          adminId: admin.id,
+        });
+        setJoined((j) => {
+          const upd = { ...j };
+          delete upd[mid];
+          writeJoinedToStorage(admin.id, upd);
+          return upd;
+        });
+        setDeclined((d) => ({ ...d, [mid]: true }));
+        setCounts((c) => ({
+          ...c,
+          [mid]: wasJoined ? Math.max(0, (c[mid] ?? 1) - 1) : c[mid] ?? 0,
+        }));
+      } catch (e: any) {
+        Alert.alert("Oups", e?.message ?? "Impossible de mettre a jour ta reponse");
+      } finally {
+        setPosting((p) => ({ ...p, [mid]: false }));
+      }
+    };
+
+    if (wasJoined) {
+      Alert.alert("Me desinscrire", "Tu te desinscris de ce match ?", [
+        { text: "Annuler", style: "cancel" },
+        {
+          text: "Oui",
+          style: "destructive",
+          onPress: submit,
         },
-      },
-    ]);
+      ]);
+      return;
+    }
+
+    await submit();
   }
 
   function getOpponentLogo(opponent: string): any {
@@ -770,14 +795,23 @@ export default function MatchsScreen() {
   const UpcomingCard = ({ item }: { item: PlannedGame }) => {
     const mid = String(item.id);
     const isJoined = !!joined[mid];
+    const isDeclined = !!declined[mid];
     const isPosting = !!posting[mid];
 
     const catOk =
       !item.categorie ||
       (elig.category !== null && item.categorie === elig.category);
-    const joinDisabled =
-      isJoined || isPosting || !(elig.eligible === true && catOk);
+    const canRespond = elig.eligible === true && catOk;
+    const joinDisabled = isJoined || isPosting || !canRespond;
+    const leaveDisabled = isDeclined || isPosting || !canRespond;
     const count = counts[mid] ?? 0;
+    const stateLabel = isJoined
+      ? "Participe"
+      : isDeclined
+        ? "Ne participe pas"
+        : "En attente";
+    const joinOpacity = joinDisabled ? (isJoined ? 0.45 : 0.7) : 1;
+    const declineOpacity = leaveDisabled ? (isDeclined ? 0.45 : 0.7) : 1;
 
     // Raison(s) claire(s) de non inscription
     const reasons: string[] = [];
@@ -795,7 +829,10 @@ export default function MatchsScreen() {
         );
       }
       if (isJoined) {
-        reasons.push("Tu es déjà inscrit à ce match ✅");
+        reasons.push("Tu es deja inscrit a ce match.");
+      }
+      if (isDeclined) {
+        reasons.push("Tu as deja indique que tu ne participes pas.");
       }
     }
 
@@ -804,13 +841,16 @@ export default function MatchsScreen() {
         <View style={styles.cardTopRow}>
           <Text style={styles.matchBadgeUpcoming}>À venir</Text>
 
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <View style={styles.cardTopMetaRow}>
             {/* Compteur d'inscrits bien visible */}
             <View style={styles.countPill}>
               <Icon name="people-outline" size={14} color={COLORS.slateDark} />
               <Text style={styles.countPillTxt}>
                 {count} inscrit{count > 1 ? "s" : ""}
               </Text>
+            </View>
+            <View style={styles.statePill}>
+              <Text style={styles.statePillTxt}>{stateLabel}</Text>
             </View>
             <Text style={styles.matchDate}>{formatDateFr(item.date)}</Text>
           </View>
@@ -966,50 +1006,52 @@ export default function MatchsScreen() {
           />
           <Text style={styles.calBtnTxt}>Ajouter au calendrier</Text>
         </TouchableOpacity>
+        {/* Boutons participation / non participation */}
+        <TouchableOpacity
+          disabled={joinDisabled}
+          accessibilityState={{ disabled: joinDisabled }}
+          onPress={() => handleParticipate(item)}
+          style={[
+            styles.joinBtn,
+            isJoined ? styles.actionBtnCurrent : null,
+            {
+              opacity: joinOpacity,
+              marginTop: 10,
+            },
+          ]}
+          activeOpacity={0.9}
+        >
+          <Icon
+            name="baseball-outline"
+            size={18}
+            color={isJoined ? COLORS.textMuted : "#fff"}
+            style={{ marginRight: 7 }}
+          />
+          <Text style={[styles.joinBtnTxt, isJoined ? styles.actionBtnCurrentTxt : null]}>
+            {isPosting ? "Inscription..." : "Je participe"}
+          </Text>
+        </TouchableOpacity>
 
-        {/* Boutons participation / désinscription */}
-        {!isJoined ? (
-          <TouchableOpacity
-            disabled={joinDisabled}
-            accessibilityState={{ disabled: joinDisabled }}
-            onPress={() => handleParticipate(item)}
-            style={[
-              styles.joinBtn,
-              {
-                opacity: joinDisabled ? 0.7 : 1,
-                marginTop: 10,
-              },
-            ]}
-            activeOpacity={0.9}
-          >
-            <Icon
-              name="baseball-outline"
-              size={18}
-              color="#fff"
-              style={{ marginRight: 7 }}
-            />
-            <Text style={styles.joinBtnTxt}>
-              {isPosting ? "Inscription…" : "Je participe"}
-            </Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            onPress={() => handleUnparticipate(item)}
-            disabled={isPosting}
-            style={[styles.unsubscribeBtn, { opacity: isPosting ? 0.7 : 1 }]}
-            activeOpacity={0.9}
-          >
-            <Icon
-              name="close-circle-outline"
-              size={18}
-              color="#fff"
-              style={{ marginRight: 7 }}
-            />
-            <Text style={styles.joinBtnTxt}>
-              {isPosting ? "Désinscription…" : "Me désinscrire"}
-            </Text>
-          </TouchableOpacity>
-        )}
+        <TouchableOpacity
+          onPress={() => handleUnparticipate(item)}
+          disabled={leaveDisabled}
+          style={[
+            styles.unsubscribeBtn,
+            isDeclined ? styles.actionBtnCurrent : null,
+            { opacity: declineOpacity },
+          ]}
+          activeOpacity={0.9}
+        >
+          <Icon
+            name="close-circle-outline"
+            size={18}
+            color={isDeclined ? COLORS.textMuted : "#fff"}
+            style={{ marginRight: 7 }}
+          />
+          <Text style={[styles.joinBtnTxt, isDeclined ? styles.actionBtnCurrentTxt : null]}>
+            {isPosting ? "Mise a jour..." : "Je ne participe pas"}
+          </Text>
+        </TouchableOpacity>
       </View>
     );
   };
@@ -1395,6 +1437,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: 8,
+  },
+  cardTopMetaRow: {
+    flex: 1,
+    minWidth: 0,
+    marginLeft: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    flexWrap: "wrap",
+    gap: 8,
   },
 
   matchBadgeUpcoming: {
@@ -1419,7 +1472,13 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     fontSize: 12.5,
   },
-  matchDate: { color: "#d5d8df", fontWeight: "700", fontSize: 13.5 },
+  matchDate: {
+    color: "#d5d8df",
+    fontWeight: "700",
+    fontSize: 13.5,
+    flexShrink: 1,
+    textAlign: "right",
+  },
 
   venueRow: {
     flexDirection: "row",
@@ -1543,6 +1602,14 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 10,
   },
+  actionBtnCurrent: {
+    backgroundColor: "rgba(148,163,184,0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.35)",
+  },
+  actionBtnCurrentTxt: {
+    color: "#cbd5e1",
+  },
 
   disabledInfo: {
     color: "#9aa0ae",
@@ -1586,6 +1653,19 @@ const styles = StyleSheet.create({
     color: COLORS.slateDark,
     fontWeight: "900",
     fontSize: 12.5,
+  },
+  statePill: {
+    borderWidth: 1,
+    borderColor: "#4b5563",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  statePillTxt: {
+    color: COLORS.text,
+    fontWeight: "800",
+    fontSize: 11.5,
   },
 
   // Bannière d’info — bleu doux

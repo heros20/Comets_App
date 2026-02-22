@@ -21,6 +21,9 @@ import { useAdmin } from "../contexts/AdminContext";
 
 const logoComets = require("../assets/images/iconComets.png");
 
+type AppRoute = Parameters<typeof router.push>[0];
+type NavItem = { label: string; icon: string; route: AppRoute };
+
 async function testLocalNotif() {
   await Notifications.scheduleNotificationAsync({
     content: {
@@ -43,16 +46,16 @@ export default function Accueil() {
   const cardWidth = isNarrow ? windowWidth - 34 : Math.max((windowWidth - 48) / 2, 155);
 
   // Navigation principale
-  const navItems = [
+  const navItems: NavItem[] = [
     { label: "Joueurs", icon: "person-outline" as const, route: "/joueurs" },
     { label: "Matchs", icon: "calendar-outline" as const, route: "/matchs" },
     { label: "Classement", icon: "trophy-outline" as const, route: "/classement" },
     { label: "Actualités", icon: "newspaper-outline" as const, route: "/actus" },
     { label: "Galerie", icon: "images-outline" as const, route: "/GalleryScreen" },
-    ...(isLoggedIn
-      ? [{ label: "Comets Run", icon: "game-controller-outline" as const, route: "/(tabs)/CometsRunScreen" }]
-      : []),
   ];
+  if (isLoggedIn) {
+    navItems.push({ label: "Comets Run", icon: "game-controller-outline" as const, route: "/(tabs)/CometsRunScreen" });
+  }
 
   const handleLogout = async () => {
     await logout();

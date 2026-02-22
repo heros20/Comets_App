@@ -26,7 +26,6 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useAdmin } from '../../contexts/AdminContext';
-import { supabase } from '../../supabase';
 
 const logoComets = require("../../assets/images/iconComets.png");
 
@@ -44,48 +43,28 @@ export default function LoginScreen() {
   const router = useRouter();
   const { login } = useAdmin();
 
-  const handleLogin = async () => {
+    const handleLogin = async () => {
     setLoading(true);
     setError('');
     setDebug('');
-    try {
-      // 1) Login backend (cookie)
-      const res = await fetch('https://les-comets-honfleur.vercel.app/api/login', {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), password }),
-      });
-      const data = await res.json();
-    //  setDebug(`Réponse login: ${JSON.stringify(data)}`);
 
-      if (!res.ok) {
-        setError(data.error || "Identifiants invalides. Essaie encore !");
+    try {
+      const success = await login(email.trim(), password);
+
+      if (!success) {
+        setError("Identifiants invalides. Essaie encore !");
         shake();
       } else {
-        // 2) Connexion contexte mobile (membre)
-        const success = await login(email.trim(), password);
-        if (success) {
-          const { data: { session } } = await supabase.auth.getSession();
-          const access_token = session?.access_token;
-       //   setDebug(`Connexion OK. Token: ${access_token ? access_token.slice(0,12) + '...' : "Aucun"}`);
-
-          // 🔕 PUSH désactivé pour le moment
-          // await registerForPushNotificationsAsync(email.trim(), access_token);
-
-          router.replace("/");
-        } else {
-          setError("Erreur lors de la connexion mobile.");
-          shake();
-        }
+        router.replace("/");
       }
     } catch (e: any) {
-      setError("Erreur réseau. Réessaie plus tard.");
-      setDebug("Erreur réseau: " + (e?.message || "inconnue"));
+      setError("Erreur r�seau. R�essaie plus tard.");
+      setDebug("Erreur r�seau: " + (e?.message || "inconnue"));
       shake();
     }
+
     setLoading(false);
   };
-
   const shake = () => {
     Animated.sequence([
       Animated.timing(shakeAnim, { toValue: 10, duration: 70, useNativeDriver: true }),
@@ -284,3 +263,4 @@ const styles = StyleSheet.create({
   },
   helpTxt: { color: "#FF8200", fontSize: 14, fontWeight: "700", textAlign: "center", textDecorationLine: "underline" },
 });
+
