@@ -3,12 +3,12 @@
 
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LinearGradient } from "expo-linear-gradient";
 import {
   Alert,
   Image,
   Linking,
   Platform,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -18,6 +18,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 import { Picker } from "@react-native-picker/picker";
 import { useAdmin } from "../../contexts/AdminContext";
@@ -28,7 +29,6 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import { Asset } from "expo-asset";
 
-const logoComets = require("../../assets/images/iconComets.png");
 const DOSSIER_MINEUR = require("../../assets/papiers/Mineur-inscription.pdf");
 const DOSSIER_MAJEUR = require("../../assets/papiers/Majeur-inscription.pdf");
 // === Badges ===
@@ -156,6 +156,7 @@ export default function ProfilPlayerScreen() {
   const [form, setForm] = useState<any>({});
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [showSlowLoading, setShowSlowLoading] = useState(false);
 
   // Gamification (profil)
   const [participations, setParticipations] = useState<number>(
@@ -189,8 +190,17 @@ export default function ProfilPlayerScreen() {
     }, [])
   );
 
+  useEffect(() => {
+    if (!loading) {
+      setShowSlowLoading(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowSlowLoading(true), 650);
+    return () => clearTimeout(timer);
+  }, [loading]);
+
   const ensureSession = async () => {
-    // S’assure d’avoir une session valide (évite profil vide si token périmé)
+    // Assure une session valide (evite profil vide si token perime)
     const { data } = await supabase.auth.getSession();
     if (!data?.session) {
       try {
@@ -216,7 +226,7 @@ export default function ProfilPlayerScreen() {
 
       const requestInit: RequestInit = { headers, credentials: "include" };
 
-      // Ne pas remettre profile � null avant d'avoir tout re�u
+      // Ne pas remettre profile à null avant d'avoir tout reçu
       const [userRes, playersRes, cotisRes, youngRes] = await Promise.all([
         fetch("https://les-comets-honfleur.vercel.app/api/me", requestInit),
         fetch("https://les-comets-honfleur.vercel.app/api/players", requestInit),
@@ -259,7 +269,7 @@ export default function ProfilPlayerScreen() {
           setParticipations(admin.participations);
         }
       } else {
-        // Garde un minimum d'infos visibles m�me si /api/me r�pond 401/404
+        // Garde un minimum d'infos visibles même si /api/me répond 401/404
         setForm((prev: any) => ({
           email: prev?.email || admin?.email || "",
           first_name: prev?.first_name || admin?.first_name || "",
@@ -284,7 +294,7 @@ export default function ProfilPlayerScreen() {
     }
   };
 
-  // === Lien FFBS (d'apr�s players)
+  // === Lien FFBS (d'après players)
   const ffbsLink = useMemo(() => {
     const f = profile?.first_name?.trim().toLowerCase();
     const l = profile?.last_name?.trim().toLowerCase();
@@ -324,7 +334,7 @@ export default function ProfilPlayerScreen() {
       const dnFR = (form.date_naissance_fr || "").trim();
       if (dnFR) {
         if (!isValidFRDate(dnFR)) {
-          Alert.alert("Date invalide", "Merci d’entrer une date au format JJ/MM/AAAA.");
+          Alert.alert("Date invalide", "Merci de saisir une date au format JJ/MM/AAAA.");
           setSaving(false);
           return;
         }
@@ -491,7 +501,7 @@ export default function ProfilPlayerScreen() {
     );
   };
 
-  // === COTISATION: logique “payée” étendue avec young_players
+  // === COTISATION: logique "payée" étendue avec young_players
   const hasCotisation = () => {
     const fAdmin = normalizeName(admin?.first_name);
     const lAdmin = normalizeName(admin?.last_name);
@@ -516,7 +526,7 @@ export default function ProfilPlayerScreen() {
     return cotisationOk || playersOk || youngOk;
   };
 
-// ——— Remplace TOUTE la fonction handleAdhesionDownload par ceci :
+// --- Remplace toute la fonction handleAdhesionDownload par ceci :
 
 // Téléchargement/partage d'un PDF local (générique)
 const downloadLocalPdf = async (pdfModule: any, outName: string) => {
@@ -550,7 +560,7 @@ const downloadLocalPdf = async (pdfModule: any, outName: string) => {
     const canShare = await Sharing.isAvailableAsync();
     if (canShare) {
       await Sharing.shareAsync(dest, {
-        dialogTitle: "Documents d’adhésion – Les Comets",
+        dialogTitle: "Documents d’adhésion - Les Comets",
         mimeType: "application/pdf",
         UTI: "com.adobe.pdf",
       });
@@ -568,18 +578,24 @@ const handleDownloadMineur = () =>
 const handleDownloadMajeur = () =>
   downloadLocalPdf(DOSSIER_MAJEUR, "dossier_majeur_les_comets.pdf");
 
+  if (loading && !showSlowLoading)
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: "#18181C" }}>
+        <StatusBar barStyle="light-content" />
+      </SafeAreaView>
+    );
 
   if (loading)
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: "#18181C" }}>
         <StatusBar barStyle="light-content" />
         <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-          <Text style={{ color: "#FF8200", fontWeight: "bold", fontSize: 18 }}>Chargement…</Text>
+          <Text style={{ color: "#FF8200", fontWeight: "bold", fontSize: 18 }}>Chargement...</Text>
         </View>
       </SafeAreaView>
     );
 
-  // ——— Composants UI ———
+  // --- Composants UI ---
   const Coin = ({ size, borderColor, source }: { size: number; borderColor: string; source: any }) => (
     <View
       style={{
@@ -615,96 +631,117 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
         if (id === "edit") setEdit(true);
         else setEdit(false);
       }}
-      style={[styles.tabBtn, active && { backgroundColor: "#FF8200", borderColor: "#FF8200" }]}
+      style={[styles.tabBtn, active && styles.tabBtnActive]}
       activeOpacity={0.9}
     >
-      <Text style={[styles.tabIcon, active && { color: "#fff" }]}>{String(icon)}</Text>
-      <Text style={[styles.tabLabel, active && { color: "#fff" }]}>{label}</Text>
+      <View style={[styles.tabIconWrap, active && styles.tabIconWrapActive]}>
+        <Icon name={icon as any} size={15} color={active ? "#0B0F17" : "#FF9C41"} />
+      </View>
+      <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{label}</Text>
     </TouchableOpacity>
   );
 };
 
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
+    <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" />
 
-      {/* HÉRO */}
+      {/* HERO */}
       <View style={styles.hero}>
-        <View style={styles.heroStripe} />
-        <View style={styles.heroRow}>
-          <TouchableOpacity
-            onPress={() =>
-              // @ts-ignore
-              (navigation as any).canGoBack()
-                ? // @ts-ignore
-                  (navigation as any).goBack()
-                : // @ts-ignore
-                  (navigation as any).navigate("Home")
-            }
-            style={styles.backBtnHero}
-          >
-            <Icon name="chevron-back" size={26} color="#FF8200" />
-          </TouchableOpacity>
-          <Text style={styles.heroTitle}>Mon profil joueur</Text>
-          <View style={{ width: 36 }} />
-        </View>
+        <LinearGradient
+          colors={["#17263D", "#101A2A", "#0B101A"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.heroGradient}
+        >
+          <LinearGradient
+            colors={["rgba(255,130,0,0.24)", "rgba(255,130,0,0)"]}
+            start={{ x: 1, y: 0 }}
+            end={{ x: 0, y: 1 }}
+            style={styles.heroShine}
+          />
 
-        <View style={styles.heroProfileRow}>
-          <View style={styles.heroAvatar}>
-            <Text style={styles.heroAvatarTxt}>
-              {(form.first_name?.[0] || "").toUpperCase()}
-              {(form.last_name?.[0] || "").toUpperCase()}
-            </Text>
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.heroName}>
-              {form.first_name} {form.last_name}
-            </Text>
-            <Text style={styles.heroEmail}>{form.email}</Text>
-            <View style={styles.heroChips}>
-              {(categorieFromAge || profile?.categorie) ? (
-                <View style={[styles.chip, { backgroundColor: "#FFE66D" }]}>
-                  <Text style={[styles.chipTxt, { color: "#8a6a08" }]}>
-                    🏷️ {(categorieFromAge || profile?.categorie) as string}
-                  </Text>
-                </View>
-              ) : null}
+          <View style={styles.heroRow}>
+            <TouchableOpacity
+              onPress={() =>
+                // @ts-ignore
+                (navigation as any).canGoBack()
+                  ? // @ts-ignore
+                    (navigation as any).goBack()
+                  : // @ts-ignore
+                    (navigation as any).navigate("Home")
+              }
+              style={styles.backBtnHero}
+            >
+              <Icon name="chevron-back" size={22} color="#F3F4F6" />
+            </TouchableOpacity>
 
-              {profile?.position ? (
-                <View style={[styles.chip, { backgroundColor: "#D1F3FF" }]}>
-                  <Text style={[styles.chipTxt, { color: "#0C7499" }]}>🧢 {profile.position}</Text>
-                </View>
-              ) : null}
+            <View style={styles.heroHeading}>
+              <Text style={styles.heroEyebrow}>Espace joueur</Text>
+              <Text style={styles.heroTitle}>Mon profil</Text>
+            </View>
 
-              {profile?.numero_maillot ? (
-                <View style={[styles.chip, { backgroundColor: "#FFD7A1" }]}>
-                  <Text style={styles.chipTxt}>🎽 #{profile.numero_maillot}</Text>
-                </View>
-              ) : null}
-
-              {ageComputed !== null ? (
-                <View style={[styles.chip, { backgroundColor: "#FFEDD5" }]}>
-                  <Text style={[styles.chipTxt, { color: "#7C2D12" }]}>🧓 {ageComputed} ans</Text>
-                </View>
-              ) : null}
-
-              {birthFR ? (
-                <View style={[styles.chip, { backgroundColor: "#E0F2FE" }]}>
-                  <Text style={[styles.chipTxt, { color: "#075985" }]}>📅 {birthFR}</Text>
-                </View>
-              ) : null}
+            <View style={styles.heroStatus}>
+              <View style={styles.heroStatusDot} />
+              <Text style={styles.heroStatusText}>Actif</Text>
             </View>
           </View>
-          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
-        </View>
 
-        {/* Onglets */}
-        <View style={styles.tabs}>
-          <Tab id="overview" label="Aperçu" icon="🏠" />
-          <Tab id="edit" label="Éditer" icon="✏️" />
-          <Tab id="security" label="Sécurité" icon="🔒" />
-        </View>
+          <View style={styles.heroProfileRow}>
+            <View style={styles.heroAvatar}>
+              <Text style={styles.heroAvatarTxt}>
+                {(form.first_name?.[0] || "").toUpperCase()}
+                {(form.last_name?.[0] || "").toUpperCase()}
+              </Text>
+            </View>
+            <View style={styles.heroIdentity}>
+              <Text style={styles.heroName}>
+                {form.first_name} {form.last_name}
+              </Text>
+              <Text style={styles.heroEmail}>{form.email}</Text>
+            </View>
+          </View>
+
+          <View style={styles.heroChips}>
+            {(categorieFromAge || profile?.categorie) ? (
+              <View style={[styles.chip, { backgroundColor: "rgba(255,130,0,0.25)", borderColor: "rgba(255,195,130,0.65)" }]}>
+                <Text style={[styles.chipTxt, { color: "#FFE2C2" }]}>Categorie {(categorieFromAge || profile?.categorie) as string}</Text>
+              </View>
+            ) : null}
+
+            {profile?.position ? (
+              <View style={[styles.chip, { backgroundColor: "rgba(59,130,246,0.22)", borderColor: "rgba(147,197,253,0.6)" }]}>
+                <Text style={[styles.chipTxt, { color: "#DBEAFE" }]}>Poste {profile.position}</Text>
+              </View>
+            ) : null}
+
+            {profile?.numero_maillot ? (
+              <View style={[styles.chip, { backgroundColor: "rgba(16,185,129,0.22)", borderColor: "rgba(110,231,183,0.65)" }]}>
+                <Text style={[styles.chipTxt, { color: "#D1FAE5" }]}>Maillot #{profile.numero_maillot}</Text>
+              </View>
+            ) : null}
+
+            {ageComputed !== null ? (
+              <View style={[styles.chip, { backgroundColor: "rgba(244,114,182,0.2)", borderColor: "rgba(251,207,232,0.58)" }]}>
+                <Text style={[styles.chipTxt, { color: "#FCE7F3" }]}>{ageComputed} ans</Text>
+              </View>
+            ) : null}
+
+            {birthFR ? (
+              <View style={[styles.chip, { backgroundColor: "rgba(167,139,250,0.22)", borderColor: "rgba(221,214,254,0.58)" }]}>
+                <Text style={[styles.chipTxt, { color: "#EDE9FE" }]}>Ne le {birthFR}</Text>
+              </View>
+            ) : null}
+          </View>
+
+          {/* Onglets */}
+          <View style={styles.tabs}>
+            <Tab id="overview" label="Aperçu" icon="home-outline" />
+            <Tab id="edit" label="Éditer" icon="create-outline" />
+            <Tab id="security" label="Sécurité" icon="shield-checkmark-outline" />
+          </View>
+        </LinearGradient>
       </View>
 
       {/* CONTENU */}
@@ -830,7 +867,7 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
                     }}
                   >
                     <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 17 }}>
-                      Payer ma cotisation – 120 €
+                      Payer ma cotisation - 120 €
                     </Text>
                   </TouchableOpacity>
                 </>
@@ -848,13 +885,13 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
 
               <TouchableOpacity style={styles.payBtn} onPress={handleDownloadMineur} activeOpacity={0.9}>
                 <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 17 }}>
-                 Dossier d’inscription – Mineur (PDF)
+                 Dossier d’inscription - Mineur (PDF)
                 </Text>
               </TouchableOpacity>
 
               <TouchableOpacity style={[styles.payBtn, { marginTop: 10 }]} onPress={handleDownloadMajeur} activeOpacity={0.9}>
                 <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 17 }}>
-                  Dossier d’inscription – Majeur (PDF)
+                  Dossier d’inscription - Majeur (PDF)
                 </Text>
               </TouchableOpacity>
 
@@ -867,7 +904,7 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
           </>
         )}
 
-        {/* ÉDITER — version moderne (sans mdp) */}
+        {/* ÉDITER - version moderne (sans mdp) */}
         {activeTab === "edit" && (
           <View style={styles.cardModern}>
             <View style={styles.headerModern}>
@@ -949,7 +986,7 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
                   dropdownIconColor="#FF8200"
                   onValueChange={(value) => handleChange("position", value)}
                 >
-                  <Picker.Item label="— Sélectionner —" value="" />
+                  <Picker.Item label="- Sélectionner -" value="" />
                   {POSITIONS.map((p) => (
                     <Picker.Item key={p.value} label={p.label} value={p.value} />
                   ))}
@@ -971,7 +1008,7 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
                     else handleChange("numero_maillot", Number(value));
                   }}
                 >
-                  <Picker.Item label="— Sélectionner —" value="" />
+                  <Picker.Item label="- Sélectionner -" value="" />
                   {Array.from({ length: 99 }, (_, i) => i + 1).map((num) => (
                     <Picker.Item key={num} label={num.toString()} value={num.toString()} />
                   ))}
@@ -1125,157 +1162,206 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
 }
 
 const styles = StyleSheet.create({
-  // HÉRO
-  hero: {
-    backgroundColor: "#11131a",
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: "#1f2230",
-    paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 12 : 22,
+  safe: {
+    flex: 1,
+    backgroundColor: "#0B0F17",
   },
-  heroStripe: {
-    position: "absolute",
-    right: -60,
-    top: -40,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: "rgba(255,130,0,0.10)",
-    transform: [{ rotate: "18deg" }],
+
+  // HERO
+  hero: {
+    marginHorizontal: 10,
+    marginTop: 8,
+    borderRadius: 24,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.34)",
+    backgroundColor: "#101826",
+  },
+  heroGradient: {
+    paddingHorizontal: 14,
+    paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 8 : 12,
+    paddingBottom: 14,
+  },
+  heroShine: {
+    ...StyleSheet.absoluteFillObject,
+    top: 0,
+    bottom: "50%",
   },
   heroRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 12,
-    paddingTop: Platform.OS === "ios" ? 10 : 6,
+    justifyContent: "space-between",
+    gap: 10,
   },
   backBtnHero: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1b1e27",
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "rgba(0,0,0,0.35)",
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "#2a2f3d",
+    borderColor: "rgba(255,255,255,0.3)",
+  },
+  heroHeading: {
+    flex: 1,
+    marginLeft: 2,
+  },
+  heroEyebrow: {
+    color: "#FFD6AB",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1.05,
+    textTransform: "uppercase",
   },
   heroTitle: {
-    flex: 1,
-    textAlign: "center",
-    color: "#FF8200",
-    fontSize: 20,
+    marginTop: 2,
+    color: "#FFFFFF",
+    fontSize: 25,
+    lineHeight: 28,
+    fontWeight: "900",
+  },
+  heroStatus: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(0,0,0,0.34)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.28)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  heroStatusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "#22C55E",
+  },
+  heroStatusText: {
+    color: "#E5E7EB",
     fontWeight: "800",
-    letterSpacing: 1.1,
+    fontSize: 11.5,
   },
   heroProfileRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    gap: 14,
+    marginTop: 12,
+    gap: 12,
   },
   heroAvatar: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
-    backgroundColor: "#18181C",
-    borderWidth: 3,
-    borderColor: "#FF8200",
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "rgba(0,0,0,0.34)",
+    borderWidth: 2,
+    borderColor: "#FFAA58",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
-    elevation: 3,
   },
   heroAvatarTxt: {
-    color: "#FF8200",
+    color: "#FFE4C6",
     fontWeight: "900",
-    fontSize: 22,
-    letterSpacing: 1,
+    fontSize: 21,
+    letterSpacing: 0.8,
+  },
+  heroIdentity: {
+    flex: 1,
   },
   heroName: {
     color: "#fff",
-    fontSize: 18,
-    fontWeight: "800",
-    marginBottom: 2,
+    fontSize: 19,
+    fontWeight: "900",
+    lineHeight: 23,
   },
   heroEmail: {
-    color: "#c7cad1",
-    fontSize: 13,
+    marginTop: 2,
+    color: "#D4D8E0",
+    fontSize: 12.5,
   },
   heroChips: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 6,
-    marginTop: 8,
+    marginTop: 10,
   },
   chip: {
     paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 14,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.25)",
+    backgroundColor: "rgba(0,0,0,0.25)",
   },
   chipTxt: {
     fontWeight: "800",
-    fontSize: 12.5,
-  },
-  heroLogo: {
-    width: 56,
-    height: 56,
-    borderRadius: 14,
-    backgroundColor: "#fff",
-    borderWidth: 2,
-    borderColor: "#FF8200",
+    fontSize: 12,
+    color: "#F3F4F6",
   },
   tabs: {
     flexDirection: "row",
-    paddingHorizontal: 12,
-    paddingTop: 12,
+    marginTop: 12,
     gap: 8,
   },
   tabBtn: {
     flex: 1,
-    backgroundColor: "#141821",
-    borderWidth: 1,
-    borderColor: "#252a38",
-    paddingVertical: 10,
+    minHeight: 44,
     borderRadius: 12,
     alignItems: "center",
-    flexDirection: "row",
     justifyContent: "center",
-    gap: 6,
+    flexDirection: "row",
+    gap: 7,
+    paddingHorizontal: 8,
+    backgroundColor: "rgba(0,0,0,0.3)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.24)",
   },
-  tabIcon: {
-    color: "#FF8200",
-    fontSize: 15,
+  tabBtnActive: {
+    backgroundColor: "#FF8200",
+    borderColor: "#FFB366",
+  },
+  tabIconWrap: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,130,0,0.2)",
+  },
+  tabIconWrapActive: {
+    backgroundColor: "rgba(255,255,255,0.62)",
   },
   tabLabel: {
-    color: "#FF8200",
+    color: "#E5E7EB",
     fontWeight: "800",
-    fontSize: 14,
-    letterSpacing: 0.3,
+    fontSize: 13.5,
+  },
+  tabLabelActive: {
+    color: "#0B0F17",
+    fontWeight: "900",
   },
 
   // BODY
   body: {
-    padding: 14,
-    paddingBottom: 28,
-    backgroundColor: "#0f1014",
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 34,
+    backgroundColor: "#0B0F17",
   },
   card: {
     width: "100%",
-    maxWidth: 460,
+    maxWidth: 520,
     alignSelf: "center",
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: "#111827",
     borderRadius: 18,
     padding: 16,
     shadowColor: "#000",
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.24,
     shadowRadius: 12,
     elevation: 3,
-    marginTop: 14,
+    marginTop: 12,
     borderWidth: 1,
-    borderColor: "rgba(255,130,0,0.22)",
+    borderColor: "rgba(255,130,0,0.2)",
   },
 
   // Gamif
@@ -1361,26 +1447,26 @@ const styles = StyleSheet.create({
   // Texte
   sectionTitle: { color: "#FF8200", fontWeight: "900", fontSize: 16, marginBottom: 8 },
 
-  // Moderne (Éditer + Sécurité)
+  // Moderne (Editer + Securite)
   cardModern: {
     width: "100%",
     maxWidth: 520,
     alignSelf: "center",
-    backgroundColor: "rgba(255,255,255,0.04)",
+    backgroundColor: "#111827",
     borderRadius: 18,
     padding: 16,
     borderWidth: 1,
-    borderColor: "rgba(255,130,0,0.18)",
+    borderColor: "rgba(255,130,0,0.2)",
     shadowColor: "#000",
-    shadowOpacity: 0.18,
+    shadowOpacity: 0.22,
     shadowRadius: 12,
     elevation: 3,
-    marginTop: 14,
+    marginTop: 12,
   },
 
   headerModern: { marginBottom: 10 },
-  headerTitle: { color: "#FF8200", fontWeight: "900", fontSize: 18, letterSpacing: 0.3 },
-  headerSubtitle: { color: "#b8bdc8", fontSize: 12.5, marginTop: 2 },
+  headerTitle: { color: "#FF9E3A", fontWeight: "900", fontSize: 18, letterSpacing: 0.3 },
+  headerSubtitle: { color: "#B8C1CF", fontSize: 12.5, marginTop: 2 },
 
   field: { marginBottom: 12 },
   label: { color: "#e7e9ee", fontWeight: "800", fontSize: 13, marginBottom: 6 },
@@ -1472,6 +1558,7 @@ const styles = StyleSheet.create({
   },
   btnDangerOutlineText: { color: "#ff6b6b", fontWeight: "900" },
 });
+
 
 
 

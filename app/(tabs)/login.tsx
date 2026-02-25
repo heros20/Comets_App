@@ -1,21 +1,13 @@
-// app/screens/LoginScreen.tsx
 "use client";
 
-// 🔕 Notifications push désactivées temporairement
-// import * as Device from 'expo-device';
-// import * as Notifications from 'expo-notifications';
-// import { getApps, initializeApp } from 'firebase/app';
-// import { firebaseConfig } from '../../utils/firebaseConfig';
-
-import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import { useRouter } from "expo-router";
+import { LinearGradient } from "expo-linear-gradient";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
-  Image,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -23,49 +15,31 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-} from 'react-native';
-import Icon from 'react-native-vector-icons/Ionicons';
-import { useAdmin } from '../../contexts/AdminContext';
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import Icon from "react-native-vector-icons/Ionicons";
 
-const logoComets = require("../../assets/images/iconComets.png");
-
-// 🔕 Notifications — util désactivé temporairement
-// async function registerForPushNotificationsAsync(...) { /* ... */ }
+import { useAdmin } from "../../contexts/AdminContext";
 
 export default function LoginScreen() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPwd, setShowPwd] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [debug, setDebug] = useState('');
-  const [shakeAnim] = useState(new Animated.Value(0));
   const router = useRouter();
   const { login } = useAdmin();
 
-    const handleLogin = async () => {
-    setLoading(true);
-    setError('');
-    setDebug('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPwd, setShowPwd] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [debug, setDebug] = useState("");
 
-    try {
-      const success = await login(email.trim(), password);
+  const shakeAnim = useRef(new Animated.Value(0)).current;
+  const passwordRef = useRef<TextInput>(null);
 
-      if (!success) {
-        setError("Identifiants invalides. Essaie encore !");
-        shake();
-      } else {
-        router.replace("/");
-      }
-    } catch (e: any) {
-      setError("Erreur r�seau. R�essaie plus tard.");
-      setDebug("Erreur r�seau: " + (e?.message || "inconnue"));
-      shake();
-    }
+  const canSubmit = useMemo(() => {
+    return !loading && email.trim().length > 4 && password.length > 2;
+  }, [email, loading, password]);
 
-    setLoading(false);
-  };
-  const shake = () => {
+  const shake = useCallback(() => {
     Animated.sequence([
       Animated.timing(shakeAnim, { toValue: 10, duration: 70, useNativeDriver: true }),
       Animated.timing(shakeAnim, { toValue: -10, duration: 70, useNativeDriver: true }),
@@ -73,116 +47,193 @@ export default function LoginScreen() {
       Animated.timing(shakeAnim, { toValue: -6, duration: 60, useNativeDriver: true }),
       Animated.timing(shakeAnim, { toValue: 0, duration: 50, useNativeDriver: true }),
     ]).start();
-  };
+  }, [shakeAnim]);
+
+  const handleLogin = useCallback(async () => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !password) {
+      setError("Renseigne ton email et ton mot de passe.");
+      setDebug("");
+      shake();
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+    setDebug("");
+
+    try {
+      const success = await login(cleanEmail, password);
+      if (!success) {
+        setError("Identifiants invalides. Reessaie.");
+        shake();
+        return;
+      }
+      router.replace("/");
+    } catch (e: any) {
+      setError("Erreur reseau. Reessaie plus tard.");
+      setDebug(`Detail: ${e?.message || "inconnu"}`);
+      shake();
+    } finally {
+      setLoading(false);
+    }
+  }, [email, login, password, router, shake]);
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
+    <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" />
 
-      {/* HERO (style Comets) */}
-      <View
-        style={[
-          styles.hero,
-          { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26 },
-        ]}
-      >
-        <View style={styles.heroStripe} />
+      <View style={styles.heroWrap}>
+        <LinearGradient
+          colors={["#17263D", "#101A2A", "#0B101A"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[
+            styles.heroGradient,
+            {
+              paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 8 : 10,
+            },
+          ]}
+        >
+          <LinearGradient
+            colors={["rgba(255,130,0,0.24)", "rgba(255,130,0,0)"]}
+            start={{ x: 1, y: 0 }}
+            end={{ x: 0, y: 1 }}
+            style={styles.heroShine}
+          />
 
-        <View style={styles.heroRow}>
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={styles.backBtn}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            activeOpacity={0.9}
-          >
-            <Icon name="chevron-back" size={24} color="#FF8200" />
-          </TouchableOpacity>
+          <View style={styles.heroTopRow}>
+            <TouchableOpacity
+              onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))}
+              style={styles.backBtn}
+              activeOpacity={0.9}
+            >
+              <Icon name="chevron-back" size={22} color="#F3F4F6" />
+            </TouchableOpacity>
 
-        {/* ⬇️ titre adapté */}
-          <Text style={styles.heroTitle}>Connexion membre</Text>
+            <View style={styles.heroTitleWrap}>
+              <Text style={styles.heroTitle}>Connexion Comets</Text>
+              <Text style={styles.heroSub}>Acces membre securise</Text>
+            </View>
 
-          <View style={{ width: 36 }} />
-        </View>
-
-        <View style={styles.heroProfileRow}>
-          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
-          <View style={{ flex: 1 }}>
-            {/* ⬇️ sous‑titre adapté */}
-            <Text style={styles.heroName}>Comets</Text>
-            <Text style={styles.heroSub}>Connecte‑toi pour accéder à ton compte.</Text>
+            <View style={styles.heroPill}>
+              <Icon name="shield-checkmark-outline" size={14} color="#FFDDBA" />
+              <Text style={styles.heroPillText}>Secure</Text>
+            </View>
           </View>
-        </View>
+
+          <View style={styles.metaRow}>
+            <View style={styles.metaPill}>
+              <Icon name="person-outline" size={14} color="#FFB366" />
+              <Text style={styles.metaText}>Espace membre</Text>
+            </View>
+            <View style={styles.metaPill}>
+              <Icon name="flash-outline" size={14} color="#FFB366" />
+              <Text style={styles.metaText}>Connexion rapide</Text>
+            </View>
+          </View>
+        </LinearGradient>
       </View>
 
-      {/* FORM */}
       <KeyboardAvoidingView
-        style={{ flex: 1 }}
+        style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 25}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 18}
       >
-        <ScrollView contentContainerStyle={styles.listContainer} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          keyboardDismissMode="on-drag"
+        >
           <Animated.View style={[styles.card, { transform: [{ translateX: shakeAnim }] }]}>
             <Text style={styles.cardTitle}>Se connecter</Text>
+            <Text style={styles.cardSub}>
+              Utilise tes identifiants pour acceder a ton espace et aux outils du club.
+            </Text>
 
-            {/* Email */}
-            <View style={styles.inputWrap}>
+            <View style={styles.fieldWrap}>
               <Text style={styles.inputLabel}>Adresse email</Text>
-              <TextInput
-                placeholder="email@requis.fr"
-                value={email}
-                onChangeText={setEmail}
-                autoCapitalize="none"
-                keyboardType="email-address"
-                placeholderTextColor="#9aa0ae"
-                style={styles.input}
-                returnKeyType="next"
-              />
+              <View style={styles.inputShell}>
+                <Icon name="mail-outline" size={18} color="#9FB0C8" />
+                <TextInput
+                  placeholder="email@requis.fr"
+                  value={email}
+                  onChangeText={setEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  autoCorrect={false}
+                  placeholderTextColor="#8EA0BB"
+                  style={styles.input}
+                  returnKeyType="next"
+                  editable={!loading}
+                  onSubmitEditing={() => passwordRef.current?.focus()}
+                />
+              </View>
             </View>
 
-            {/* Mot de passe */}
-            <View style={styles.inputWrap}>
+            <View style={styles.fieldWrap}>
               <Text style={styles.inputLabel}>Mot de passe</Text>
-              <TextInput
-                placeholder="••••••••"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry={!showPwd}
-                autoCapitalize="none"
-                placeholderTextColor="#9aa0ae"
-                style={styles.input}
-                onSubmitEditing={handleLogin}
-                returnKeyType="done"
-              />
-              <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowPwd((v) => !v)} activeOpacity={0.7}>
-                <Icon name={showPwd ? "eye-off" : "eye"} size={20} color="#FF8200" />
-              </TouchableOpacity>
+              <View style={styles.inputShell}>
+                <Icon name="lock-closed-outline" size={18} color="#9FB0C8" />
+                <TextInput
+                  ref={passwordRef}
+                  placeholder="********"
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry={!showPwd}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholderTextColor="#8EA0BB"
+                  style={styles.input}
+                  returnKeyType="done"
+                  editable={!loading}
+                  onSubmitEditing={handleLogin}
+                />
+                <TouchableOpacity
+                  style={styles.eyeBtn}
+                  onPress={() => setShowPwd((v) => !v)}
+                  activeOpacity={0.8}
+                  disabled={loading}
+                >
+                  <Icon name={showPwd ? "eye-off-outline" : "eye-outline"} size={19} color="#FF9E3A" />
+                </TouchableOpacity>
+              </View>
             </View>
 
-            {/* Erreur */}
-            {!!error && <Text style={styles.errorText}>{error}</Text>}
+            {!!error && (
+              <View style={styles.errorCard}>
+                <Icon name="alert-circle-outline" size={16} color="#FCA5A5" />
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            )}
 
-            {/* Debug (visible) */}
-            {!!debug && <Text style={styles.debugText}>{debug}</Text>}
+            {!!debug && __DEV__ && <Text style={styles.debugText}>{debug}</Text>}
 
-            {/* CTA connexion */}
             <TouchableOpacity
-              style={[styles.primaryBtn, loading && { opacity: 0.7 }]}
-              disabled={loading}
+              style={[styles.primaryBtn, !canSubmit && styles.primaryBtnDisabled]}
+              disabled={!canSubmit}
               onPress={handleLogin}
               activeOpacity={0.9}
             >
-              {loading ? <ActivityIndicator color="#FFF" /> : (
+              {loading ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
                 <>
-                  <Icon name="log-in-outline" size={18} color="#fff" />
+                  <Icon name="log-in-outline" size={18} color="#111827" />
                   <Text style={styles.primaryBtnTxt}>Se connecter</Text>
                 </>
               )}
             </TouchableOpacity>
           </Animated.View>
 
-          {/* Lien vers Inscription */}
-          <TouchableOpacity onPress={() => router.push("/(tabs)/Register")} activeOpacity={0.8} style={styles.helpBox}>
-            <Text style={styles.helpTxt}>Pas de compte ? C’est par ici !</Text>
+          <TouchableOpacity
+            onPress={() => router.push("/(tabs)/Register")}
+            activeOpacity={0.85}
+            style={styles.helpBox}
+          >
+            <Icon name="person-add-outline" size={16} color="#FF9E3A" />
+            <Text style={styles.helpText}>Pas de compte ? Creer un compte membre</Text>
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -191,76 +242,242 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  // === HERO ===
-  hero: {
-    backgroundColor: "#11131a",
-    borderBottomWidth: 1,
-    borderBottomColor: "#1f2230",
+  flex: {
+    flex: 1,
+  },
+  safe: {
+    flex: 1,
+    backgroundColor: "#0B0F17",
+  },
+
+  heroWrap: {
+    marginHorizontal: 10,
+    marginTop: 8,
+    borderRadius: 18,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.22)",
+    backgroundColor: "#0E1524",
+  },
+  heroGradient: {
+    paddingHorizontal: 12,
     paddingBottom: 10,
   },
-  heroStripe: {
-    position: "absolute",
-    right: -60,
-    top: -40,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: "rgba(255,130,0,0.10)",
-    transform: [{ rotate: "18deg" }],
+  heroShine: {
+    ...StyleSheet.absoluteFillObject,
+    top: 0,
+    bottom: "58%",
   },
-  heroRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, gap: 10 },
+  heroTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1b1e27",
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.24)",
     alignItems: "center",
     justifyContent: "center",
+  },
+  heroTitleWrap: {
+    flex: 1,
+  },
+  heroTitle: {
+    color: "#FFFFFF",
+    fontSize: 19,
+    lineHeight: 22,
+    fontWeight: "800",
+  },
+  heroSub: {
+    marginTop: 1,
+    color: "#BEC8DB",
+    fontSize: 12,
+  },
+  heroPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
     borderWidth: 1,
-    borderColor: "#2a2f3d",
+    borderColor: "rgba(255,255,255,0.24)",
+    backgroundColor: "rgba(0,0,0,0.28)",
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
-  heroTitle: { flex: 1, textAlign: "center", color: "#FF8200", fontSize: 20, fontWeight: "800", letterSpacing: 1.1 },
-  heroProfileRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 10, gap: 12 },
-  heroLogo: {
-    width: 56, height: 56, borderRadius: 14, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200",
+  heroPillText: {
+    color: "#FFDDBA",
+    fontWeight: "700",
+    fontSize: 11,
   },
-  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
-  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
+  metaRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    gap: 8,
+  },
+  metaPill: {
+    flex: 1,
+    minHeight: 34,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    backgroundColor: "rgba(0,0,0,0.3)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingHorizontal: 8,
+  },
+  metaText: {
+    color: "#E5E7EB",
+    fontSize: 11.5,
+    fontWeight: "700",
+  },
 
-  // === CONTENU ===
-  listContainer: { paddingHorizontal: 12, paddingBottom: 34, paddingTop: 14 },
+  content: {
+    paddingHorizontal: 12,
+    paddingTop: 14,
+    paddingBottom: 28,
+  },
   card: {
-    width: "100%", maxWidth: 460, alignSelf: "center",
-    backgroundColor: "rgba(255,255,255,0.06)", borderRadius: 18, padding: 16,
-    shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 12, elevation: 3,
-    borderWidth: 1, borderColor: "rgba(255,130,0,0.22)",
+    width: "100%",
+    maxWidth: 470,
+    alignSelf: "center",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.2)",
+    backgroundColor: "#111827",
+    padding: 16,
+    shadowColor: "#000000",
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+    elevation: 3,
   },
-  cardTitle: { color: "#eaeef7", fontWeight: "900", fontSize: 18, marginBottom: 10, textAlign: "center" },
-
-  inputWrap: { marginBottom: 12, position: "relative" },
-  inputLabel: { color: "#c7cad1", fontWeight: "700", marginBottom: 6, fontSize: 13 },
+  cardTitle: {
+    color: "#F3F4F6",
+    fontSize: 18,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  cardSub: {
+    marginTop: 5,
+    marginBottom: 12,
+    color: "#AAB2C2",
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 18,
+  },
+  fieldWrap: {
+    marginBottom: 11,
+  },
+  inputLabel: {
+    color: "#C7CEDA",
+    fontWeight: "700",
+    marginBottom: 6,
+    fontSize: 12.5,
+  },
+  inputShell: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    borderRadius: 12,
+    backgroundColor: "#0F1726",
+    paddingHorizontal: 10,
+    minHeight: 47,
+  },
   input: {
-    backgroundColor: "#fff", borderColor: "#FFD197", borderWidth: 1.2, borderRadius: 12,
-    padding: 13, fontSize: 16, color: "#1c1c1c", fontWeight: "700", paddingRight: 40,
+    flex: 1,
+    color: "#E5E7EB",
+    fontSize: 14,
+    fontWeight: "600",
+    paddingVertical: 10,
   },
-  eyeBtn: { position: "absolute", right: 10, top: 34, padding: 4 },
+  eyeBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,158,58,0.12)",
+  },
 
-  errorText: { color: "#E53935", fontWeight: "bold", fontSize: 14, marginTop: 2, marginBottom: 6, textAlign: "center" },
-  debugText: { fontSize: 12, color: "#6b4900", backgroundColor: "#fffbe7", padding: 6, borderRadius: 6, marginBottom: 7 },
+  errorCard: {
+    marginTop: 2,
+    marginBottom: 7,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(248,113,113,0.45)",
+    backgroundColor: "rgba(248,113,113,0.1)",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  errorText: {
+    flex: 1,
+    color: "#FCA5A5",
+    fontSize: 12.5,
+    fontWeight: "700",
+  },
+  debugText: {
+    marginBottom: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(245,158,11,0.45)",
+    backgroundColor: "rgba(245,158,11,0.12)",
+    color: "#FDE68A",
+    fontSize: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
 
   primaryBtn: {
-    marginTop: 4, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 8,
-    backgroundColor: "#FF8200", borderRadius: 12, paddingHorizontal: 18, paddingVertical: 12,
-  },
-  primaryBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 15 },
-
-  // Lien register
-  helpBox: {
     alignSelf: "center",
-    marginTop: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+    minHeight: 44,
+    minWidth: 180,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#FFBD80",
+    backgroundColor: "#FF9E3A",
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
   },
-  helpTxt: { color: "#FF8200", fontSize: 14, fontWeight: "700", textAlign: "center", textDecorationLine: "underline" },
-});
+  primaryBtnDisabled: {
+    opacity: 0.55,
+  },
+  primaryBtnTxt: {
+    color: "#111827",
+    fontSize: 14,
+    fontWeight: "800",
+  },
 
+  helpBox: {
+    marginTop: 12,
+    alignSelf: "center",
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    backgroundColor: "rgba(0,0,0,0.22)",
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  helpText: {
+    color: "#FFB366",
+    fontSize: 12.5,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+});

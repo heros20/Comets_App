@@ -1,11 +1,13 @@
-// app/screens/ActuDetailScreen.tsx
 "use client";
 
 import { useNavigation } from "@react-navigation/native";
-import React, { useEffect, useMemo, useState } from "react";
+import { Asset } from "expo-asset";
+import { Image as ExpoImage } from "expo-image";
+import { useLocalSearchParams } from "expo-router";
+import { LinearGradient } from "expo-linear-gradient";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Image,
   Linking,
   Platform,
   ScrollView,
@@ -15,10 +17,12 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
-import { useLocalSearchParams } from "expo-router";
 
 const logoComets = require("../../assets/images/iconComets.png");
+const NEWS_API_BASE = "https://les-comets-honfleur.vercel.app/api/news";
+const SITE_URL = "https://les-comets-honfleur.vercel.app";
 
 type Article = {
   id: number;
@@ -27,74 +31,77 @@ type Article = {
   image_url?: string | null;
   created_at?: string;
   category?: string | null;
-  // tolère d'autres clés éventuelles renvoyées par l'API
   [key: string]: any;
 };
 
-/** Doit matcher l'admin */
 const CATEGORY_META = [
-  { value: "", label: "Autres", color: "#FF8200" },
-  { value: "12U", label: "12U", color: "#10b981" },
-  { value: "15U", label: "15U", color: "#3b82f6" },
-  { value: "Séniors", label: "Séniors", color: "#f59e0b" },
+  { value: "12U", label: "12U", color: "#10B981" },
+  { value: "15U", label: "15U", color: "#3B82F6" },
+  { value: "Seniors", label: "Seniors", color: "#F59E0B" },
+  { value: "Autres", label: "Autres", color: "#FF8200" },
 ] as const;
+
 type CatValue = (typeof CATEGORY_META)[number]["value"];
 
-/* =================== Helpers =================== */
 function stripHtml(html = "") {
   return html.replace(/(<([^>]+)>)/gi, "").replace(/&nbsp;/g, " ").trim();
 }
+
 function formatDate(dateStr?: string) {
   if (!dateStr) return "";
   const d = new Date(dateStr);
-  return isNaN(d.getTime())
-    ? dateStr
-    : d.toLocaleDateString("fr-FR", { year: "numeric", month: "long", day: "numeric" });
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("fr-FR", { year: "numeric", month: "long", day: "numeric" });
 }
 
-/** supprime accents, espaces, tirets/underscores, met en MAJ */
 function normalizeKey(input: string) {
   return input
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // diacritiques
-    .replace(/[\s\-_]/g, "") // espaces/tirets/underscores
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\s\-_]/g, "")
     .toUpperCase();
 }
 
-/** lit la catégorie depuis l'objet (tolère plusieurs noms de clé) */
 function readCategory(a: any): string {
   const raw = a?.category ?? a?.categorie ?? a?.team_category ?? "";
   return typeof raw === "string" ? raw : String(raw ?? "");
 }
 
-/** DB -> valeur canonique ("" | "12U" | "15U" | "Séniors"). Fallback par titre si vide. */
 function getCatValue(a: Article): CatValue {
   const raw = readCategory(a).trim();
   if (raw) {
     const key = normalizeKey(raw);
     if (key === "12U") return "12U";
     if (key === "15U") return "15U";
-    // toutes variantes: Seniors/Séniors/Senior/Sénior
-    if (key === "SENIOR" || key === "SENIORS") return "Séniors";
-    // valeur non reconnue -> Autres
-    return "";
+    if (key === "SENIOR" || key === "SENIORS") return "Seniors";
+    return "Autres";
   }
-  // Fallback anciens posts : infère via le titre
-  const tk = normalizeKey(a.title || "");
-  if (tk.startsWith("12U")) return "12U";
-  if (tk.startsWith("15U")) return "15U";
-  if (tk.startsWith("SENIOR") || tk.startsWith("SENIORS")) return "Séniors";
-  return ""; // Autres
+
+  const titleKey = normalizeKey(a.title || "");
+  if (titleKey.startsWith("12U")) return "12U";
+  if (titleKey.startsWith("15U")) return "15U";
+  if (titleKey.startsWith("SENIOR") || titleKey.startsWith("SENIORS")) return "Seniors";
+  return "Autres";
 }
 
 function catMetaOf(value: CatValue) {
-  return CATEGORY_META.find((c) => c.value === value);
+  return CATEGORY_META.find((c) => c.value === value) || CATEGORY_META[CATEGORY_META.length - 1];
 }
-/* =============================================== */
+
+function withAlpha(hex: string, alpha = 0.35) {
+  const clean = hex.replace("#", "");
+  if (!/^[0-9a-fA-F]{6}$/.test(clean)) return `rgba(255,130,0,${alpha})`;
+  const int = parseInt(clean, 16);
+  const r = (int >> 16) & 255;
+  const g = (int >> 8) & 255;
+  const b = int & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 
 export default function ActuDetailScreen() {
   const navigation = useNavigation();
-  // ✅ Accepte articleId OU id, et gère les tableaux (Expo Router peut renvoyer string | string[])
+  const insets = useSafeAreaInsets();
+
   const params = useLocalSearchParams<{ articleId?: string | string[]; id?: string | string[] }>();
   const rawId = Array.isArray(params.articleId)
     ? params.articleId[0]
@@ -103,249 +110,265 @@ export default function ActuDetailScreen() {
 
   const [article, setArticle] = useState<Article | null>(null);
   const [loading, setLoading] = useState(true);
-  const [paramError, setParamError] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [imageReady, setImageReady] = useState(false);
 
   useEffect(() => {
-    // Si pas d'ID → on stoppe le loader et on affiche une erreur propre
+    Asset.loadAsync([logoComets]).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     if (!articleId) {
-      setParamError("Aucun identifiant d’article reçu.");
+      setErrorMsg("Aucun identifiant d article recu.");
       setLoading(false);
       return;
     }
 
-    let cancelled = false;
-    (async () => {
+    let mounted = true;
+    const ctrl = new AbortController();
+
+    const loadArticle = async () => {
       try {
         setLoading(true);
-        setParamError(null);
-        const r = await fetch(
-          `https://les-comets-honfleur.vercel.app/api/news/${encodeURIComponent(articleId)}`
-        );
+        setErrorMsg(null);
+        const r = await fetch(`${NEWS_API_BASE}/${encodeURIComponent(articleId)}`, { signal: ctrl.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = (await r.json()) as Article | null;
-        if (!cancelled)
-          setArticle(
-            data
-              ? {
-                  ...data,
-                  image_url: data.image_url ?? null,
-                  // on ne perd pas la catégorie si elle existe sous d'autres clés
-                  category: data.category ?? data.categorie ?? data.team_category ?? null,
-                }
-              : null
-          );
 
-        // // Debug (optionnel) :
-        // if (__DEV__) {
-        //   console.log("[ActuDetail] raw category:", data?.category, data?.categorie, data?.team_category);
-        //   console.log("[ActuDetail] normalized:", data ? getCatValue(data as Article) : null);
-        // }
-      } catch {
-        if (!cancelled) setArticle(null);
+        if (!mounted) return;
+        if (!data) {
+          setArticle(null);
+          setErrorMsg("Article introuvable.");
+          return;
+        }
+
+        const normalized: Article = {
+          ...data,
+          image_url: data.image_url ?? null,
+          category: data.category ?? data.categorie ?? data.team_category ?? null,
+        };
+        setArticle(normalized);
+
+        if (normalized.image_url) {
+          ExpoImage.prefetch([normalized.image_url], "memory-disk").catch(() => {});
+        }
+      } catch (e: any) {
+        if (!mounted || e?.name === "AbortError") return;
+        setArticle(null);
+        setErrorMsg("Impossible de charger cet article.");
       } finally {
-        if (!cancelled) setLoading(false);
+        if (mounted) setLoading(false);
       }
-    })();
+    };
+
+    loadArticle();
 
     return () => {
-      cancelled = true;
+      mounted = false;
+      ctrl.abort();
     };
   }, [articleId]);
 
-  const siteUrl = "https://les-comets-honfleur.vercel.app";
-  const articleUrl = article?.id ? `${siteUrl}/actus/${article.id}` : siteUrl;
+  useEffect(() => {
+    setImageReady(!article?.image_url);
+  }, [article?.image_url]);
+
+  const goBack = useCallback(() => {
+    if ((navigation as any).canGoBack?.()) {
+      (navigation as any).goBack();
+      return;
+    }
+    (navigation as any).navigate?.("actus");
+  }, [navigation]);
+
+  const articleUrl = article?.id ? `${SITE_URL}/actus/${article.id}` : SITE_URL;
+
   const cleanContent = useMemo(() => stripHtml(article?.content || ""), [article?.content]);
-  const excerpt = cleanContent.slice(0, 140) + (cleanContent.length > 140 ? "…" : "");
+  const preview = useMemo(() => {
+    const text = cleanContent.slice(0, 140);
+    return cleanContent.length > 140 ? `${text}...` : text;
+  }, [cleanContent]);
 
-  const shareLinks = [
-    {
-      label: "Facebook",
-      url: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(
-        articleUrl
-      )}&quote=${encodeURIComponent((article?.title || "") + " – " + excerpt)}`,
-      icon: "logo-facebook" as const,
-    },
-    {
-      label: "X / Twitter",
-      url: `https://twitter.com/intent/tweet?url=${encodeURIComponent(articleUrl)}&text=${encodeURIComponent(
-        (article?.title || "") + " – " + excerpt
-      )}`,
-      icon: "logo-twitter" as const,
-    },
-    {
-      label: "LinkedIn",
-      url: `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(articleUrl)}`,
-      icon: "logo-linkedin" as const,
-    },
-    {
-      label: "Email",
-      url: `mailto:?subject=${encodeURIComponent(
-        "À lire : " + (article?.title || "")
-      )}&body=${encodeURIComponent(
-        `Je voulais te partager cet article du club Les Comets d’Honfleur !\n\n${article?.title}\n\n${excerpt}\n\nLire : ${articleUrl}`
-      )}`,
-      icon: "mail-outline" as const,
-    },
-  ];
+  const shareLinks = useMemo(
+    () => [
+      {
+        label: "Facebook",
+        url: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(articleUrl)}&quote=${encodeURIComponent(
+          `${article?.title || ""} - ${preview}`
+        )}`,
+        icon: "logo-facebook" as const,
+      },
+      {
+        label: "X / Twitter",
+        url: `https://twitter.com/intent/tweet?url=${encodeURIComponent(articleUrl)}&text=${encodeURIComponent(
+          `${article?.title || ""} - ${preview}`
+        )}`,
+        icon: "logo-twitter" as const,
+      },
+      {
+        label: "LinkedIn",
+        url: `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(articleUrl)}`,
+        icon: "logo-linkedin" as const,
+      },
+      {
+        label: "Email",
+        url: `mailto:?subject=${encodeURIComponent(`A lire: ${article?.title || ""}`)}&body=${encodeURIComponent(
+          `Je voulais te partager cet article des Comets.\n\n${article?.title || ""}\n\n${preview}\n\nLire: ${articleUrl}`
+        )}`,
+        icon: "mail-outline" as const,
+      },
+    ],
+    [article?.title, articleUrl, preview]
+  );
 
-  // === ÉTATS ===
+  const openLink = useCallback(async (url: string) => {
+    try {
+      await Linking.openURL(url);
+    } catch {}
+  }, []);
+
+  const scrollBottomPadding = Math.max(32, insets.bottom + 20);
+
   if (loading) {
     return (
-      <View
-        style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#0f1014" }}
-      >
-        <ActivityIndicator size="large" color="#FF8200" />
-        <Text style={{ color: "#FF8200", fontWeight: "bold", marginTop: 18 }}>Chargement…</Text>
-      </View>
+      <SafeAreaView style={styles.screen}>
+        <StatusBar barStyle="light-content" />
+        <View style={styles.stateWrap}>
+          <ActivityIndicator size="large" color="#FF8200" />
+          <Text style={styles.stateTitle}>Chargement...</Text>
+        </View>
+      </SafeAreaView>
     );
   }
 
-  if (paramError) {
+  if (errorMsg || !article) {
     return (
-      <View
-        style={{
-          flex: 1,
-          justifyContent: "center",
-          alignItems: "center",
-          backgroundColor: "#0f1014",
-          paddingHorizontal: 24,
-        }}
-      >
-        <Text style={{ color: "#FF8200", fontWeight: "bold", fontSize: 18, textAlign: "center" }}>
-          {paramError}
-        </Text>
-        <TouchableOpacity
-          onPress={() => (navigation as any).goBack?.()}
-          activeOpacity={0.9}
-          style={{
-            marginTop: 16,
-            backgroundColor: "#FF8200",
-            paddingHorizontal: 18,
-            paddingVertical: 10,
-            borderRadius: 12,
-          }}
-        >
-          <Text style={{ color: "#fff", fontWeight: "900" }}>Retour aux actus</Text>
-        </TouchableOpacity>
-      </View>
+      <SafeAreaView style={styles.screen}>
+        <StatusBar barStyle="light-content" />
+        <View style={styles.stateWrap}>
+          <Text style={styles.stateTitle}>{errorMsg || "Article introuvable."}</Text>
+          <TouchableOpacity onPress={goBack} activeOpacity={0.9} style={styles.stateBtn}>
+            <Text style={styles.stateBtnTxt}>Retour aux actus</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
     );
   }
 
-  if (!article) {
-    return (
-      <View
-        style={{
-          flex: 1,
-          justifyContent: "center",
-          alignItems: "center",
-          backgroundColor: "#0f1014",
-          paddingHorizontal: 24,
-        }}
-      >
-        <Text style={{ color: "#FF8200", fontWeight: "bold", fontSize: 18, textAlign: "center" }}>
-          Article introuvable ou supprimé 🥲
-        </Text>
-        <TouchableOpacity
-          onPress={() => (navigation as any).goBack?.()}
-          activeOpacity={0.9}
-          style={{
-            marginTop: 16,
-            backgroundColor: "#FF8200",
-            paddingHorizontal: 18,
-            paddingVertical: 10,
-            borderRadius: 12,
-          }}
-        >
-          <Text style={{ color: "#fff", fontWeight: "900" }}>Retour aux actus</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  // === Pastille catégorie (alignée admin) ===
   const cv = getCatValue(article);
   const meta = catMetaOf(cv);
-  const badgeBg = meta ? `${meta.color}22` : "rgba(255,255,255,0.06)";
-  const badgeBorder = meta?.color ?? "#2b3141";
-  const badgeText = meta?.color ?? "#cfd3db";
+  const badgeBg = withAlpha(meta.color, 0.14);
+  const badgeBorder = withAlpha(meta.color, 0.4);
 
-  // === RENDU ===
   return (
-    <View style={{ flex: 1, backgroundColor: "#0f1014" }}>
+    <SafeAreaView style={styles.screen}>
       <StatusBar barStyle="light-content" />
 
-      {/* HERO */}
-      <View
-        style={[
-          styles.hero,
-          { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26 },
-        ]}
-      >
-        <View style={styles.heroStripe} />
+      <View style={styles.heroWrap}>
+        <LinearGradient
+          colors={["#17263D", "#101A2A", "#0B101A"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[
+            styles.heroGradient,
+            { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 8 : 10 },
+          ]}
+        >
+          <LinearGradient
+            colors={["rgba(255,130,0,0.24)", "rgba(255,130,0,0)"]}
+            start={{ x: 1, y: 0 }}
+            end={{ x: 0, y: 1 }}
+            style={styles.heroShine}
+          />
 
-        <View style={styles.heroRow}>
-          <TouchableOpacity
-            onPress={() =>
-              (navigation as any).canGoBack?.()
-                ? (navigation as any).goBack()
-                : (navigation as any).navigate?.("Home")
-            }
-            style={styles.backBtn}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Icon name="chevron-back" size={24} color="#FF8200" />
-          </TouchableOpacity>
+          <View style={styles.heroTopRow}>
+            <TouchableOpacity onPress={goBack} style={styles.backBtn} activeOpacity={0.9}>
+              <Icon name="chevron-back" size={22} color="#F3F4F6" />
+            </TouchableOpacity>
 
-          <Text style={styles.heroTitle}>Actualité du club</Text>
-          <View style={{ width: 36 }} />
-        </View>
+            <View style={styles.heroTitleWrap}>
+              <Text style={styles.heroTitle}>Actualite detail</Text>
+              <Text style={styles.heroSub} numberOfLines={1}>
+                {formatDate(article.created_at)}
+              </Text>
+            </View>
 
-        <View style={styles.heroProfileRow}>
-          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.heroName}>Comets d’Honfleur</Text>
-            <Text style={styles.heroSub}>Article détaillé</Text>
+            <View style={[styles.heroCatPill, { backgroundColor: badgeBg, borderColor: badgeBorder }]}>
+              <Text style={[styles.heroCatText, { color: meta.color }]}>{meta.label}</Text>
+            </View>
           </View>
-        </View>
+
+          <View style={styles.heroMetaRow}>
+            <ExpoImage
+              source={logoComets}
+              cachePolicy="memory-disk"
+              transition={100}
+              contentFit="contain"
+              style={styles.heroLogo}
+            />
+
+            <View style={styles.heroMetaContent}>
+              <Text style={styles.heroMetaTitle} numberOfLines={2}>
+                {article.title}
+              </Text>
+              <Text style={styles.heroMetaText}>Publication officielle du club</Text>
+            </View>
+          </View>
+        </LinearGradient>
       </View>
 
-      <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
-        {article.image_url ? (
-          <Image source={{ uri: article.image_url }} style={styles.heroImage} />
-        ) : (
-          <View style={[styles.heroImage, { backgroundColor: "#141821" }]} />
-        )}
-
-        <View style={styles.body}>
-          <View className="chips" style={styles.chipsRow}>
-            {/* Catégorie (couleur admin) */}
-            <View style={[styles.chip, { backgroundColor: badgeBg, borderColor: badgeBorder }]}>
-              <Text style={[styles.chipTxt, { color: badgeText }]}>{meta?.label ?? "Autres"}</Text>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
+      >
+        <View style={styles.coverWrap}>
+          {!!article.image_url ? (
+            <>
+              <ExpoImage
+                source={{ uri: article.image_url, cacheKey: `news-detail-${article.id}` }}
+                recyclingKey={`news-detail-${article.id}`}
+                cachePolicy="memory-disk"
+                priority="high"
+                transition={140}
+                contentFit="cover"
+                style={styles.coverImage}
+                onLoad={() => setImageReady(true)}
+                onError={() => setImageReady(true)}
+              />
+              {!imageReady && (
+                <View style={styles.coverLoader}>
+                  <ActivityIndicator size="small" color="#FF9E3A" />
+                </View>
+              )}
+            </>
+          ) : (
+            <View style={styles.coverPlaceholder}>
+              <Icon name="image-outline" size={24} color="#4B5563" />
             </View>
+          )}
+        </View>
 
-            {/* Date */}
-            <View
-              style={[styles.chip, { backgroundColor: "rgba(255,255,255,0.06)", borderColor: "#2b3141" }]}
-            >
-              <Icon name="time-outline" size={13} color="#cfd3db" />
-              <Text style={[styles.chipTxt, { color: "#cfd3db" }]}>{formatDate(article.created_at)}</Text>
+        <View style={styles.articleCard}>
+          <View style={styles.articleMetaRow}>
+            <View style={[styles.metaChip, { backgroundColor: badgeBg, borderColor: badgeBorder }]}>
+              <Text style={[styles.metaChipText, { color: meta.color }]}>{meta.label}</Text>
+            </View>
+            <View style={styles.metaDateChip}>
+              <Icon name="time-outline" size={13} color="#CBD5E1" />
+              <Text style={styles.metaDateText}>{formatDate(article.created_at)}</Text>
             </View>
           </View>
 
-          <Text style={styles.title}>{article.title}</Text>
-          <Text style={styles.content}>{cleanContent}</Text>
+          <Text style={styles.articleTitle}>{article.title}</Text>
+          <Text style={styles.articleContent}>{cleanContent}</Text>
 
           <View style={styles.actionsRow}>
-            <TouchableOpacity onPress={() => Linking.openURL(articleUrl)} activeOpacity={0.9} style={styles.primaryBtn}>
-              <Icon name="open-outline" size={18} color="#fff" />
+            <TouchableOpacity onPress={() => openLink(articleUrl)} activeOpacity={0.9} style={styles.primaryBtn}>
+              <Icon name="open-outline" size={18} color="#111827" />
               <Text style={styles.primaryBtnTxt}>Ouvrir sur le site</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              onPress={() => (navigation as any).goBack?.()}
-              activeOpacity={0.9}
-              style={styles.secondaryBtn}
-            >
+            <TouchableOpacity onPress={goBack} activeOpacity={0.9} style={styles.secondaryBtn}>
               <Icon name="arrow-back-outline" size={18} color="#FF8200" />
               <Text style={styles.secondaryBtnTxt}>Retour</Text>
             </TouchableOpacity>
@@ -353,139 +376,303 @@ export default function ActuDetailScreen() {
         </View>
 
         <View style={styles.shareBox}>
-          <Text style={styles.shareTitle}>📣 Partage cet article</Text>
+          <Text style={styles.shareTitle}>Partager cet article</Text>
           <View style={styles.shareLinks}>
             {shareLinks.map((link) => (
               <TouchableOpacity
                 key={link.label}
-                onPress={() => Linking.openURL(link.url)}
+                onPress={() => openLink(link.url)}
                 activeOpacity={0.9}
                 style={styles.shareBtn}
               >
-                <Icon name={link.icon} size={16} color="#fff" />
+                <Icon name={link.icon} size={16} color="#111827" />
                 <Text style={styles.shareBtnTxt}>{link.label}</Text>
               </TouchableOpacity>
             ))}
           </View>
         </View>
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  hero: {
-    backgroundColor: "#11131a",
-    borderBottomWidth: 1,
-    borderBottomColor: "#1f2230",
-    paddingBottom: 10,
+  screen: {
+    flex: 1,
+    backgroundColor: "#0B0F17",
   },
-  heroStripe: {
-    position: "absolute",
-    right: -60,
-    top: -40,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: "rgba(255,130,0,0.10)",
-    transform: [{ rotate: "18deg" }],
-  },
-  heroRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    gap: 10,
-  },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1b1e27",
+
+  stateWrap: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  stateTitle: {
+    color: "#FF8200",
+    fontWeight: "800",
+    fontSize: 17,
+    marginTop: 14,
+    textAlign: "center",
+  },
+  stateBtn: {
+    marginTop: 16,
+    backgroundColor: "#FF8200",
     borderWidth: 1,
-    borderColor: "#2a2f3d",
+    borderColor: "#FFAA58",
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  stateBtnTxt: {
+    color: "#111827",
+    fontWeight: "800",
+  },
+
+  heroWrap: {
+    marginHorizontal: 10,
+    marginTop: 8,
+    borderRadius: 18,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.22)",
+    backgroundColor: "#0E1524",
+  },
+  heroGradient: {
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+  },
+  heroShine: {
+    ...StyleSheet.absoluteFillObject,
+    top: 0,
+    bottom: "58%",
+  },
+  heroTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  backBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.24)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heroTitleWrap: {
+    flex: 1,
+    minWidth: 0,
   },
   heroTitle: {
-    flex: 1,
-    textAlign: "center",
-    color: "#FF8200",
-    fontSize: 20,
+    color: "#FFFFFF",
+    fontSize: 19,
+    lineHeight: 22,
     fontWeight: "800",
-    letterSpacing: 1.1,
   },
-  heroProfileRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 10, gap: 12 },
-  heroLogo: { width: 56, height: 56, borderRadius: 14, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200" },
-  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
-  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
+  heroSub: {
+    marginTop: 1,
+    color: "#BEC8DB",
+    fontSize: 12,
+  },
+  heroCatPill: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  heroCatText: {
+    fontSize: 11.5,
+    fontWeight: "800",
+  },
+  heroMetaRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  heroLogo: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: "#FF9E3A",
+    backgroundColor: "#FFFFFF",
+  },
+  heroMetaContent: {
+    flex: 1,
+    minWidth: 0,
+  },
+  heroMetaTitle: {
+    color: "#F9FAFB",
+    fontSize: 14.5,
+    fontWeight: "800",
+  },
+  heroMetaText: {
+    marginTop: 1,
+    color: "#CBD2DF",
+    fontSize: 11.5,
+  },
 
-  heroImage: { width: "92%", alignSelf: "center", height: 210, borderRadius: 17, marginTop: 14, backgroundColor: "#0f1014" },
-  body: { paddingHorizontal: 16, paddingTop: 14 },
+  scrollContent: {
+    paddingHorizontal: 12,
+    paddingTop: 12,
+  },
+  coverWrap: {
+    width: "100%",
+    height: 214,
+    borderRadius: 16,
+    overflow: "hidden",
+    backgroundColor: "#101623",
+    position: "relative",
+  },
+  coverImage: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  coverLoader: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(10,14,20,0.5)",
+  },
+  coverPlaceholder: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#101623",
+  },
 
-  chipsRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 },
-  chip: {
+  articleCard: {
+    marginTop: 12,
+    backgroundColor: "#151C29",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.24)",
+    padding: 14,
+  },
+  articleMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+    marginBottom: 8,
+  },
+  metaChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  metaChipText: {
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  metaDateChip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "rgba(255,130,0,0.12)",
-    borderColor: "rgba(255,130,0,0.35)",
+    backgroundColor: "rgba(255,255,255,0.08)",
     borderWidth: 1,
-    borderRadius: 10,
+    borderColor: "rgba(255,255,255,0.2)",
+    borderRadius: 999,
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: 5,
   },
-  chipTxt: { color: "#FF8200", fontWeight: "900", fontSize: 12.5 },
+  metaDateText: {
+    color: "#CBD5E1",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  articleTitle: {
+    color: "#EAEEF7",
+    fontWeight: "900",
+    fontSize: 22,
+    lineHeight: 27,
+    marginBottom: 10,
+  },
+  articleContent: {
+    color: "#CFD3DB",
+    fontSize: 15,
+    lineHeight: 22,
+  },
 
-  title: { color: "#eaeef7", fontWeight: "900", fontSize: 22, lineHeight: 26, marginBottom: 8 },
-  content: { color: "#cfd3db", fontSize: 15.5, lineHeight: 22, marginBottom: 18 },
-
-  actionsRow: { flexDirection: "row", gap: 10, marginTop: 4, marginBottom: 6 },
+  actionsRow: {
+    marginTop: 14,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
   primaryBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
     backgroundColor: "#FF8200",
     borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#FFAA58",
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
-  primaryBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 13.5 },
+  primaryBtnTxt: {
+    color: "#111827",
+    fontWeight: "900",
+    fontSize: 13.5,
+  },
   secondaryBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
     backgroundColor: "rgba(255,255,255,0.06)",
     borderWidth: 1,
-    borderColor: "#2b3141",
+    borderColor: "#2B3141",
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
-  secondaryBtnTxt: { color: "#FF8200", fontWeight: "900", fontSize: 13.5 },
+  secondaryBtnTxt: {
+    color: "#FF8200",
+    fontWeight: "900",
+    fontSize: 13.5,
+  },
 
   shareBox: {
-    marginHorizontal: 16,
     marginTop: 14,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderRadius: 18,
+    backgroundColor: "#151C29",
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: "rgba(255,130,0,0.22)",
     padding: 14,
-    shadowColor: "#000",
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    elevation: 3,
   },
-  shareTitle: { color: "#eaeef7", fontWeight: "900", fontSize: 16, marginBottom: 10, textAlign: "center" },
-  shareLinks: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center", alignItems: "center" },
+  shareTitle: {
+    color: "#EAEEF7",
+    fontWeight: "900",
+    fontSize: 16,
+    marginBottom: 10,
+    textAlign: "center",
+  },
+  shareLinks: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   shareBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
     backgroundColor: "#FF8200",
     borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#FFAA58",
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
-  shareBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 13 },
+  shareBtnTxt: {
+    color: "#111827",
+    fontWeight: "900",
+    fontSize: 13,
+  },
 });

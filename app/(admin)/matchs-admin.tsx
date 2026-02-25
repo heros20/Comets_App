@@ -15,7 +15,6 @@ import {
   Pressable,
   UIManager,
   Image as RNImage,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
@@ -23,11 +22,17 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
+import { AdminHero } from "../../components/admin/AdminHero";
 import { useAdmin } from "../../contexts/AdminContext";
 import { supabase } from "../../supabase";
 
-if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
+if (
+  Platform.OS === "android" &&
+  !(global as any).nativeFabricUIManager &&
+  UIManager.setLayoutAnimationEnabledExperimental
+) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
@@ -43,7 +48,6 @@ const ADVERSAIRES = ["Rouen", "Le Havre", "Cherbourg", "Caen", "Les Andelys", "L
 const CATEGORIES = ["Seniors", "15U", "12U"] as const;
 const FILTERS = ["Tous", ...CATEGORIES] as const;
 
-const logoComets = require("../../assets/images/iconComets.png");
 
 // 🔶 Form inclut categorie
 const initialForm = {
@@ -253,7 +257,7 @@ export default function AdminMatchsScreen({ navigation }: any) {
     const close = () => setDropdownVisible(false);
     const sub = navigation?.addListener?.("blur", close);
     return () => sub && sub();
-  }, [dropdownVisible]);
+  }, [dropdownVisible, navigation]);
 
   if (!isAdmin) {
     return (
@@ -444,29 +448,11 @@ export default function AdminMatchsScreen({ navigation }: any) {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
       <StatusBar barStyle="light-content" />
-
-      {/* HERO */}
-      <View style={[styles.hero, { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26 }]}>
-        <View style={styles.heroStripe} />
-        <View style={styles.heroRow}>
-          <TouchableOpacity
-            onPress={() => (router.canGoBack() ? router.back() : navigation?.goBack?.())}
-            style={styles.backBtn}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Icon name="chevron-back" size={24} color="#FF8200" />
-          </TouchableOpacity>
-          <Text style={styles.heroTitle}>Matchs à venir (admin)</Text>
-          <View style={{ width: 36 }} />
-        </View>
-        <View style={styles.heroProfileRow}>
-          <RNImage source={logoComets} style={styles.heroLogo} resizeMode="contain" />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.heroName}>Planifie le calendrier</Text>
-            <Text style={styles.heroSub}>Date, adversaire, lieu, catégorie, note</Text>
-          </View>
-        </View>
-      </View>
+      <AdminHero
+        title="Matchs a venir admin"
+        subtitle="Planifie date, adversaire, lieu, categorie et note"
+        onBack={() => (router.canGoBack() ? router.back() : navigation?.goBack?.())}
+      />
 
       {/* OVERLAY dropdown adversaires */}
       {dropdownVisible && (
@@ -562,33 +548,6 @@ export default function AdminMatchsScreen({ navigation }: any) {
 }
 
 const styles = StyleSheet.create({
-  hero: { backgroundColor: "#11131a", borderBottomWidth: 1, borderBottomColor: "#1f2230", paddingBottom: 10 },
-  heroStripe: {
-    position: "absolute",
-    right: -60,
-    top: -40,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: "rgba(255,130,0,0.10)",
-    transform: [{ rotate: "18deg" }],
-  },
-  heroRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, gap: 10 },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1b1e27",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#2a2f3d",
-  },
-  heroTitle: { flex: 1, textAlign: "center", color: "#FF8200", fontSize: 20, fontWeight: "800", letterSpacing: 1.1 },
-  heroProfileRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 10, gap: 12 },
-  heroLogo: { width: 56, height: 56, borderRadius: 14, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200" },
-  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
-  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
 
   // ---- Sticky header wrapper ----
   stickyHeaderWrap: {
@@ -775,3 +734,4 @@ const styles = StyleSheet.create({
   secondaryBtn: { backgroundColor: "#BBB", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 10 },
   secondaryBtnTxt: { color: "#111", fontWeight: "900", fontSize: 14.5 },
 });
+

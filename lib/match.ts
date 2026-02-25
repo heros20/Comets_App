@@ -6,6 +6,6 @@ export function resultColor(result?: string) {
 }
 export function resultLabel(result?: string) {
   if (result === "W") return "VICTOIRE";
-  if (result === "L") return "DÉFAITE";
+  if (result === "L") return "DEFAITE";
   return "NUL";
 }

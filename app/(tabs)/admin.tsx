@@ -2,334 +2,430 @@
 "use client";
 
 import { router } from "expo-router";
-import React from "react";
+import React, { useMemo } from "react";
 import {
-  Image,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
-  StatusBar,
-  Platform,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
+import { SafeAreaView } from "react-native-safe-area-context";
+
+import { AdminHero } from "../../components/admin/AdminHero";
 import { useAdmin } from "../../contexts/AdminContext";
 
-const logoComets = require("../../assets/images/iconComets.png");
-
 type AdminRoute = Parameters<typeof router.push>[0];
-type AdminLink = { label: string; icon: string; route: AdminRoute };
+type Domain = "Operations" | "Contenu" | "Membres" | "Finance";
 
-// Messagerie seule
-const adminLinksMessaging: AdminLink[] = [
-  { label: "Messages reçus", icon: "mail-unread-outline", route: "/messages" },
+type AdminModule = {
+  id: string;
+  title: string;
+  subtitle: string;
+  icon: string;
+  route: AdminRoute;
+  tone: string;
+  domain: Domain;
+};
+
+const MODULES: AdminModule[] = [
+  {
+    id: "messages",
+    title: "Messages",
+    subtitle: "Boîte de réception",
+    icon: "mail-unread-outline",
+    route: "/messages",
+    tone: "#FF8200",
+    domain: "Operations",
+  },
+  {
+    id: "matchs-participants",
+    title: "Participations",
+    subtitle: "Inscriptions par match",
+    icon: "list-outline",
+    route: "/MatchsAdminScreen",
+    tone: "#3B82F6",
+    domain: "Operations",
+  },
+  {
+    id: "matchs-planning",
+    title: "Planning matchs",
+    subtitle: "Créer et éditer",
+    icon: "calendar-outline",
+    route: "/matchs-admin",
+    tone: "#10B981",
+    domain: "Operations",
+  },
+  {
+    id: "actus",
+    title: "Actualités",
+    subtitle: "Articles + push",
+    icon: "newspaper-outline",
+    route: "/actus-admin",
+    tone: "#F97316",
+    domain: "Contenu",
+  },
+  {
+    id: "gallery",
+    title: "Galerie",
+    subtitle: "Ajout et suppression",
+    icon: "images-outline",
+    route: "/AdminGalleryScreen",
+    tone: "#6366F1",
+    domain: "Contenu",
+  },
+  {
+    id: "young",
+    title: "Jeunes 12U / 15U",
+    subtitle: "Gestion des profils",
+    icon: "school-outline",
+    route: "/(admin)/youngPlayers",
+    tone: "#06B6D4",
+    domain: "Membres",
+  },
+  {
+    id: "members",
+    title: "Membres du club",
+    subtitle: "Comptes et suppression",
+    icon: "people-outline",
+    route: "/membres-admin",
+    tone: "#F59E0B",
+    domain: "Membres",
+  },
+  {
+    id: "cotisations",
+    title: "Cotisations",
+    subtitle: "Paiements et suivi",
+    icon: "card-outline",
+    route: "/(admin)/cotisation",
+    tone: "#22C55E",
+    domain: "Finance",
+  },
 ];
 
-// Gestion des matchs
-const adminLinksMatchs: AdminLink[] = [
-  { label: "Inscriptions aux matchs", icon: "list-outline", route: "/MatchsAdminScreen" },
-  { label: "Matchs à venir", icon: "calendar-outline", route: "/matchs-admin" },
-];
+const DOMAIN_META: Record<Domain, { title: string; hint: string }> = {
+  Operations: {
+    title: "Opérations",
+    hint: "Matchs et flux quotidien",
+  },
+  Contenu: {
+    title: "Contenu",
+    hint: "Site, actualités et médias",
+  },
+  Membres: {
+    title: "Membres",
+    hint: "Comptes et catégories",
+  },
+  Finance: {
+    title: "Finance",
+    hint: "Cotisations et suivi",
+  },
+};
 
-// Contenus et médias
-const adminLinksContent: AdminLink[] = [
-  { label: "Actualités", icon: "newspaper-outline", route: "/actus-admin" },
-  { label: "Galerie", icon: "images-outline", route: "/AdminGalleryScreen" },
-];
+const DOMAIN_ORDER: Domain[] = ["Operations", "Contenu", "Membres", "Finance"];
 
-// Membres
-const adminLinksMembers: AdminLink[] = [
-  { label: "Jeunes (12U/15U)", icon: "school-outline", route: "/(admin)/youngPlayers" },
-  { label: "Membres", icon: "people-outline", route: "/membres-admin" },
-];
-
-// Finances
-const adminLinksFinance: AdminLink[] = [
-  { label: "Cotisations", icon: "card-outline", route: "/(admin)/cotisation" },
-];
-
-export default function AdminMenuScreen() {
-  const { isAdmin } = useAdmin();
-
-  if (!isAdmin) {
-    return (
-      <View style={{ flex: 1, backgroundColor: "#0f1014", justifyContent: "center", alignItems: "center" }}>
-        <Text style={{ color: "#FF8200", fontSize: 18, fontWeight: "bold", textAlign: "center", paddingHorizontal: 24 }}>
-          Accès réservé aux admins !
-        </Text>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          activeOpacity={0.9}
-          style={{ marginTop: 14, backgroundColor: "#FF8200", paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12 }}
-        >
-          <Text style={{ color: "#fff", fontWeight: "900" }}>Retour</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  return (
-    <View style={{ flex: 1, backgroundColor: "#0f1014" }}>
-      <StatusBar barStyle="light-content" />
-
-      {/* HERO */}
-      <View
-        style={[
-          styles.hero,
-          { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 12 : 22 },
-        ]}
-      >
-        <View style={styles.heroStripe} />
-
-        <View style={styles.heroRow}>
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={styles.backBtnHero}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            activeOpacity={0.9}
-          >
-            <Icon name="chevron-back" size={26} color="#FF8200" />
-          </TouchableOpacity>
-          <Text style={styles.heroTitle}>Panel d’administration</Text>
-          <View style={{ width: 36 }} />
-        </View>
-
-        <View style={styles.heroProfileRow}>
-          <View style={styles.heroAvatar}>
-            <Icon name="shield-checkmark-outline" size={26} color="#FF8200" />
-          </View>
-
-          <View style={{ flex: 1 }}>
-            <Text style={styles.heroName}>Espace Admin</Text>
-            <Text style={styles.heroEmail}>Gestion du club • Outils et contenus</Text>
-            <View style={styles.heroChips}>
-              <View style={[styles.chip, { backgroundColor: "#FFD7A1" }]}>
-                <Text style={styles.chipTxt}>Rôle : Admin</Text>
-              </View>
-              <View style={[styles.chip, { backgroundColor: "#D1F3FF" }]}>
-                <Text style={[styles.chipTxt, { color: "#0C7499" }]}>Actions rapides</Text>
-              </View>
-            </View>
-          </View>
-
-          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
-        </View>
-      </View>
-
-      {/* CONTENU */}
-      <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
-        {/* Intro card */}
-        <View style={styles.cardIntro}>
-          <Text style={styles.introTxt}>
-            Bienvenue dans le centre de contrôle des Comets. Publie une actu, gère les matchs, la
-            galerie et les membres, tout en un clin d’œil.
-          </Text>
-        </View>
-
-        {/* Messagerie */}
-        <Text style={[styles.sectionTitle, { marginTop: 22 }]}>Messagerie</Text>
-        <View style={styles.linksWrap}>
-          {adminLinksMessaging.map(({ label, icon, route }) => (
-            <AdminLinkItem key={label} label={label} icon={icon} route={route} />
-          ))}
-        </View>
-
-        {/* Matchs */}
-        <Text style={[styles.sectionTitle, { marginTop: 22 }]}>Matchs</Text>
-        <View style={styles.linksWrap}>
-          {adminLinksMatchs.map(({ label, icon, route }) => (
-            <AdminLinkItem key={label} label={label} icon={icon} route={route} />
-          ))}
-        </View>
-
-        {/* Contenus et médias */}
-        <Text style={[styles.sectionTitle, { marginTop: 22 }]}>Contenus et médias</Text>
-        <View style={styles.linksWrap}>
-          {adminLinksContent.map(({ label, icon, route }) => (
-            <AdminLinkItem key={label} label={label} icon={icon} route={route} />
-          ))}
-        </View>
-
-        {/* Membres */}
-        <Text style={[styles.sectionTitle, { marginTop: 22 }]}>Membres</Text>
-        <View style={styles.linksWrap}>
-          {adminLinksMembers.map(({ label, icon, route }) => (
-            <AdminLinkItem key={label} label={label} icon={icon} route={route} />
-          ))}
-        </View>
-
-        {/* Finances */}
-        <Text style={[styles.sectionTitle, { marginTop: 22 }]}>Finances</Text>
-        <View style={styles.linksWrap}>
-          {adminLinksFinance.map(({ label, icon, route }) => (
-            <AdminLinkItem key={label} label={label} icon={icon} route={route} />
-          ))}
-        </View>
-
-        <View style={{ height: 20 }} />
-      </ScrollView>
-    </View>
-  );
-}
-
-function AdminLinkItem({ label, icon, route }: AdminLink) {
+function ModuleTile({ item, width }: { item: AdminModule; width: number }) {
   return (
     <TouchableOpacity
-      style={styles.adminLink}
-      onPress={() => router.push(route)}
-      activeOpacity={0.92}
+      style={[styles.moduleTile, { width, borderColor: `${item.tone}44` }]}
+      onPress={() => router.push(item.route)}
+      activeOpacity={0.9}
     >
-      <View style={styles.iconWrap}>
-        <Icon name={icon as any} size={20} color="#FF8200" />
+      <View style={[styles.moduleIcon, { backgroundColor: `${item.tone}20` }]}>
+        <Icon name={item.icon as any} size={18} color={item.tone} />
       </View>
-      <Text style={styles.linkLabel} numberOfLines={1}>{label}</Text>
-      <Icon name="chevron-forward" size={18} color="#cfd3db" />
+
+      <View style={styles.moduleTextWrap}>
+        <Text style={styles.moduleTitle}>{item.title}</Text>
+        <Text style={styles.moduleSub}>{item.subtitle}</Text>
+      </View>
     </TouchableOpacity>
   );
 }
 
+export default function AdminMenuScreen() {
+  const { isAdmin } = useAdmin();
+  const { width } = useWindowDimensions();
+
+  const stats = useMemo(
+    () => [
+      { id: "tools", label: "Outils", value: String(MODULES.length), icon: "grid-outline", tone: "#FF8200" },
+      {
+        id: "ops",
+        label: "Opérations",
+        value: String(MODULES.filter((m) => m.domain === "Operations").length),
+        icon: "flash-outline",
+        tone: "#3B82F6",
+      },
+      {
+        id: "content",
+        label: "Contenu",
+        value: String(MODULES.filter((m) => m.domain === "Contenu").length),
+        icon: "albums-outline",
+        tone: "#10B981",
+      },
+    ],
+    []
+  );
+
+  const twoCols = width >= 390;
+  const tileWidth = twoCols ? (width - 44) / 2 : width - 32;
+
+  if (!isAdmin) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar barStyle="light-content" />
+        <View style={styles.lockWrap}>
+          <View style={styles.lockIconWrap}>
+            <Icon name="shield-outline" size={24} color="#FF8200" />
+          </View>
+          <Text style={styles.lockTitle}>Accès réservé aux admins</Text>
+          <Text style={styles.lockSub}>Connecte-toi avec un compte admin pour ouvrir cet espace.</Text>
+          <TouchableOpacity style={styles.lockBtn} onPress={() => router.back()} activeOpacity={0.9}>
+            <Text style={styles.lockBtnTxt}>Retour</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="light-content" />
+
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        <AdminHero
+          title="Panel administration"
+          subtitle="Contrôle central de tous les modules"
+          onBack={() => router.back()}
+          rightSlot={
+            <View style={styles.heroTag}>
+              <Text style={styles.heroTagTxt}>{MODULES.length} outils</Text>
+            </View>
+          }
+        />
+
+        <View style={styles.sectionBlock}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Vue globale</Text>
+            <Text style={styles.sectionHint}>Résumé rapide des modules</Text>
+          </View>
+
+          <View style={styles.statsRow}>
+            {stats.map((s, idx) => {
+              const statWidth = twoCols ? (width - 44) / 3 : width - 32;
+              return (
+                <View
+                  key={s.id}
+                  style={[
+                    styles.statCard,
+                    {
+                      width: statWidth,
+                      borderColor: `${s.tone}55`,
+                      marginRight: twoCols && idx < stats.length - 1 ? 6 : 0,
+                    },
+                  ]}
+                >
+                  <View style={[styles.statIcon, { backgroundColor: `${s.tone}22` }]}>
+                    <Icon name={s.icon as any} size={16} color={s.tone} />
+                  </View>
+                  <Text style={styles.statValue}>{s.value}</Text>
+                  <Text style={styles.statLabel}>{s.label}</Text>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+
+        {DOMAIN_ORDER.map((domain) => {
+          const domainModules = MODULES.filter((m) => m.domain === domain);
+          const meta = DOMAIN_META[domain];
+
+          return (
+            <View key={domain} style={styles.sectionBlock}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{meta.title}</Text>
+                <Text style={styles.sectionHint}>{meta.hint}</Text>
+              </View>
+
+              <View style={styles.moduleGrid}>
+                {domainModules.map((item, idx) => (
+                  <View
+                    key={item.id}
+                    style={{
+                      marginBottom: 12,
+                      marginRight: twoCols && idx % 2 === 0 ? 12 : 0,
+                    }}
+                  >
+                    <ModuleTile item={item} width={tileWidth} />
+                  </View>
+                ))}
+              </View>
+            </View>
+          );
+        })}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
 const styles = StyleSheet.create({
-  // HERO
-  hero: {
-    backgroundColor: "#11131a",
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: "#1f2230",
-  },
-  heroStripe: {
-    position: "absolute",
-    right: -60,
-    top: -40,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: "rgba(255,130,0,0.10)",
-    transform: [{ rotate: "18deg" }],
-  },
-  heroRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingTop: Platform.OS === "ios" ? 10 : 6,
-  },
-  backBtnHero: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1b1e27",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#2a2f3d",
-  },
-  heroTitle: {
+  safe: {
     flex: 1,
-    textAlign: "center",
-    color: "#FF8200",
-    fontSize: 20,
-    fontWeight: "800",
-    letterSpacing: 1.1,
+    backgroundColor: "#0F1014",
   },
-  heroProfileRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    gap: 14,
+  scrollContent: {
+    paddingBottom: 30,
   },
-  heroAvatar: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
-    backgroundColor: "#18181C",
-    borderWidth: 3,
-    borderColor: "#FF8200",
+
+  heroTag: {
+    minHeight: 34,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "#2A3344",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
-    elevation: 3,
+    paddingHorizontal: 10,
   },
-  heroName: { color: "#fff", fontSize: 18, fontWeight: "800", marginBottom: 2 },
-  heroEmail: { color: "#c7cad1", fontSize: 13 },
-  heroChips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
-  chip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14 },
-  chipTxt: { fontWeight: "800", fontSize: 12.5 },
-  heroLogo: {
-    width: 56,
-    height: 56,
-    borderRadius: 14,
-    backgroundColor: "#fff",
-    borderWidth: 2,
-    borderColor: "#FF8200",
+  heroTagTxt: {
+    color: "#E5E7EB",
+    fontSize: 11,
+    fontWeight: "800",
   },
 
-  // BODY
-  body: { padding: 14, paddingBottom: 28, backgroundColor: "#0f1014" },
-
-  // Intro card
-  cardIntro: {
-    width: "100%",
-    maxWidth: 460,
-    alignSelf: "center",
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderRadius: 18,
-    padding: 14,
-    shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    elevation: 3,
-    marginTop: 14,
-    borderWidth: 1,
-    borderColor: "rgba(255,130,0,0.22)",
+  sectionBlock: {
+    marginTop: 18,
+    paddingHorizontal: 12,
   },
-  introTxt: { color: "#cfd3db", fontSize: 14.5, lineHeight: 20, textAlign: "center" },
-
-  // Titres de sections
+  sectionHeader: {
+    marginBottom: 10,
+  },
   sectionTitle: {
-    color: "#FF8200",
-    fontSize: 16,
-    fontWeight: "800",
-    paddingHorizontal: 14,
-    marginBottom: 8,
-    letterSpacing: 0.5,
+    color: "#F3F4F6",
+    fontSize: 18,
+    fontWeight: "900",
+    letterSpacing: 0.2,
+  },
+  sectionHint: {
+    marginTop: 2,
+    color: "#9CA3AF",
+    fontSize: 12.5,
   },
 
-  // Liens
-  linksWrap: {
-    width: "100%",
-    maxWidth: 460,
-    alignSelf: "center",
-    marginTop: 12,
-    marginBottom: 15,
-    gap: 10,
-  },
-  adminLink: {
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderRadius: 18,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    borderWidth: 1,
-    borderColor: "rgba(255,130,0,0.22)",
-    shadowColor: "#000",
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    elevation: 3,
+  statsRow: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
+    flexWrap: "nowrap",
   },
-  iconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#141821",
+  statCard: {
+    backgroundColor: "#151925",
+    borderRadius: 14,
+    borderWidth: 1,
+    minHeight: 88,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#252a38",
+    paddingHorizontal: 8,
+    paddingVertical: 10,
   },
-  linkLabel: { color: "#eaeef7", fontWeight: "800", fontSize: 15.5, letterSpacing: 0.3, flex: 1 },
+  statIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 6,
+  },
+  statValue: {
+    color: "#F9FAFB",
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  statLabel: {
+    marginTop: 2,
+    color: "#AAB2C2",
+    fontSize: 11.5,
+    fontWeight: "700",
+  },
+
+  moduleGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+  },
+  moduleTile: {
+    backgroundColor: "#141822",
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    minHeight: 78,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  moduleIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  moduleTextWrap: {
+    flex: 1,
+  },
+  moduleTitle: {
+    color: "#F3F4F6",
+    fontSize: 13.5,
+    fontWeight: "800",
+  },
+  moduleSub: {
+    marginTop: 2,
+    color: "#98A1B2",
+    fontSize: 11.5,
+  },
+
+  lockWrap: {
+    flex: 1,
+    paddingHorizontal: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  lockIconWrap: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "rgba(255,130,0,0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  lockTitle: {
+    marginTop: 14,
+    color: "#F3F4F6",
+    fontSize: 19,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  lockSub: {
+    marginTop: 6,
+    color: "#AAB2C2",
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: "center",
+  },
+  lockBtn: {
+    marginTop: 16,
+    backgroundColor: "#FF8200",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  lockBtnTxt: {
+    color: "#0F1014",
+    fontWeight: "900",
+    fontSize: 14,
+  },
 });

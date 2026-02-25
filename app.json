@@ -2,7 +2,7 @@
   "expo": {
     "name": "Comets Honfleur",
     "slug": "les-comets-app",
-    "version": "2.0.0",
+    "version": "2.0.2",
 
     "orientation": "default",
 
@@ -24,7 +24,7 @@
 
     "android": {
       "package": "com.lescomets.app",
-      "versionCode": 35,
+      "versionCode": 37,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/iconComets.png",

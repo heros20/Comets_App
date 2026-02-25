@@ -12,7 +12,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image as RNImage,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -21,12 +20,13 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
+import { AdminHero } from "../../components/admin/AdminHero";
 import { useAdmin } from "../../contexts/AdminContext";
 import { supabase } from "../../supabase";
 import { useNavigation } from "@react-navigation/native";
 
-const logoComets = require("../../assets/images/iconComets.png");
 
 /** Catégories disponibles */
 const CATEGORY_META = [
@@ -319,31 +319,11 @@ export default function AdminActusScreen() {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <ScrollView contentContainerStyle={{ padding: 12, paddingBottom: 48 }}>
-          {/* ===== Header (hero) rétabli ===== */}
-          <View style={[styles.hero, { marginBottom: 12, borderTopLeftRadius: 16, borderTopRightRadius: 16 }]}>
-            <View style={styles.heroStripe} />
-            <View style={{ paddingTop: 10, paddingBottom: 6 }}>
-              <View style={styles.heroRow}>
-                <TouchableOpacity
-                  onPress={() => (navigation as any)?.goBack?.()}
-                  style={styles.backBtn}
-                  activeOpacity={0.85}
-                >
-                  <Icon name="arrow-back" size={18} color="#FF8200" />
-                </TouchableOpacity>
-                <Text style={styles.heroTitle}>Administration — Actus</Text>
-                <View style={{ width: 36, height: 36 }} />
-              </View>
-
-              <View style={styles.heroProfileRow}>
-                <RNImage source={logoComets} style={styles.heroLogo} resizeMode="cover" />
-                <View>
-                  <Text style={styles.heroName}>Comets d’Honfleur</Text>
-                  <Text style={styles.heroSub}>Gestion des actualités & push</Text>
-                </View>
-              </View>
-            </View>
-          </View>
+          <AdminHero
+            title="Administration actus"
+            subtitle="Gestion des actualites et notifications"
+            onBack={() => (navigation as any)?.goBack?.()}
+          />
 
           {/* ===== FORM ===== */}
           <View style={styles.card}>
@@ -545,54 +525,6 @@ const styles = StyleSheet.create({
   tabTxt: { color: "#c7cad1", fontWeight: "800" },
   tabTxtActive: { color: "#FF8200" },
 
-  // Header (hero)
-  hero: {
-    backgroundColor: "#11131a",
-    borderBottomWidth: 1,
-    borderBottomColor: "#1f2230",
-    paddingBottom: 10,
-  },
-  heroStripe: {
-    position: "absolute",
-    right: -60,
-    top: -40,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: "rgba(255,130,0,0.10)",
-    transform: [{ rotate: "18deg" }],
-  },
-  heroRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, gap: 10 },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1b1e27",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#2a2f3d",
-  },
-  heroTitle: {
-    flex: 1,
-    textAlign: "center",
-    color: "#FF8200",
-    fontSize: 20,
-    fontWeight: "800",
-    letterSpacing: 1.1,
-  },
-  heroProfileRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 10, gap: 12 },
-  heroLogo: {
-    width: 56,
-    height: 56,
-    borderRadius: 14,
-    backgroundColor: "#fff",
-    borderWidth: 2,
-    borderColor: "#FF8200",
-  },
-  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
-  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
-
   // Cards & inputs
   card: {
     backgroundColor: "rgba(255,255,255,0.06)",
@@ -673,3 +605,4 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
 });
+

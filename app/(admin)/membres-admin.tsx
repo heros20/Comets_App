@@ -6,10 +6,8 @@ import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Image,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -18,12 +16,12 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
+import { AdminHero } from "../../components/admin/AdminHero";
 import { useAdmin } from "../../contexts/AdminContext";
 import { supabase } from "../../supabase";
 
-const logoComets = require("../../assets/images/iconComets.png");
 
 // ===== Helpers date =====
 const maskBirthdateFR = (raw: string) => {
@@ -58,7 +56,7 @@ const toFR = (val?: string | null) => {
   return val;
 };
 
-// ===== Tri catégories =====
+// ===== Tri categories =====
 const CAT_ORDER: Record<string, number> = { Senior: 0, "15U": 1, "12U": 2 };
 const catRank = (c?: string | null) =>
   c && c in CAT_ORDER ? CAT_ORDER[c] : 9999;
@@ -87,7 +85,7 @@ export default function MembresAdminScreen() {
     setLoading(true);
     setError("");
     try {
-      // Récupère bien date_naissance + categorie
+      // Recupere bien date_naissance + categorie
       const { data, error } = await supabase
         .from("admins")
         .select(
@@ -103,7 +101,7 @@ export default function MembresAdminScreen() {
         return;
       }
 
-      // Normalise date en FR, puis tri par catégorie: Senior -> 15U -> 12U -> autres
+      // Normalise date en FR, puis tri par categorie: Senior -> 15U -> 12U -> autres
       const normalized = (data || []).map((m: any) => ({
         ...m,
         date_naissance: toFR(m.date_naissance),
@@ -113,7 +111,7 @@ export default function MembresAdminScreen() {
         const ra = catRank(a.categorie);
         const rb = catRank(b.categorie);
         if (ra !== rb) return ra - rb;
-        // même catégorie → plus récent d'abord
+        // meme categorie -> plus recent d'abord
         return (
           new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
         );
@@ -121,7 +119,7 @@ export default function MembresAdminScreen() {
 
       setMembers(sorted);
     } catch {
-      setError("Erreur réseau ou Supabase.");
+      setError("Erreur reseau ou Supabase.");
       setMembers([]);
     }
     setLoading(false);
@@ -163,7 +161,7 @@ export default function MembresAdminScreen() {
         return;
       }
 
-      setAddMsg("✅ Membre ajouté !");
+      setAddMsg("Membre ajoute !");
       setEmail("");
       setPassword("");
       setFirstName("");
@@ -213,7 +211,7 @@ export default function MembresAdminScreen() {
       );
       const data = await res.json();
       if (!res.ok) {
-        setDeleteError(data?.error || "Erreur à la suppression.");
+        setDeleteError(data?.error || "Erreur a la suppression.");
       } else {
         fetchMembers();
       }
@@ -234,7 +232,7 @@ export default function MembresAdminScreen() {
       >
         <StatusBar barStyle="light-content" />
         <Text style={{ color: "#FF8200", fontSize: 18, fontWeight: "bold" }}>
-          Accès réservé aux admins !
+          Acces reserve aux admins !
         </Text>
       </SafeAreaView>
     );
@@ -243,39 +241,11 @@ export default function MembresAdminScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
       <StatusBar barStyle="light-content" />
-
-      {/* HERO */}
-      <View
-        style={[
-          styles.hero,
-          {
-            paddingTop:
-              Platform.OS === "android"
-                ? (StatusBar.currentHeight || 0) + 14
-                : 26,
-          },
-        ]}
-      >
-        <View style={styles.heroStripe} />
-        <View style={styles.heroRow}>
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={styles.backBtn}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Icon name="chevron-back" size={24} color="#FF8200" />
-          </TouchableOpacity>
-          <Text style={styles.heroTitle}>Membres (admin)</Text>
-          <View style={{ width: 36 }} />
-        </View>
-        <View style={styles.heroProfileRow}>
-          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.heroName}>Gestion des comptes membres</Text>
-            <Text style={styles.heroSub}>Ajoute, consulte et supprime des profils</Text>
-          </View>
-        </View>
-      </View>
+      <AdminHero
+        title="Membres admin"
+        subtitle="Ajoute, consulte et supprime des profils"
+        onBack={() => router.back()}
+      />
 
       {/* BODY */}
       <KeyboardAvoidingView
@@ -307,7 +277,7 @@ export default function MembresAdminScreen() {
               />
               <TextInput
                 style={styles.input}
-                placeholder="Prénom"
+                placeholder="Prenom"
                 placeholderTextColor="#9aa0ae"
                 value={firstName}
                 onChangeText={setFirstName}
@@ -378,11 +348,11 @@ export default function MembresAdminScreen() {
                     {m.date_naissance ?? "-"}
                   </Text>
                   <Text style={styles.memberRow}>
-                    <Text style={styles.label}>Catégorie :</Text>{" "}
+                    <Text style={styles.label}>Categorie :</Text>{" "}
                     {m.categorie ?? "-"}
                   </Text>
                   <Text style={styles.memberRow}>
-                    <Text style={styles.label}>Créé le :</Text>{" "}
+                    <Text style={styles.label}>Cree le :</Text>{" "}
                     {new Date(m.created_at).toLocaleDateString("fr-FR")}
                   </Text>
 
@@ -410,56 +380,6 @@ export default function MembresAdminScreen() {
 }
 
 const styles = StyleSheet.create({
-  hero: {
-    backgroundColor: "#11131a",
-    borderBottomWidth: 1,
-    borderBottomColor: "#1f2230",
-    paddingBottom: 10,
-  },
-  heroStripe: {
-    position: "absolute",
-    right: -60,
-    top: -40,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: "rgba(255,130,0,0.10)",
-    transform: [{ rotate: "18deg" }],
-  },
-  heroRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    gap: 10,
-  },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1b1e27",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#2a2f3d",
-  },
-  heroTitle: {
-    flex: 1,
-    textAlign: "center",
-    color: "#FF8200",
-    fontSize: 20,
-    fontWeight: "800",
-    letterSpacing: 1.1,
-  },
-  heroProfileRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    gap: 12,
-  },
-  heroLogo: { width: 56, height: 56, borderRadius: 14, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200" },
-  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
-  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
 
   card: {
     backgroundColor: "rgba(255,255,255,0.06)",
@@ -518,3 +438,5 @@ const styles = StyleSheet.create({
 
   errorTxt: { color: "#C50F0F", fontWeight: "bold", marginTop: 8, textAlign: "center" },
 });
+
+

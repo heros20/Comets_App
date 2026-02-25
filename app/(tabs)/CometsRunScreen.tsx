@@ -2,8 +2,14 @@
 "use client";
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Audio } from "expo-av";
+import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from "expo-audio";
 import Constants from "expo-constants";
+import * as Haptics from "expo-haptics";
+import { LinearGradient } from "expo-linear-gradient";
+import * as NavigationBar from "expo-navigation-bar";
+import { router } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
+import * as ScreenOrientation from "expo-screen-orientation";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
@@ -14,7 +20,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -23,17 +28,11 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 
 import { useAdmin } from "../../contexts/AdminContext";
 import { supabase } from "../../supabase";
-
-import * as ScreenOrientation from "expo-screen-orientation";
-
-let Haptics: any = null;
-try { Haptics = require("expo-haptics"); } catch {}
-let NavigationBar: any = null;
-try { NavigationBar = require("expo-navigation-bar"); } catch {}
 
 const PRIMARY_API =
   process.env.EXPO_PUBLIC_API_URL ??
@@ -41,6 +40,17 @@ const PRIMARY_API =
 const FALLBACK_API = "https://les-comets-honfleur.vercel.app";
 const COMETS_RUN_OVERTAKE_PATH = "/api/notifications/comets-run-overtake";
 const PUSH_COMETS_RUN_SECRET = process.env.EXPO_PUBLIC_PUSH_COMETS_RUN_SECRET || "";
+
+const HOME_UI = {
+  bg: "#0B0F17",
+  panel: "#131B2A",
+  panelSoft: "#151E2F",
+  panelAlt: "#141D2C",
+  text: "#F3F4F6",
+  muted: "#AAB2C2",
+  accent: "#FF8200",
+  accentSoft: "#FFAA58",
+} as const;
 
 const { width: W0, height: H0 } = Dimensions.get("window");
 const SCREEN_W = Math.max(W0, H0);
@@ -60,7 +70,6 @@ const ENABLE_HAPTICS_DEFAULT = true;
 const makeDims = (H: number) => ({ GROUND_Y: Math.floor(H * 0.90) });
 const { GROUND_Y: GROUND_Y_INIT } = makeDims(SCREEN_H_INIT);
 
-const GROUND_HEIGHT = 2;
 const PLAYER_SIZE = 52;
 const PLAYER_RADIUS = PLAYER_SIZE / 2;
 
@@ -175,6 +184,36 @@ const randf = (min: number, max: number) => Math.random() * (max - min) + min;
 const randi = (min: number, max: number) => Math.floor(randf(min, max));
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 
+function circleRectCollide(
+  cx: number,
+  cy: number,
+  r: number,
+  rx: number,
+  ry: number,
+  rw: number,
+  rh: number,
+) {
+  const testX = Math.max(rx, Math.min(cx, rx + rw));
+  const testY = Math.max(ry, Math.min(cy, ry + rh));
+  const distX = cx - testX;
+  const distY = cy - testY;
+  return distX * distX + distY * distY <= r * r;
+}
+
+function circleCircleCollide(
+  ax: number,
+  ay: number,
+  ar: number,
+  bx: number,
+  by: number,
+  br: number,
+) {
+  const dx = ax - bx;
+  const dy = ay - by;
+  const rr = ar + br;
+  return dx * dx + dy * dy <= rr * rr;
+}
+
 // Jumps
 const V0 = Math.abs(JUMP_VELOCITY);
 const singleJumpH = () => (V0 * V0) / (2 * GRAVITY_BASE);
@@ -205,6 +244,9 @@ const MAP_SWITCH_AT = {
   mars_to_solaire: 100_000,
 } as const;
 
+const MAP_NAMES: MapName[] = ["base", "terre", "jupiter", "mars", "systeme_solaire"];
+const POWERUP_KINDS: PowerUpKind[] = ["shield", "doublejump", "x2", "letter"];
+
 function getDifficultyByMap(map: MapName) {
   switch (map) {
     case "base":            return { speedGain: SPEED_GAIN_PER_SEC_BASE * 1.00, gapMul: 1.00, gravityMul: 1.00 };
@@ -228,6 +270,29 @@ type PauseSnapshot = {
   persistentLetters: CometsLetter[]; // progression C-O-M-E-T-S
   mapName: MapName;
   speed: number;
+  world?: {
+    y: number;
+    velY: number;
+    grounded: boolean;
+    lastGroundedTime: number;
+    jumpBuffer: number;
+    airJumpsLeft: number;
+    distAcc: number;
+    combo: number;
+    angle: number;
+    groundOffset: number;
+    fenceOffset: number;
+    mapAOffset: number;
+    mapBOffset: number;
+    mapFade: number;
+    mapA: MapName;
+    mapB: MapName;
+    obstacles: Obstacle[];
+    collectibles: Collectible[];
+    powerUps: PowerUp[];
+    lastId: number;
+    spawnedLetterIdx: number[];
+  };
 };
 
 async function savePauseSnapshot(s: PauseSnapshot) {
@@ -300,8 +365,7 @@ export default function CometsRunnerScreen() {
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
     (async () => {
       try {
-        if (Platform.OS === "android" && NavigationBar?.setBackgroundColorAsync) {
-          await NavigationBar.setBackgroundColorAsync("#00000000");
+        if (Platform.OS === "android") {
           await NavigationBar.setButtonStyleAsync("light");
           await NavigationBar.setVisibilityAsync("visible");
         }
@@ -311,8 +375,7 @@ export default function CometsRunnerScreen() {
       ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
       (async () => {
         try {
-          if (Platform.OS === "android" && NavigationBar?.setBackgroundColorAsync) {
-            await NavigationBar.setBackgroundColorAsync("#000000");
+          if (Platform.OS === "android") {
             await NavigationBar.setButtonStyleAsync("light");
             await NavigationBar.setVisibilityAsync("visible");
           }
@@ -321,24 +384,23 @@ export default function CometsRunnerScreen() {
     };
   }, []);
 
-  const setPlayingStatusBar = (b: boolean) => {
+  const setPlayingStatusBar = useCallback((b: boolean) => {
     try {
       /* @ts-ignore */
       StatusBar.setHidden(b, "fade");
     } catch {}
-  };
+  }, []);
 
   // 🔊 Mode audio (iOS silencieux + latence min)
   useEffect(() => {
     (async () => {
       try {
-        await Audio.setAudioModeAsync({
-          playsInSilentModeIOS: true,
-          allowsRecordingIOS: false,
-          staysActiveInBackground: false,
-          interruptionModeIOS: 1,
-          shouldDuckAndroid: true,
-          interruptionModeAndroid: 1,
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          allowsRecording: false,
+          shouldPlayInBackground: false,
+          interruptionMode: "duckOthers",
+          shouldRouteThroughEarpiece: false,
         });
       } catch {}
     })();
@@ -365,8 +427,8 @@ export default function CometsRunnerScreen() {
   }, []);
 
   // Hauteurs dépendantes
-  const H_SINGLE = useMemo(() => singleJumpH(), [screenH]);
-  const H_DOUBLE_ONLY = useMemo(() => doubleJumpExtraH(), [screenH]);
+  const H_SINGLE = singleJumpH();
+  const H_DOUBLE_ONLY = doubleJumpExtraH();
   const H_DOUBLE = H_SINGLE + H_DOUBLE_ONLY;
   const CY_GROUND = useMemo(() => GROUND_Y - PLAYER_SIZE / 2, [GROUND_Y]);
   const yForHeight = useCallback((h: number) => CY_GROUND - h, [CY_GROUND]);
@@ -382,12 +444,14 @@ export default function CometsRunnerScreen() {
   const [score, setScore] = useState(0);
   const [best, setBest] = useState(0);
   const [showHelp, setShowHelp] = useState(false);
+  const [pendingSnapshot, setPendingSnapshot] = useState<PauseSnapshot | null>(null);
 
   // 🎉 Ultra visuel 20k — overlay éphémère (déclenché plus tard)
   const [bigEventUntil, setBigEventUntil] = useState<number>(0);
 
   // restart lockout
   const restartAllowedAtRef = useRef<number>(0);
+  const failStreakRef = useRef(0);
 
   // Settings
   const [settings, setSettings] = useState<Settings>({
@@ -406,6 +470,17 @@ export default function CometsRunnerScreen() {
   const [achievements, setAchievements] = useState<Record<AchievementKey, boolean>>({
     first_x2: false, score_2000: false, combo_10: false
   });
+
+  const scoreRef = useRef(score);
+  const bestRef = useRef(best);
+  const gameStateRef = useRef<GameState>(gameState);
+  const hasShieldRef = useRef(false);
+  const shieldStacksRef = useRef(0);
+  const superShieldUntilRef = useRef(0);
+  const doubleJumpUntilRef = useRef<number>(0);
+  const invincibleUntilRef = useRef<number>(0);
+  const purpleChainRef = useRef(0);
+  const achievementsRef = useRef(achievements);
 
   const [toast, setToast] = useState<string | null>(null);
   const lastToastAtRef = useRef(0);
@@ -446,21 +521,61 @@ export default function CometsRunnerScreen() {
   const [superShieldUntil, setSuperShieldUntil] = useState(0); // invincibilité super shield
   const [doubleJumpUntil, setDoubleJumpUntil] = useState<number>(0);
   const [invincibleUntil, setInvincibleUntil] = useState<number>(0);
+  const [purpleChain, setPurpleChain] = useState(0);
+
+  useEffect(() => { hasShieldRef.current = hasShield; }, [hasShield]);
+  useEffect(() => { shieldStacksRef.current = shieldStacks; }, [shieldStacks]);
+  useEffect(() => { superShieldUntilRef.current = superShieldUntil; }, [superShieldUntil]);
+  useEffect(() => { doubleJumpUntilRef.current = doubleJumpUntil; }, [doubleJumpUntil]);
+  useEffect(() => { invincibleUntilRef.current = invincibleUntil; }, [invincibleUntil]);
+  useEffect(() => { purpleChainRef.current = purpleChain; }, [purpleChain]);
+
+  const setHasShieldSync = useCallback((value: boolean) => {
+    hasShieldRef.current = value;
+    setHasShield(value);
+  }, []);
+  const setShieldStacksSync = useCallback((value: number) => {
+    shieldStacksRef.current = value;
+    setShieldStacks(value);
+  }, []);
+  const setSuperShieldUntilSync = useCallback((value: number) => {
+    superShieldUntilRef.current = value;
+    setSuperShieldUntil(value);
+  }, []);
+  const setDoubleJumpUntilSync = useCallback((value: number) => {
+    doubleJumpUntilRef.current = value;
+    setDoubleJumpUntil(value);
+  }, []);
+  const setInvincibleUntilSync = useCallback((value: number) => {
+    invincibleUntilRef.current = value;
+    setInvincibleUntil(value);
+  }, []);
+  const setPurpleChainSync = useCallback((value: number) => {
+    purpleChainRef.current = value;
+    setPurpleChain(value);
+  }, []);
 
   // Multiplicateur Purple
   const comboRef = useRef(0);
   const scoreMultLevelRef = useRef<number>(1);
   const scoreMultUntilRef = useRef<number>(0);
-  const getActiveScoreMult = () => (Date.now() < scoreMultUntilRef.current ? scoreMultLevelRef.current : 1);
-  const applyScoreGain = (base: number) => Math.floor(base * getActiveScoreMult());
+  const getActiveScoreMult = useCallback(
+    () => (Date.now() < scoreMultUntilRef.current ? scoreMultLevelRef.current : 1),
+    []
+  );
+  const applyScoreGain = useCallback((base: number) => Math.floor(base * getActiveScoreMult()), [getActiveScoreMult]);
 
   // Chaîne Purple
-  const [purpleChain, setPurpleChain] = useState(0);
   const purpleChainExpiresAtRef = useRef<number>(0);
+
+  useEffect(() => { scoreRef.current = score; }, [score]);
+  useEffect(() => { bestRef.current = best; }, [best]);
+  useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
+  useEffect(() => { achievementsRef.current = achievements; }, [achievements]);
 
   // === COMETS persistant (ordre strict) ===
   const persistentLettersRef = useRef<Set<CometsLetter>>(new Set());
-  const [lettersTick, setLettersTick] = useState(0);
+  const [, setLettersTick] = useState(0);
 
   // indices 0..5 spawnés durant CE run
   const spawnedLetterIdxThisRunRef = useRef<Set<number>>(new Set());
@@ -483,21 +598,17 @@ export default function CometsRunnerScreen() {
   }, []);
   useEffect(() => { loadCometsProgress(); }, [loadCometsProgress]);
 
-  const expectedLetter = (): CometsLetter => {
-    for (const L of LETTERS) { if (!persistentLettersRef.current.has(L)) return L; }
-    return "S";
-  };
-  const haveAllLetters = () => LETTERS.every(L => persistentLettersRef.current.has(L));
-  const addPersistentLetter = (L: CometsLetter) => {
+  const haveAllLetters = useCallback(() => LETTERS.every(L => persistentLettersRef.current.has(L)), []);
+  const addPersistentLetter = useCallback((L: CometsLetter) => {
     persistentLettersRef.current.add(L);
     saveCometsProgress();
     setLettersTick(t => t + 1);
-  };
-  const resetPersistentLetters = () => {
+  }, [saveCometsProgress]);
+  const resetPersistentLetters = useCallback(() => {
     persistentLettersRef.current.clear();
     saveCometsProgress();
     setLettersTick(t => t + 1);
-  };
+  }, [saveCometsProgress]);
 
   // Monde
   const playerX = Math.floor(SCREEN_W * 0.08);
@@ -543,11 +654,6 @@ export default function CometsRunnerScreen() {
   // FX
   const shake = useRef(new Animated.Value(0)).current;
   const heroPulse = useRef(new Animated.Value(0)).current;
-
-  // FPS debug
-  const [fps, setFps] = useState(60);
-  const fpsBuf = useRef<number[]>([]);
-  let fpsLastUpdate = useRef(0);
 
   // Admin/Supabase
   const { admin } = useAdmin();
@@ -651,34 +757,31 @@ export default function CometsRunnerScreen() {
   }, [adminId, adminName, best, loadTop5]);
 
   // 🔊 Refs & helpers audio
-  const musicRef = useRef<Audio.Sound | null>(null);
-  const sfxApplauseRef = useRef<Audio.Sound | null>(null);
+  const musicRef = useRef<AudioPlayer | null>(null);
+  const sfxApplauseRef = useRef<AudioPlayer | null>(null);
 
   // Pool pour COINS (superposition)
   const COIN_POOL_SIZE = 8;
-  const coinPoolRef = useRef<Audio.Sound[]>([]);
+  const coinPoolRef = useRef<AudioPlayer[]>([]);
   const coinPoolIdxRef = useRef(0);
 
   const ensureMusic = useCallback(async () => {
     if (musicRef.current) return musicRef.current;
-    const { sound } = await Audio.Sound.createAsync(musicFile, {
-      isLooping: true,
-      volume: settings.mute ? 0 : 1
-    });
-    musicRef.current = sound;
-    return sound;
+    const player = createAudioPlayer(musicFile, { keepAudioSessionActive: true });
+    player.loop = true;
+    player.volume = settings.mute ? 0 : 1;
+    musicRef.current = player;
+    return player;
   }, [settings.mute]);
 
   const ensureCoinPool = useCallback(async () => {
     if (coinPoolRef.current.length > 0) return coinPoolRef.current;
-    const arr: Audio.Sound[] = [];
+    const arr: AudioPlayer[] = [];
     for (let i = 0; i < COIN_POOL_SIZE; i++) {
-      const { sound } = await Audio.Sound.createAsync(sfxCoinFile, {
-        volume: settings.mute ? 0 : 1,
-        shouldPlay: false,
-        isLooping: false,
-      });
-      arr.push(sound);
+      const player = createAudioPlayer(sfxCoinFile, { keepAudioSessionActive: true });
+      player.loop = false;
+      player.volume = settings.mute ? 0 : 1;
+      arr.push(player);
     }
     coinPoolRef.current = arr;
     return arr;
@@ -689,38 +792,50 @@ export default function CometsRunnerScreen() {
       const pool = await ensureCoinPool();
       const s = pool[coinPoolIdxRef.current];
       coinPoolIdxRef.current = (coinPoolIdxRef.current + 1) % pool.length;
-      s.setPositionAsync(0).catch(() => {});
-      s.playAsync().catch(() => {});
+      await s.seekTo(0);
+      s.play();
     } catch {}
   }, [ensureCoinPool]);
 
   const ensureSfxApplause = useCallback(async () => {
     if (sfxApplauseRef.current) return sfxApplauseRef.current;
-    const { sound } = await Audio.Sound.createAsync(sfxApplauseFile, {
-      volume: settings.mute ? 0 : 1,
-      shouldPlay: false
-    });
-    sfxApplauseRef.current = sound;
-    return sound;
+    const player = createAudioPlayer(sfxApplauseFile, { keepAudioSessionActive: true });
+    player.loop = false;
+    player.volume = settings.mute ? 0 : 1;
+    sfxApplauseRef.current = player;
+    return player;
   }, [settings.mute]);
+
+  const playApplauseSfx = useCallback(async () => {
+    try {
+      const snd = await ensureSfxApplause();
+      await snd.seekTo(0);
+      snd.play();
+    } catch {}
+  }, [ensureSfxApplause]);
 
   const playMusic = useCallback(async () => {
     try {
       const sound = await ensureMusic();
-      await sound.setIsLoopingAsync(true);
-      await sound.setVolumeAsync(settings.mute ? 0 : 1);
-      await sound.playAsync();
+      sound.loop = true;
+      sound.volume = settings.mute ? 0 : 1;
+      sound.play();
     } catch {}
   }, [ensureMusic, settings.mute]);
 const pauseMusic = useCallback(async () => {
-  try { await musicRef.current?.pauseAsync(); } catch {}
+  try { musicRef.current?.pause(); } catch {}
 }, []);
   const stopMusic = useCallback(async () => {
-    try { await musicRef.current?.stopAsync(); } catch {}
+    try {
+      const player = musicRef.current;
+      if (!player) return;
+      player.pause();
+      await player.seekTo(0);
+    } catch {}
   }, []);
   const unloadMusic = useCallback(async () => {
     try {
-      await musicRef.current?.unloadAsync();
+      musicRef.current?.remove();
       musicRef.current = null;
     } catch {}
   }, []);
@@ -729,10 +844,10 @@ const pauseMusic = useCallback(async () => {
   useEffect(() => {
     (async () => {
       try {
-        await musicRef.current?.setVolumeAsync(settings.mute ? 0 : 1);
-        await sfxApplauseRef.current?.setVolumeAsync(settings.mute ? 0 : 1);
+        if (musicRef.current) musicRef.current.volume = settings.mute ? 0 : 1;
+        if (sfxApplauseRef.current) sfxApplauseRef.current.volume = settings.mute ? 0 : 1;
         for (const s of coinPoolRef.current) {
-          try { await s.setVolumeAsync(settings.mute ? 0 : 1); } catch {}
+          try { s.volume = settings.mute ? 0 : 1; } catch {}
         }
       } catch {}
     })();
@@ -751,15 +866,79 @@ useEffect(() => {
   })();
 }, [gameState, playMusic, pauseMusic, stopMusic]);
 
+  const buildPauseSnapshot = useCallback((now: number): PauseSnapshot => {
+    return {
+      ts: now,
+      score: scoreRef.current,
+      hasShield: hasShieldRef.current,
+      shieldStacks: shieldStacksRef.current,
+      superShieldLeftMs: Math.max(0, superShieldUntilRef.current - now),
+      invincibleLeftMs: Math.max(0, invincibleUntilRef.current - now),
+      doubleJumpLeftMs: Math.max(0, doubleJumpUntilRef.current - now),
+      scoreMultLevel: scoreMultLevelRef.current,
+      scoreMultLeftMs: Math.max(0, scoreMultUntilRef.current - now),
+      purpleChain: purpleChainRef.current,
+      persistentLetters: Array.from(persistentLettersRef.current),
+      mapName: mapARef.current,
+      speed: speedRef.current,
+      world: {
+        y: yRef.current,
+        velY: velYRef.current,
+        grounded: groundedRef.current,
+        lastGroundedTime: lastGroundedTimeRef.current,
+        jumpBuffer: jumpBufferRef.current,
+        airJumpsLeft: airJumpsLeftRef.current,
+        distAcc: distAccRef.current,
+        combo: comboRef.current,
+        angle: angleRef.current,
+        groundOffset: groundOffsetRef.current,
+        fenceOffset: fenceOffsetRef.current,
+        mapAOffset: mapAOffsetRef.current,
+        mapBOffset: mapBOffsetRef.current,
+        mapFade: mapFadeRef.current,
+        mapA: mapARef.current,
+        mapB: mapBRef.current,
+        obstacles: obstaclesRef.current.map((o) => ({ ...o })),
+        collectibles: collectiblesRef.current.map((c) => ({ ...c })),
+        powerUps: powerUpsRef.current.map((p) => ({ ...p })),
+        lastId: lastIdRef.current,
+        spawnedLetterIdx: Array.from(spawnedLetterIdxThisRunRef.current),
+      },
+    };
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        const wasRunning = gameStateRef.current === "running";
+        if (wasRunning) {
+          gameStateRef.current = "paused";
+          setGameState("paused");
+        }
+        setPlayingStatusBar(false);
+        holdingJumpRef.current = false;
+
+        pauseMusic().catch(() => {});
+
+        if (!wasRunning) return;
+        const now = Date.now();
+        savePauseSnapshot(buildPauseSnapshot(now)).catch(() => {});
+      };
+    }, [buildPauseSnapshot, pauseMusic, setPlayingStatusBar]),
+  );
+
 
   // Cleanup audio
   useEffect(() => {
     return () => {
       unloadMusic();
-      try { sfxApplauseRef.current?.unloadAsync?.(); } catch {}
+      try {
+        sfxApplauseRef.current?.remove();
+        sfxApplauseRef.current = null;
+      } catch {}
       try {
         for (const s of coinPoolRef.current) {
-          try { s.unloadAsync(); } catch {}
+          try { s.remove(); } catch {}
         }
         coinPoolRef.current = [];
       } catch {}
@@ -791,36 +970,32 @@ useEffect(() => {
     })();
   }, [adminId, ensureProfile, loadBestFromCloud, loadTop5]);
 
-useEffect(() => {
-  const sub = AppState.addEventListener("change", async (state) => {
-    if (state !== "active") {
-      // si on était en cours de jeu, on met en pause
-      setGameState((s) => (s === "running" ? "paused" : s));
-      // et on sauvegarde un snapshot si on est bien en pause
-      setTimeout(async () => {
-        if (gameState === "paused") {
-          const now = Date.now();
-          await savePauseSnapshot({
-            ts: now,
-            score,
-            hasShield,
-            shieldStacks,
-            superShieldLeftMs: Math.max(0, superShieldUntil - now),
-            invincibleLeftMs: Math.max(0, invincibleUntil - now),
-            doubleJumpLeftMs: Math.max(0, doubleJumpUntil - now),
-            scoreMultLevel: scoreMultLevelRef.current,
-            scoreMultLeftMs: Math.max(0, scoreMultUntilRef.current - now),
-            purpleChain,
-            persistentLetters: Array.from(persistentLettersRef.current),
-            mapName: mapARef.current,
-            speed: speedRef.current,
-          });
-        }
-      }, 0);
-    }
-  });
-  return () => sub.remove();
-}, [gameState, score, hasShield, shieldStacks, superShieldUntil, invincibleUntil, doubleJumpUntil, purpleChain]);
+  useEffect(() => {
+    (async () => {
+      const snap = await loadPauseSnapshot();
+      if (!snap) return;
+      // snapshot périmé : on ignore après 6h
+      if (Date.now() - snap.ts > 6 * 60 * 60 * 1000) {
+        await clearPauseSnapshot();
+        return;
+      }
+      setPendingSnapshot(snap);
+    })();
+  }, []);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", async (state) => {
+      if (state === "active") return;
+      if (gameStateRef.current !== "running") return;
+
+      setGameState("paused");
+      setPlayingStatusBar(false);
+
+      const now = Date.now();
+      await savePauseSnapshot(buildPauseSnapshot(now));
+    });
+    return () => sub.remove();
+  }, [buildPauseSnapshot, setPlayingStatusBar]);
 
 
   // === alignement si sol change
@@ -853,22 +1028,24 @@ useEffect(() => {
     popupsRef.current = [];
     lastIdRef.current = 1;
 
-    targetSpeedRef.current = START_SPEED;
-    speedRef.current = START_SPEED;
+    const assist = 1 - Math.min(0.12, failStreakRef.current * 0.04);
+    targetSpeedRef.current = Math.max(START_SPEED * 0.82, START_SPEED * assist);
+    speedRef.current = targetSpeedRef.current;
 
+    scoreRef.current = 0;
     setScore(0);
     milestonesRef.current.clear();
     comboRef.current = 0;
 
-    setHasShield(false);
-    setShieldStacks(0);
-    setSuperShieldUntil(0);
-    setDoubleJumpUntil(0);
-    setInvincibleUntil(0);
+    setHasShieldSync(false);
+    setShieldStacksSync(0);
+    setSuperShieldUntilSync(0);
+    setDoubleJumpUntilSync(0);
+    setInvincibleUntilSync(0);
 
     scoreMultLevelRef.current = 1;
     scoreMultUntilRef.current = 0;
-    setPurpleChain(0);
+    setPurpleChainSync(0);
     purpleChainExpiresAtRef.current = 0;
 
     // reset des lettres spawnées pour CE run
@@ -906,14 +1083,173 @@ useEffect(() => {
       const yStar = clampYCenter(yForHeight(hStar), R_COLLECTIBLE);
       collectiblesRef.current.push({ id: ++lastIdRef.current, x: firstX + 180, y: yStar, r: R_COLLECTIBLE });
     }
-  }, [GROUND_Y, H_STAR_MIN, H_STAR_MAX, clampYCenter, yForHeight]);
+  }, [
+    GROUND_Y,
+    H_STAR_MIN,
+    H_STAR_MAX,
+    clampYCenter,
+    yForHeight,
+    setHasShieldSync,
+    setShieldStacksSync,
+    setSuperShieldUntilSync,
+    setDoubleJumpUntilSync,
+    setInvincibleUntilSync,
+    setPurpleChainSync,
+  ]);
 
   const startGame = useCallback(() => {
     setShowHelp(false);
     resetWorld();
+    setPendingSnapshot(null);
+    clearPauseSnapshot().catch(() => {});
     setGameState("running");
     setPlayingStatusBar(true);
-  }, [resetWorld]);
+  }, [resetWorld, setPlayingStatusBar]);
+
+  const resumeFromSnapshot = useCallback(async () => {
+    if (!pendingSnapshot) return;
+    const snap = pendingSnapshot;
+    const now = Date.now();
+
+    setShowHelp(false);
+    resetWorld();
+
+    scoreRef.current = Math.max(0, Math.floor(snap.score));
+    setScore(scoreRef.current);
+    setHasShieldSync(!!snap.hasShield);
+    setShieldStacksSync(Math.max(0, Math.floor(snap.shieldStacks)));
+    setSuperShieldUntilSync(now + Math.max(0, snap.superShieldLeftMs));
+    setInvincibleUntilSync(now + Math.max(0, snap.invincibleLeftMs));
+    setDoubleJumpUntilSync(now + Math.max(0, snap.doubleJumpLeftMs));
+    scoreMultLevelRef.current = Math.max(1, Math.floor(snap.scoreMultLevel || 1));
+    scoreMultUntilRef.current = now + Math.max(0, snap.scoreMultLeftMs || 0);
+    setPurpleChainSync(Math.max(0, Math.floor(snap.purpleChain || 0)));
+    purpleChainExpiresAtRef.current = scoreMultUntilRef.current;
+    persistentLettersRef.current = new Set(snap.persistentLetters ?? []);
+    setLettersTick((t) => t + 1);
+
+    const resumedSpeed = Math.max(START_SPEED * 0.82, Math.floor(snap.speed || START_SPEED));
+    speedRef.current = resumedSpeed;
+    targetSpeedRef.current = resumedSpeed;
+
+    const world = snap.world;
+    if (world) {
+      const toNum = (v: unknown, fallback = 0) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const asMapName = (v: unknown): MapName | null => {
+        return MAP_NAMES.includes(v as MapName) ? (v as MapName) : null;
+      };
+      const mapA = asMapName(world.mapA) ?? asMapName(snap.mapName) ?? activeMapForScore(scoreRef.current);
+      const mapB = asMapName(world.mapB) ?? mapA;
+
+      mapARef.current = mapA;
+      mapBRef.current = mapB;
+      mapFadeRef.current = clamp(toNum(world.mapFade, 0), 0, 1);
+      mapAOffsetRef.current = toNum(world.mapAOffset, 0);
+      mapBOffsetRef.current = toNum(world.mapBOffset, 0);
+      groundOffsetRef.current = toNum(world.groundOffset, 0);
+      fenceOffsetRef.current = toNum(world.fenceOffset, 0);
+      angleRef.current = toNum(world.angle, 0);
+      distAccRef.current = Math.max(0, toNum(world.distAcc, 0));
+      comboRef.current = clamp(Math.floor(toNum(world.combo, 0)), 0, 10);
+
+      const floorY = GROUND_Y - PLAYER_SIZE;
+      yRef.current = clamp(toNum(world.y, floorY), 0, floorY);
+      velYRef.current = toNum(world.velY, 0);
+      groundedRef.current = !!world.grounded;
+      lastGroundedTimeRef.current = toNum(world.lastGroundedTime, 0);
+      jumpBufferRef.current = Math.max(0, toNum(world.jumpBuffer, 0));
+      airJumpsLeftRef.current = Math.max(0, Math.floor(toNum(world.airJumpsLeft, 0)));
+
+      const normalizedObstacles: Obstacle[] = (Array.isArray(world.obstacles) ? world.obstacles : [])
+        .map((o: any): Obstacle | null => {
+          const id = Math.floor(toNum(o?.id, NaN));
+          const x = toNum(o?.x, NaN);
+          const w = toNum(o?.w, NaN);
+          const h = toNum(o?.h, NaN);
+          const y = toNum(o?.y, NaN);
+          if (![id, x, w, h, y].every(Number.isFinite)) return null;
+          return {
+            id: Math.max(1, id),
+            x,
+            w: Math.max(6, w),
+            h: Math.max(6, h),
+            y,
+            variant: o?.variant === 1 ? 1 : 0,
+          };
+        })
+        .filter((o): o is Obstacle => !!o);
+      const normalizedCollectibles: Collectible[] = (Array.isArray(world.collectibles) ? world.collectibles : [])
+        .map((c: any): Collectible | null => {
+          const id = Math.floor(toNum(c?.id, NaN));
+          const x = toNum(c?.x, NaN);
+          const y = toNum(c?.y, NaN);
+          const r = toNum(c?.r, NaN);
+          if (![id, x, y, r].every(Number.isFinite)) return null;
+          return { id: Math.max(1, id), x, y, r: Math.max(2, r) };
+        })
+        .filter((c): c is Collectible => !!c);
+      const normalizedPowerUps: PowerUp[] = (Array.isArray(world.powerUps) ? world.powerUps : [])
+        .map((p: any): PowerUp | null => {
+          const id = Math.floor(toNum(p?.id, NaN));
+          const x = toNum(p?.x, NaN);
+          const y = toNum(p?.y, NaN);
+          const r = toNum(p?.r, NaN);
+          const kind = POWERUP_KINDS.includes(p?.kind as PowerUpKind) ? (p.kind as PowerUpKind) : null;
+          if (![id, x, y, r].every(Number.isFinite) || !kind) return null;
+          const maybeLetter =
+            kind === "letter" && LETTERS.includes(p?.letter as CometsLetter)
+              ? (p.letter as CometsLetter)
+              : undefined;
+          return { id: Math.max(1, id), x, y, r: Math.max(2, r), kind, letter: maybeLetter };
+        })
+        .filter((p): p is PowerUp => !!p);
+
+      obstaclesRef.current = normalizedObstacles;
+      collectiblesRef.current = normalizedCollectibles;
+      powerUpsRef.current = normalizedPowerUps;
+
+      const restoredIdx = (Array.isArray(world.spawnedLetterIdx) ? world.spawnedLetterIdx : [])
+        .map((idx) => Math.floor(toNum(idx, NaN)))
+        .filter((idx) => Number.isFinite(idx) && idx >= 0 && idx < LETTERS.length);
+      spawnedLetterIdxThisRunRef.current = new Set(restoredIdx);
+
+      const maxEntityId = Math.max(
+        0,
+        ...normalizedObstacles.map((o) => o.id),
+        ...normalizedCollectibles.map((c) => c.id),
+        ...normalizedPowerUps.map((p) => p.id),
+      );
+      lastIdRef.current = Math.max(
+        1,
+        Math.floor(toNum(world.lastId, 1)),
+        maxEntityId + 1,
+      );
+    } else {
+      mapARef.current = snap.mapName ?? activeMapForScore(scoreRef.current);
+      mapBRef.current = mapARef.current;
+      mapFadeRef.current = 0;
+    }
+
+    setPendingSnapshot(null);
+    await clearPauseSnapshot();
+    setFrameTick((t) => t + 1);
+    setGameState("running");
+    setPlayingStatusBar(true);
+  }, [
+    GROUND_Y,
+    pendingSnapshot,
+    resetWorld,
+    setHasShieldSync,
+    setShieldStacksSync,
+    setSuperShieldUntilSync,
+    setInvincibleUntilSync,
+    setDoubleJumpUntilSync,
+    setPurpleChainSync,
+    setPlayingStatusBar,
+  ]);
 
   const pauseGame = useCallback(() => {
     setGameState(s => {
@@ -921,7 +1257,7 @@ useEffect(() => {
       if (next === "paused") setPlayingStatusBar(false);
       return next;
     });
-  }, []);
+  }, [setPlayingStatusBar]);
 
   const resumeGame = useCallback(() => {
     setGameState(s => {
@@ -929,21 +1265,26 @@ useEffect(() => {
       if (next === "running") setPlayingStatusBar(true);
       return next;
     });
-  }, []);
+  }, [setPlayingStatusBar]);
 
   const endGame = useCallback(async () => {
+    const finalScore = scoreRef.current;
     setGameState("gameover");
     restartAllowedAtRef.current = Date.now() + 2000;
     setPlayingStatusBar(false);
     // ✨ RESET de la progression des lettres à la fin de la partie
     resetPersistentLetters();
 
+    if (finalScore < 1200) failStreakRef.current = Math.min(3, failStreakRef.current + 1);
+    else failStreakRef.current = 0;
+
     try {
       if (adminId) {
-        await saveRunToCloud(score);
-      } else if (score > best) {
-        setBest(score);
-        await AsyncStorage.setItem(KEY_BEST, String(score));
+        await saveRunToCloud(finalScore);
+      } else if (finalScore > bestRef.current) {
+        setBest(finalScore);
+        bestRef.current = finalScore;
+        await AsyncStorage.setItem(KEY_BEST, String(finalScore));
         await loadTop5();
       } else {
         await loadTop5();
@@ -951,15 +1292,22 @@ useEffect(() => {
     } catch (e) {
       console.log("endGame error:", (e as any)?.message);
     }
-  }, [score, best, adminId, saveRunToCloud, loadTop5]);
+  }, [adminId, saveRunToCloud, loadTop5, resetPersistentLetters, setPlayingStatusBar]);
 
   // helpers
-  const doubleJumpActive = () => ENABLE_DOUBLEJUMP && doubleJumpUntil > Date.now();
-  const invincibleActive = () => Date.now() < invincibleUntil || superShieldActive();
+  const doubleJumpActive = useCallback(
+    () => ENABLE_DOUBLEJUMP && doubleJumpUntilRef.current > Date.now(),
+    []
+  );
 
-  const getSpeedMultiplier = (s: number) =>
-    Math.min(MULT_MAX, MULT_MIN + Math.max(0, s - START_SPEED) / MULT_SCALE);
-  const getComboMultiplier = () => Math.min(2.0, 1 + 0.25 * Math.max(0, comboRef.current - 1));
+  const getSpeedMultiplier = useCallback(
+    (s: number) => Math.min(MULT_MAX, MULT_MIN + Math.max(0, s - START_SPEED) / MULT_SCALE),
+    []
+  );
+  const getComboMultiplier = useCallback(
+    () => Math.min(2.0, 1 + 0.25 * Math.max(0, comboRef.current - 1)),
+    []
+  );
 
   
   // ====== Spawner & utils ======
@@ -1021,6 +1369,13 @@ useEffect(() => {
       const x = SCREEN_W + lead + randi(0, Math.floor(OBSTACLE_MAX_GAP_BASE * localGapMul));
       const y = GROUND_Y - h;
 
+      const candidateCenter = x + w / 2;
+      const tooClose = obstaclesRef.current.some((o) => {
+        const oCenter = o.x + o.w / 2;
+        return Math.abs(oCenter - candidateCenter) < Math.max(minGap * 0.55, 190);
+      });
+      if (tooClose) continue;
+
       obstaclesRef.current.push({
         id: ++lastIdRef.current, x, w, h, y, variant: Math.random() < 0.5 ? 0 : 1
       });
@@ -1043,8 +1398,23 @@ useEffect(() => {
         const yDJ = clampYCenter(yForHeight(hDJ), R_POWERUP);
         powerUpsRef.current.push({ id: ++lastIdRef.current, x: x + randi(180, 280), y: yDJ, r: R_POWERUP, kind: "doublejump" });
       }
-      break;
+      return;
     }
+
+    // Fallback sécurité si aucune tentative n'a passé le filtre "tooClose"
+    const w = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W);
+    const h = OBSTACLE_BASE_H + randi(-8, 8);
+    const baseLead = Math.max(minGap, Math.floor(SCREEN_W * 0.75));
+    const lead = Math.floor(baseLead * localGapMul);
+    const x = SCREEN_W + lead;
+    obstaclesRef.current.push({
+      id: ++lastIdRef.current,
+      x,
+      w,
+      h,
+      y: GROUND_Y - h,
+      variant: Math.random() < 0.5 ? 0 : 1,
+    });
   }, [GROUND_Y, H_STAR_MIN, H_STAR_MAX, clampYCenter, yForHeight]);
 
   const spawnX2BonusForDoubleJump = useCallback(() => {
@@ -1074,17 +1444,8 @@ useEffect(() => {
       const dt = clamp((ts - lastTsRef.current) / 1000, 0, 0.05);
       lastTsRef.current = ts;
 
-      // FPS
-      fpsBuf.current.push(1 / Math.max(dt, 1e-3));
-      if (fpsBuf.current.length > 30) fpsBuf.current.shift();
-      if (ts - fpsLastUpdate.current > 500) {
-        fpsLastUpdate.current = ts;
-        const avg = fpsBuf.current.reduce((a, b) => a + b, 0) / Math.max(1, fpsBuf.current.length);
-        setFps(Math.round(avg));
-      }
-
       // Map & diff
-      const desiredMap = activeMapForScore(score);
+      const desiredMap = activeMapForScore(scoreRef.current);
       if (desiredMap !== mapBRef.current) {
         mapARef.current = mapFadeRef.current >= 0.99 ? mapBRef.current : mapARef.current;
         mapBRef.current = desiredMap;
@@ -1150,7 +1511,9 @@ useEffect(() => {
       }
 
       // Monde actif
-      if (obstaclesRef.current.length === 0) spawnObstacle(OBSTACLE_MIN_GAP_BASE, diff.gapMul, score);
+      if (obstaclesRef.current.length === 0) {
+        spawnObstacle(OBSTACLE_MIN_GAP_BASE, diff.gapMul, scoreRef.current);
+      }
 
       for (let i = obstaclesRef.current.length - 1; i >= 0; i--) {
         const o = obstaclesRef.current[i];
@@ -1160,7 +1523,7 @@ useEffect(() => {
 
       const last = obstaclesRef.current[obstaclesRef.current.length - 1];
       if (!last || last.x < SCREEN_W - randi(Math.floor(OBSTACLE_MIN_GAP_BASE * 0.7), OBSTACLE_MAX_GAP_BASE)) {
-        spawnObstacle(randi(OBSTACLE_MIN_GAP_BASE, OBSTACLE_MAX_GAP_BASE), diff.gapMul, score);
+        spawnObstacle(randi(OBSTACLE_MIN_GAP_BASE, OBSTACLE_MAX_GAP_BASE), diff.gapMul, scoreRef.current);
       }
 
       // ===== Collectibles (coins) =====
@@ -1180,6 +1543,7 @@ useEffect(() => {
 
           setScore((prev) => {
             const next = prev + gained;
+            scoreRef.current = next;
             checkMilestones(next);
             return next;
           });
@@ -1213,20 +1577,25 @@ useEffect(() => {
           if (p.kind === "shield") {
             // +100 points pour un bouclier
             const gained = applyScoreGain(100);
-            setScore((prev) => { const next = prev + gained; checkMilestones(next); return next; });
+            setScore((prev) => {
+              const next = prev + gained;
+              scoreRef.current = next;
+              checkMilestones(next);
+              return next;
+            });
             popupsRef.current.push({ id: ++lastIdRef.current, x: p.x, y: p.y, born: Date.now(), text: `+${gained}` });
 
-            const newStacks = shieldStacks + 1;
-            setShieldStacks(newStacks);
-            setHasShield(true); // ← on garde le shield actif
+            const newStacks = shieldStacksRef.current + 1;
+            setShieldStacksSync(newStacks);
+            setHasShieldSync(true); // ← on garde le shield actif
 
             if (newStacks >= SUPER_SHIELD_STACK) {
               // ⚡ Super Shield : on **ne retire plus** le bouclier normal !
-              setShieldStacks(0);         // compteur reset
+              setShieldStacksSync(0);         // compteur reset
               // hasShield reste TRUE (on garde la protection à la fin du super)
               const until = Date.now() + SUPER_SHIELD_INVINCIBLE_MS;
-              setSuperShieldUntil(until);
-              setInvincibleUntil(until);
+              setSuperShieldUntilSync(until);
+              setInvincibleUntilSync(until);
 
               // bonus visuel
               spawnCoinsGround(SUPER_SHIELD_GROUND_COINS, undefined, true);
@@ -1239,7 +1608,7 @@ useEffect(() => {
 
           } else if (p.kind === "doublejump") {
             const until = Date.now() + DOUBLEJUMP_DURATION;
-            setDoubleJumpUntil(until);
+            setDoubleJumpUntilSync(until);
             showToast("⛓️ Double saut");
             airJumpsLeftRef.current = 1;
             spawnX2BonusForDoubleJump();
@@ -1247,15 +1616,22 @@ useEffect(() => {
           } else if (p.kind === "x2") {
             // +200 points pour une purple coin
             const plus = applyScoreGain(200);
-            setScore(prev => { const next = prev + plus; checkMilestones(next); return next; });
+            setScore(prev => {
+              const next = prev + plus;
+              scoreRef.current = next;
+              checkMilestones(next);
+              return next;
+            });
             popupsRef.current.push({ id: ++lastIdRef.current, x: p.x, y: p.y, born: Date.now(), text: `+${plus}` });
 
             const now = Date.now();
+            let nextPurpleChain = 1;
             if (now <= scoreMultUntilRef.current) {
-              setPurpleChain((c) => Math.min(PURPLE_CHAIN_GOAL, c + 1));
+              nextPurpleChain = Math.min(PURPLE_CHAIN_GOAL, purpleChainRef.current + 1);
             } else {
-              setPurpleChain(1);
+              nextPurpleChain = 1;
             }
+            setPurpleChainSync(nextPurpleChain);
             purpleChainExpiresAtRef.current = now + SCORE_MULT_DURATION;
 
             if (now < scoreMultUntilRef.current) {
@@ -1264,19 +1640,17 @@ useEffect(() => {
             } else {
               scoreMultLevelRef.current = 2;
               scoreMultUntilRef.current = now + SCORE_MULT_DURATION;
-              if (!achievements.first_x2) unlock("first_x2");
+              if (!achievementsRef.current.first_x2) unlock("first_x2");
             }
 
             if ([2,5,10].includes(scoreMultLevelRef.current)) {
               showToast(`💜 ×${scoreMultLevelRef.current}`);
             }
-            if ((purpleChain + 1) >= PURPLE_CHAIN_GOAL) {
+            if (nextPurpleChain >= PURPLE_CHAIN_GOAL) {
               spawnCoinsAirLine(PURPLE_CHAIN_AIR_COINS);
               showToast("💜 Série ×10 !");
-              (async () => {
-                try { const snd = await ensureSfxApplause(); await snd.replayAsync(); } catch {}
-              })();
-              setPurpleChain(0);
+              playApplauseSfx();
+              setPurpleChainSync(0);
               purpleChainExpiresAtRef.current = 0;
             }
 
@@ -1284,7 +1658,12 @@ useEffect(() => {
             // Lettre : +1000 points (popup comme coins) + progression persistante
             addPersistentLetter(p.letter);
             const gained = applyScoreGain(1000);
-            setScore(prev => { const next = prev + gained; checkMilestones(next); return next; });
+            setScore(prev => {
+              const next = prev + gained;
+              scoreRef.current = next;
+              checkMilestones(next);
+              return next;
+            });
             popupsRef.current.push({ id: ++lastIdRef.current, x: p.x, y: p.y, born: Date.now(), text: `+${gained}` });
 
             // Supprime le mini “badge” / carré : (rendu ajusté en Partie 3)
@@ -1293,12 +1672,15 @@ useEffect(() => {
             if (haveAllLetters()) {
               // Jackpot 20k + overlay ultra visuel
               const bonus = applyScoreGain(20_000);
-              setScore(prev => { const next = prev + bonus; checkMilestones(next); return next; });
+              setScore(prev => {
+                const next = prev + bonus;
+                scoreRef.current = next;
+                checkMilestones(next);
+                return next;
+              });
               popupsRef.current.push({ id: ++lastIdRef.current, x: playerX + 40, y: yRef.current, born: Date.now(), text: `+${bonus}` });
 
-              (async () => {
-                try { const snd = await ensureSfxApplause(); await snd.replayAsync(); } catch {}
-              })();
+              playApplauseSfx();
               showToast("🚀 COMETS !");
               setBigEventUntil(Date.now() + 2200); // ← affichage overlay (Partie 3)
             }
@@ -1317,35 +1699,16 @@ useEffect(() => {
       const cx = playerX + PLAYER_SIZE / 2;
       const cy = yRef.current + PLAYER_SIZE / 2;
       const r = PLAYER_SIZE * 0.42;
-// ===== collisions helpers =====
-function circleRectCollide(
-  cx: number, cy: number, r: number,
-  rx: number, ry: number, rw: number, rh: number
-) {
-  const testX = Math.max(rx, Math.min(cx, rx + rw));
-  const testY = Math.max(ry, Math.min(cy, ry + rh));
-  const distX = cx - testX, distY = cy - testY;
-  return distX * distX + distY * distY <= r * r;
-}
 
-function circleCircleCollide(
-  ax: number, ay: number, ar: number,
-  bx: number, by: number, br: number
-) {
-  const dx = ax - bx, dy = ay - by;
-  const rr = ar + br;
-  return dx * dx + dy * dy <= rr * rr;
-}
-
-      if (!(Date.now() < invincibleUntil || Date.now() < superShieldUntil)) {
+      if (!(Date.now() < invincibleUntilRef.current || Date.now() < superShieldUntilRef.current)) {
         for (let i = 0; i < obstaclesRef.current.length; i++) {
           const o = obstaclesRef.current[i];
           if (circleRectCollide(cx, cy, r, o.x, o.y, o.w, o.h)) {
-            if (hasShield) {
+            if (hasShieldRef.current) {
               // Consomme la protection normale (OK)
-              setHasShield(false);
-              setShieldStacks(0);
-              setInvincibleUntil(Date.now() + INVINCIBLE_DURATION);
+              setHasShieldSync(false);
+              setShieldStacksSync(0);
+              setInvincibleUntilSync(Date.now() + INVINCIBLE_DURATION);
               velYRef.current = JUMP_VELOCITY * 0.7;
               obstaclesRef.current.splice(i, 1);
               shake.setValue(1);
@@ -1371,6 +1734,7 @@ function circleCircleCollide(
           const base = Math.floor(gainedUnits * getSpeedMultiplier(s));
           const added = applyScoreGain(base);
           const next = prev + added;
+          scoreRef.current = next;
 
           if (next >= 2000) unlock("score_2000");
           checkMilestones(next);
@@ -1387,7 +1751,9 @@ function circleCircleCollide(
       }
 
       // Expiration chaîne purple
-      if (purpleChain > 0 && Date.now() > purpleChainExpiresAtRef.current) setPurpleChain(0);
+      if (purpleChainRef.current > 0 && Date.now() > purpleChainExpiresAtRef.current) {
+        setPurpleChainSync(0);
+      }
 
       // Popups (+pts)
       popupsRef.current = popupsRef.current.filter(p => Date.now() - p.born < 900);
@@ -1400,10 +1766,35 @@ function circleCircleCollide(
     rafRef.current = requestAnimationFrame(tick);
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); rafRef.current = null; };
   }, [
-    gameState, endGame, spawnObstacle, doubleJumpUntil, superShieldUntil, invincibleUntil,
-    spawnX2BonusForDoubleJump, settings.haptics, GROUND_Y, unlock, score, checkMilestones,
-    spawnCoinsAirLine, spawnCoinsGround, purpleChain, playCoinSfx, ensureSfxApplause, spawnLetterAtIndex,
-    hasShield, shieldStacks
+    gameState,
+    endGame,
+    spawnObstacle,
+    spawnX2BonusForDoubleJump,
+    settings.haptics,
+    GROUND_Y,
+    unlock,
+    checkMilestones,
+    spawnCoinsAirLine,
+    spawnCoinsGround,
+    playCoinSfx,
+    playApplauseSfx,
+    spawnLetterAtIndex,
+    addPersistentLetter,
+    applyScoreGain,
+    haveAllLetters,
+    heroPulse,
+    playerX,
+    shake,
+    showToast,
+    getSpeedMultiplier,
+    getComboMultiplier,
+    doubleJumpActive,
+    setDoubleJumpUntilSync,
+    setHasShieldSync,
+    setInvincibleUntilSync,
+    setPurpleChainSync,
+    setShieldStacksSync,
+    setSuperShieldUntilSync,
   ]);
 
   // ===== Input =====
@@ -1427,14 +1818,18 @@ function circleCircleCollide(
       if (settings.haptics && Haptics) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
       return;
     }
-  }, [doubleJumpUntil, settings.haptics]);
+  }, [doubleJumpActive, settings.haptics]);
 
   const handlePressIn = useCallback(() => {
-    if (gameState === "ready") { startGame(); return; }
+    if (gameState === "ready") {
+      if (pendingSnapshot) return;
+      startGame();
+      return;
+    }
     if (gameState === "paused") { resumeGame(); return; }
     if (gameState === "gameover") { if (Date.now() >= restartAllowedAtRef.current) startGame(); return; }
     if (gameState === "running") { holdingJumpRef.current = true; tryJump(); }
-  }, [gameState, startGame, resumeGame, tryJump]);
+  }, [gameState, pendingSnapshot, startGame, resumeGame, tryJump]);
 
   const handlePressOut = useCallback(() => {
     holdingJumpRef.current = false;
@@ -1486,36 +1881,47 @@ function circleCircleCollide(
     <SafeAreaView style={styles.safe}>
       {/* Header (caché en jeu) */}
       {showHeroHeader && (
-        <View
-  style={[
-    styles.headerSlim,
-    { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 8 : 12 },
-  ]}
->
+        <LinearGradient
+          colors={["#18253A", "#101A2C", HOME_UI.bg]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[
+            styles.headerSlim,
+            { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 8 : 12 },
+          ]}
+        >
+  <View pointerEvents="none" style={styles.headerGlow} />
   {/* 1. Barre compacte */}
   <View style={styles.headerSlimRow}>
     <Pressable
-      onPress={routerBack}
+      onPress={() => router.back()}
       style={styles.iconBtnSlim}
       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
     >
-      <Icon name="chevron-back" size={18} color="#FF8200" />
+      <Icon name="chevron-back" size={18} color={HOME_UI.accent} />
     </Pressable>
 
     <View style={styles.titleRowSlim}>
       <Image source={logoComets} style={styles.logoSlim} resizeMode="contain" />
-      <Text style={styles.titleSlim}>Comets Run</Text>
+      <View>
+        <Text style={styles.titleSlim}>Comets Run</Text>
+        <Text style={styles.titleSubSlim}>Mode arcade du club</Text>
+      </View>
     </View>
 
-    <View style={{ flexDirection: "row", gap: 8 }}>
+    <View style={styles.headerActions}>
       <Pressable onPress={() => setShowHelp((v) => !v)} style={styles.iconBtnSlim}>
-        <Icon name={showHelp ? "information" : "help-circle-outline"} size={18} color="#FF8200" />
+        <Icon name={showHelp ? "information" : "help-circle-outline"} size={18} color={HOME_UI.accent} />
       </Pressable>
-      <Pressable onPress={() => pushTo("/CometsLeaderboardScreen")} style={styles.iconBtnSlim}>
-        <Icon name="trophy-outline" size={18} color="#FF8200" />
+      <Pressable onPress={() => router.push("/CometsLeaderboardScreen" as any)} style={styles.iconBtnSlim}>
+        <Icon name="trophy-outline" size={18} color={HOME_UI.accent} />
       </Pressable>
       <Pressable onPress={() => toggleSetting("mute")} style={styles.iconBtnSlim}>
-        <Icon name={settings.mute ? "volume-mute" : "volume-high"} size={18} color={settings.mute ? "#aaa" : "#FF8200"} />
+        <Icon
+          name={settings.mute ? "volume-mute" : "volume-high"}
+          size={18}
+          color={settings.mute ? HOME_UI.muted : HOME_UI.accent}
+        />
       </Pressable>
       <Pressable onPress={() => toggleSetting("haptics")} style={styles.iconBtnSlim}>
         <Icon name="sparkles-outline" size={18} color={settings.haptics ? "#10b981" : "#777"} />
@@ -1528,7 +1934,7 @@ function circleCircleCollide(
 
   {/* 2. Petites pastilles score */}
   <View style={styles.chipsSlimRow}>
-    <View style={[styles.pill, { backgroundColor: "#D1F3FF" }]}>
+    <View style={[styles.pill, styles.pillBest]}>
       <Text style={[styles.pillTxt, { color: "#0C7499" }]}>🏆 {best}</Text>
     </View>
 
@@ -1537,17 +1943,17 @@ function circleCircleCollide(
         transform: [{ scale: heroPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] }) }],
       }}
     >
-      <View style={[styles.pill, { backgroundColor: "#E5E7EB" }]}>
+      <View style={[styles.pill, styles.pillScore]}>
         <Text style={[styles.pillTxt, { color: "#111827" }]}>⚡ {score}</Text>
       </View>
     </Animated.View>
 
-    <View style={[styles.pill, { backgroundColor: "#fde68a" }]}>
+    <View style={[styles.pill, styles.pillSpeed]}>
       <Text style={[styles.pillTxt, { color: "#7c2d12" }]}>×{speedMult}</Text>
     </View>
 
     {scoreBuff > 1 && (
-      <View style={[styles.pill, { backgroundColor: "#e9d5ff" }]}>
+      <View style={[styles.pill, styles.pillBuff]}>
         <Text style={[styles.pillTxt, { color: "#4c1d95" }]}>💜 ×{scoreBuff}</Text>
       </View>
     )}
@@ -1597,7 +2003,7 @@ function circleCircleCollide(
       </View>
     </View>
   )}
-</View>
+</LinearGradient>
       )}
 
       {/* Score centré */}
@@ -1622,7 +2028,7 @@ function circleCircleCollide(
       {gameState === "running" && (
         <View pointerEvents="box-none" style={styles.hudWrap}>
           <Pressable onPress={pauseGame} style={styles.hudBtn}>
-            <Icon name="pause" size={22} color="#FF8200" />
+            <Icon name="pause" size={22} color={HOME_UI.accent} />
           </Pressable>
         </View>
       )}
@@ -1920,13 +2326,28 @@ function circleCircleCollide(
           {/* Overlays (Ready / Pause) */}
           {gameState === "ready" && (
             <View pointerEvents="box-none" style={styles.playCtaWrap}>
+              {pendingSnapshot && (
+                <TouchableOpacity
+                  onPress={() => {
+                    resumeFromSnapshot().catch(() => {});
+                  }}
+                  activeOpacity={0.9}
+                  style={styles.resumeSavedCtaBtn}
+                  testID="resume-snapshot-button"
+                >
+                  <Icon name="play-circle" size={20} color="#0a0a0a" />
+                  <Text style={styles.resumeSavedCtaTxt}>Reprendre la partie</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
                 onPress={startGame}
                 activeOpacity={0.9}
-                style={styles.playCtaBtn}
+                style={pendingSnapshot ? styles.playCtaBtnSecondary : styles.playCtaBtn}
                 testID="play-button"
               >
-                <Text style={styles.playCtaTxt}>Jouez !</Text>
+                <Text style={pendingSnapshot ? styles.playCtaTxtSecondary : styles.playCtaTxt}>
+                  {pendingSnapshot ? "Nouvelle partie" : "Jouez !"}
+                </Text>
               </TouchableOpacity>
             </View>
           )}
@@ -1970,7 +2391,7 @@ function circleCircleCollide(
           onRestart={() => {
             if (Date.now() >= restartAllowedAtRef.current) startGame();
           }}
-          onLeaderboard={() => pushTo("/CometsLeaderboardScreen")}
+          onLeaderboard={() => router.push("/CometsLeaderboardScreen" as any)}
           top5={top5}
           myId={adminId || ""}
           myScore={score}
@@ -2071,43 +2492,6 @@ function renderMapBackground({
   );
 }
 
-function routerBack() {
-  try {
-    const { router } = require("expo-router");
-    router.back();
-  } catch {}
-}
-function pushTo(path: string) {
-  try {
-    const { router } = require("expo-router");
-    router.push(path as any);
-  } catch {}
-}
-
-// UI helpers
-function CenterOverlay({ icon, title, subtitle }: { icon: string; title: string; subtitle?: string }) {
-  return (
-    <View style={styles.overlay} pointerEvents="none">
-      <View style={styles.overlayCard}>
-        <Icon name={icon as any} size={24} color="#fff" />
-        <Text style={[styles.overlayTitle, { marginTop: 6 }]}>{title}</Text>
-        {subtitle ? <Text style={[styles.overlaySub, { marginTop: 4 }]}>{subtitle}</Text> : null}
-        <Text style={[styles.overlayHint, { marginTop: 4 }]}>Appuie pour continuer</Text>
-      </View>
-    </View>
-  );
-}
-
-function LegendItem({ image, label, size = 18 }: { image: any; label: string; size?: number }) {
-  return (
-    <View style={styles.legend}>
-      <Image source={image} style={{ width: size, height: size, marginRight: 8 }} resizeMode="contain" />
-      <Text style={styles.legendText}>{label}</Text>
-    </View>
-  );
-} // <= IMPORTANT: fermer LegendItem ici
-
-
 function getSystemTopInset() {
   return Platform.OS === "android" ? (StatusBar.currentHeight ?? 0) : 0;
 }
@@ -2164,10 +2548,10 @@ function GameOverModal({
   const cardStyle = {
     width: maxW,
     maxHeight: maxH,
-    backgroundColor: "#0b0b0b",
+    backgroundColor: HOME_UI.panel,
     borderRadius: ms(14),
     borderWidth: 1,
-    borderColor: "#2a2a2a",
+    borderColor: "rgba(255,130,0,0.34)",
     overflow: "hidden" as const,
     alignSelf: "center" as const,
     flexShrink: 1 as const,
@@ -2175,18 +2559,17 @@ function GameOverModal({
 
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onRestart}>
-      {/* Cliquer dehors => restart */}
+      {/* Backdrop neutre pour éviter un restart accidentel */}
       <Pressable
         style={{
           flex: 1,
-          backgroundColor: "rgba(0,0,0,0.55)",
+          backgroundColor: "rgba(7,10,17,0.72)",
           alignItems: "center",
           justifyContent: "center",
           paddingHorizontal: overlayHPad,
           paddingVertical: overlayVPad,
           paddingTop: overlayVPad + sysTop + -100, // petit bonus pour le notch
         }}
-        onPress={onRestart}
       >
         {/* Carte (stop propagation) */}
         <Pressable onPress={() => {}} style={cardStyle}>
@@ -2208,9 +2591,9 @@ function GameOverModal({
     paddingHorizontal: ms(28),
     paddingVertical: ms(14),
     borderRadius: ms(14),
-    backgroundColor: "#FF8200",
-    borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.2)",
+    backgroundColor: HOME_UI.accent,
+    borderWidth: 1,
+    borderColor: HOME_UI.accentSoft,
     shadowColor: "#000",
     shadowOpacity: 0.35,
     shadowRadius: 8,
@@ -2221,8 +2604,8 @@ function GameOverModal({
     justifyContent: "center",
   }}
 >
-  <Icon name="reload" size={ms(20)} color="#0a0a0a" />
-  <Text style={{ color: "#0a0a0a", fontSize: ms(18), fontWeight: "900", marginLeft: ms(8) }}>
+  <Icon name="reload" size={ms(20)} color="#111827" />
+  <Text style={{ color: "#111827", fontSize: ms(18), fontWeight: "900", marginLeft: ms(8) }}>
     Rejouez !
   </Text>
 </TouchableOpacity>
@@ -2232,7 +2615,7 @@ function GameOverModal({
             <View style={{ alignSelf: "stretch", marginTop: ms(12) }}>
               <Text
                 style={{
-                  color: "#ffd166",
+                  color: HOME_UI.text,
                   fontWeight: "800",
                   marginBottom: ms(6),
                   textAlign: "center",
@@ -2243,11 +2626,11 @@ function GameOverModal({
               </Text>
 
               {top5 === null ? (
-                <Text style={{ color: "#bbb", textAlign: "center", fontSize: ms(12) }}>
+                <Text style={{ color: HOME_UI.muted, textAlign: "center", fontSize: ms(12) }}>
                   Chargement…
                 </Text>
               ) : top5.length === 0 ? (
-                <Text style={{ color: "#bbb", textAlign: "center", fontSize: ms(12) }}>
+                <Text style={{ color: HOME_UI.muted, textAlign: "center", fontSize: ms(12) }}>
                   Aucun score pour le moment
                 </Text>
               ) : (
@@ -2267,17 +2650,17 @@ function GameOverModal({
                           paddingHorizontal: ms(10),
                           borderRadius: ms(10),
                           marginBottom: ms(6),
-                          backgroundColor: isMe ? "rgba(255,209,102,0.20)" : "rgba(255,255,255,0.04)",
+                          backgroundColor: isMe ? "rgba(255,130,0,0.22)" : "rgba(20,29,44,0.86)",
                           borderWidth: 1,
-                          borderColor: isMe ? "#ffd166" : "#2a2a2a",
+                          borderColor: isMe ? "rgba(255,170,88,0.95)" : "rgba(255,255,255,0.12)",
                         }}
                       >
                         <Text
                           style={{
                             width: ms(22),
-                            color: isMe ? "#111" : "#fff",
+                            color: isMe ? "#111827" : HOME_UI.text,
                             fontWeight: "800",
-                            backgroundColor: isMe ? "#ffd166" : "transparent",
+                            backgroundColor: isMe ? HOME_UI.accent : "transparent",
                             textAlign: "center",
                             borderRadius: ms(6),
                             fontSize: ms(12),
@@ -2291,7 +2674,7 @@ function GameOverModal({
                           style={{
                             flex: 1,
                             marginLeft: ms(10),
-                            color: "#e5e7eb",
+                            color: HOME_UI.text,
                             fontWeight: isMe ? "800" : "600",
                             fontSize: ms(13),
                           }}
@@ -2299,7 +2682,7 @@ function GameOverModal({
                           {display}
                           {isMe ? " (vous)" : ""}
                         </Text>
-                        <Text style={{ color: "#93c5fd", fontWeight: "800", fontSize: ms(13) }}>
+                        <Text style={{ color: "#9ED4FF", fontWeight: "800", fontSize: ms(13) }}>
                           {row.best_score}
                         </Text>
                       </View>
@@ -2308,12 +2691,13 @@ function GameOverModal({
                   {extraCount > 0 && (
                     <Text
                       style={{
-                        color: "#bbb",
+                        color: HOME_UI.muted,
                         textAlign: "center",
                         marginTop: ms(2),
                         fontSize: ms(12),
                       }}
                     >
+                      +{extraCount} autres joueurs
                     </Text>
                   )}
                 </>
@@ -2328,13 +2712,13 @@ function GameOverModal({
                 padding: ms(10),
                 borderRadius: ms(12),
                 borderWidth: 1,
-                borderColor: "#3a2a00",
-                backgroundColor: "rgba(255,180,0,0.09)",
+                borderColor: "rgba(255,130,0,0.45)",
+                backgroundColor: "rgba(255,130,0,0.14)",
               }}
             >
               <Text
                 style={{
-                  color: "#ffd166",
+                  color: "#FFE2BF",
                   fontWeight: "900",
                   textAlign: "center",
                   fontSize: ms(15),
@@ -2354,16 +2738,16 @@ function GameOverModal({
                 paddingHorizontal: ms(14),
                 paddingVertical: ms(10),
                 borderRadius: ms(10),
-                backgroundColor: "#111",
+                backgroundColor: HOME_UI.panelSoft,
                 borderWidth: 1,
-                borderColor: "#333",
+                borderColor: "rgba(255,255,255,0.2)",
                 alignSelf: "center",
               }}
               testID="go-to-leaderboard"
             >
               <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
-                <Icon name="trophy-outline" size={ms(16)} color="#ffd166" />
-                <Text style={{ marginLeft: ms(8), color: "#ffd166", fontWeight: "800", fontSize: ms(14) }}>
+                <Icon name="trophy-outline" size={ms(16)} color="#FFD27A" />
+                <Text style={{ marginLeft: ms(8), color: HOME_UI.text, fontWeight: "800", fontSize: ms(14) }}>
                   Voir le classement 🏆
                 </Text>
               </View>
@@ -2377,114 +2761,161 @@ function GameOverModal({
 
 // --- Styles (ajouts : styleLettreManga, bigEventOverlay, etc.)
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0a0a0a" },
+  safe: {
+    flex: 1,
+    backgroundColor: HOME_UI.bg,
+  },
+  gameArea: {
+    flex: 1,
+    position: "relative",
+    overflow: "hidden",
+  },
+  sky: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#09101B",
+  },
 
-  hero: {
-    backgroundColor: "#11131a",
-    borderBottomWidth: 1,
-    borderBottomColor: "#1f2230",
-    paddingBottom: 10,
-  },
-  heroStripe: {
-    position: "absolute",
-    right: -60, top: -40, width: 240, height: 240, borderRadius: 120,
-    backgroundColor: "rgba(255,130,0,0.10)", transform: [{ rotate: "18deg" }],
-  },
-  heroRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, gap: 10 },
-  backBtnHero: {
-    width: 36, height: 36, borderRadius: 18, backgroundColor: "#1b1e27",
-    alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#2a2f3d",
-  },
-  heroTitle: { flex: 1, textAlign: "center", color: "#FF8200", fontSize: 20, fontWeight: "800", letterSpacing: 1.1 },
-  heroProfileRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 10, gap: 12 },
-  heroLogo: { width: 56, height: 56, borderRadius: 14, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200" },
-  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
-  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
-  iconBtnHero: {
-    width: 34, height: 34, borderRadius: 17, backgroundColor: "#1b1e27",
-    alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#2a2f3d",
-  },
-  heroChips: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
-  chip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14 },
-  chipTxt: { fontWeight: "800", fontSize: 12.5 },
-
-  legendWrap: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8, paddingHorizontal: 12, marginTop: 8 },
-  legend: {
-    flexDirection: "row", alignItems: "center",
-    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, borderWidth: 1,
-    backgroundColor: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.12)"
-  },
-  legendText: { color: "#eaeef7", fontWeight: "700", fontSize: 12.5 },
-
-  gameArea: { flex: 1, position: "relative", overflow: "hidden" },
-  sky: { ...StyleSheet.absoluteFillObject, backgroundColor: "#0b0e14" },
-
-  // Rappels compacts
   leftRemindersRow: {
-    position: "absolute", left: 12, top: Platform.OS === "android" ? 64 : 70,
-    zIndex: 10, flexDirection: "row", gap: 6,
+    position: "absolute",
+    left: 12,
+    top: Platform.OS === "android" ? 64 : 70,
+    zIndex: 10,
+    flexDirection: "row",
+    gap: 6,
   },
   reminderBadgeRow: {
-    flexDirection: "row", alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.06)", borderColor: "rgba(255,255,255,0.14)", borderWidth: 1,
-    paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(19,27,42,0.92)",
+    borderColor: "rgba(255,255,255,0.2)",
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
   },
-  reminderIcon: { width: 16, height: 16, marginRight: 6 },
-  reminderText: { color: "#e5e7eb", fontWeight: "800", fontSize: 12 },
-
-  ground: { position: "absolute", left: 0, right: 0, height: 2 },
-  groundDetail: { position: "absolute", left: 0, right: 0, height: 2 },
-
-  player: { position: "absolute", backgroundColor: "transparent", backfaceVisibility: "hidden" },
-  obstacleImg: { position: "absolute", borderTopLeftRadius: 6, borderTopRightRadius: 6 },
-
-  overlay: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center" },
-  overlayCard: {
-    width: Math.min(360, SCREEN_W - 32), backgroundColor: "rgba(0,0,0,0.55)",
-    borderColor: "#2a2a2a", borderWidth: 1, borderRadius: 14, padding: 12, alignItems: "center",
+  reminderIcon: {
+    width: 16,
+    height: 16,
+    marginRight: 6,
   },
-  overlayTitle: { color: "#fff", fontSize: 18, fontWeight: "800" },
-  overlaySub: { color: "#ddd", fontSize: 12 },
-  overlayHint: { color: "#aaa", fontSize: 11 },
+  reminderText: {
+    color: HOME_UI.text,
+    fontWeight: "800",
+    fontSize: 12,
+  },
+
+  ground: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    height: 2,
+  },
+  groundDetail: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    height: 2,
+  },
+  player: {
+    position: "absolute",
+    backgroundColor: "transparent",
+    backfaceVisibility: "hidden",
+  },
+  obstacleImg: {
+    position: "absolute",
+    borderTopLeftRadius: 6,
+    borderTopRightRadius: 6,
+  },
 
   toast: {
-    position: "absolute", top: Platform.OS === "android" ? 64 : 72, alignSelf: "center",
-    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12,
-    backgroundColor: "rgba(17,17,17,0.85)", borderWidth: 1, borderColor: "#333",
+    position: "absolute",
+    top: Platform.OS === "android" ? 64 : 72,
+    alignSelf: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: "rgba(19,27,42,0.96)",
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.42)",
   },
-  toastTxt: { color: "#ffd166", fontWeight: "800" },
+  toastTxt: {
+    color: "#FFD27A",
+    fontWeight: "800",
+  },
 
-  // HUD (pause)
-  hudWrap: { position: "absolute", left: 16, top: Platform.OS === "android" ? 12 : 16, zIndex: 10 },
+  hudWrap: {
+    position: "absolute",
+    left: 16,
+    top: Platform.OS === "android" ? 12 : 16,
+    zIndex: 10,
+  },
   hudBtn: {
-    width: 42, height: 42, borderRadius: 12, backgroundColor: "#1b1e27",
-    alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#2a2f3d",
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: "rgba(0,0,0,0.34)",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.34)",
   },
 
-  // Score centré
-  scoreBigWrap: { position: "absolute", top: Platform.OS === "android" ? 6 : 10, left: 0, right: 0, alignItems: "center", zIndex: 9 },
+  scoreBigWrap: {
+    position: "absolute",
+    top: Platform.OS === "android" ? 6 : 10,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    zIndex: 9,
+  },
   scoreBig: {
-    color: "#FF8200", fontSize: 28, fontWeight: "900", letterSpacing: 1.2,
-    textShadowColor: "rgba(0,0,0,0.6)", textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4,
-    backgroundColor: "rgba(0,0,0,0.25)", paddingHorizontal: 12, paddingVertical: 4,
-    borderRadius: 10, borderWidth: 1, borderColor: "rgba(255,130,0,0.25)",
+    color: HOME_UI.accent,
+    fontSize: 28,
+    fontWeight: "900",
+    letterSpacing: 1.2,
+    textShadowColor: "rgba(0,0,0,0.6)",
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+    backgroundColor: "rgba(11,15,23,0.72)",
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.42)",
   },
 
-  // Popups +pts
   popupPts: {
-    color: "#ffd166", fontSize: 14, fontWeight: "900",
-    textShadowColor: "rgba(0,0,0,0.85)", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2,
-    backgroundColor: "rgba(0,0,0,0.35)", borderWidth: 1, borderColor: "rgba(255,209,102,0.35)",
-    borderRadius: 8, paddingHorizontal: 6, paddingVertical: 3,
+    color: "#FFD27A",
+    fontSize: 14,
+    fontWeight: "900",
+    textShadowColor: "rgba(0,0,0,0.85)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+    backgroundColor: "rgba(11,15,23,0.7)",
+    borderWidth: 1,
+    borderColor: "rgba(255,209,102,0.38)",
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
   },
 
-  // Bandeau COMETS
-  cometsBannerWrap: { position: "absolute", left: 0, right: 0, top: Platform.OS === "android" ? 68 : 76, alignItems: "center", zIndex: 1 },
-  cometsBannerFill: { color: "#ffd166", fontSize: 46, fontWeight: "900", letterSpacing: 8, opacity: 0.22 },
-
-  // Lettrage “manga” (simulé via ombres épaisses)
+  cometsBannerWrap: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: Platform.OS === "android" ? 68 : 76,
+    alignItems: "center",
+    zIndex: 1,
+  },
+  cometsBannerFill: {
+    color: "#FFD27A",
+    fontSize: 46,
+    fontWeight: "900",
+    letterSpacing: 8,
+    opacity: 0.22,
+  },
   letterManga: {
-    color: "#ffd166",
+    color: "#FFD27A",
     fontSize: 28,
     fontWeight: "900",
     letterSpacing: 1,
@@ -2493,125 +2924,263 @@ const styles = StyleSheet.create({
     textShadowRadius: 4,
   },
 
-  // Overlay événement (Ultra 20k)
   bigEventWrap: {
-    position: "absolute", left: 0, right: 0, top: 0, bottom: 0,
-    alignItems: "center", justifyContent: "center", pointerEvents: "none",
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    pointerEvents: "none",
   },
   bigEventText: {
-    color: "#ffd166",
-    fontSize: 64, fontWeight: "900", letterSpacing: 2,
-    textShadowColor: "rgba(0,0,0,0.95)", textShadowOffset: { width: 0, height: 4 }, textShadowRadius: 8,
+    color: "#FFD27A",
+    fontSize: 64,
+    fontWeight: "900",
+    letterSpacing: 2,
+    textShadowColor: "rgba(0,0,0,0.95)",
+    textShadowOffset: { width: 0, height: 4 },
+    textShadowRadius: 8,
   },
   bigEventSub: {
     marginTop: 6,
-    color: "#fff",
-    fontSize: 16, fontWeight: "800",
-    textShadowColor: "rgba(0,0,0,0.7)", textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4,
+    color: HOME_UI.text,
+    fontSize: 16,
+    fontWeight: "800",
+    textShadowColor: "rgba(0,0,0,0.7)",
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
   },
+
   playCtaWrap: {
-  position: "absolute",
-  left: 0,
-  right: 0,
-  top: "50%",            // milieu de l'écran => sous le header
-  alignItems: "center",
-  zIndex: 12,
-},
-playCtaBtn: {
-  paddingHorizontal: 28,
-  paddingVertical: 14,
-  borderRadius: 14,
-  backgroundColor: "#FF8200",
-  borderWidth: 2,
-  borderColor: "rgba(255,255,255,0.2)",
-  shadowColor: "#000",
-  shadowOpacity: 0.35,
-  shadowRadius: 8,
-  shadowOffset: { width: 0, height: 4 },
-  elevation: 6,
-},
-playCtaTxt: {
-  color: "#0a0a0a",
-  fontSize: 20,
-  fontWeight: "900",
-  letterSpacing: 0.6,
-},
-resumeCtaWrap: {
-  position: "absolute",
-  left: 0,
-  right: 0,
-  top: "50%",           // mi-hauteur => 50% sous le header
-  alignItems: "center",
-  zIndex: 12,
-},
-resumeCtaBtn: {
-  flexDirection: "row",
-  alignItems: "center",
-  paddingHorizontal: 28,
-  paddingVertical: 14,
-  borderRadius: 14,
-  backgroundColor: "#FF8200",
-  borderWidth: 2,
-  borderColor: "rgba(255,255,255,0.2)",
-  shadowColor: "#000",
-  shadowOpacity: 0.35,
-  shadowRadius: 8,
-  shadowOffset: { width: 0, height: 4 },
-  elevation: 6,
-},
-resumeCtaTxt: {
-  marginLeft: 8,
-  color: "#0a0a0a",
-  fontSize: 20,
-  fontWeight: "900",
-  letterSpacing: 0.6,
-},
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: "50%",
+    alignItems: "center",
+    gap: 10,
+    zIndex: 12,
+  },
+  playCtaBtn: {
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 14,
+    backgroundColor: HOME_UI.accent,
+    borderWidth: 1,
+    borderColor: HOME_UI.accentSoft,
+    shadowColor: "#000",
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  playCtaTxt: {
+    color: "#111827",
+    fontSize: 20,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+  },
+  playCtaBtnSecondary: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: "rgba(0,0,0,0.38)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.45)",
+  },
+  playCtaTxtSecondary: {
+    color: HOME_UI.text,
+    fontSize: 17,
+    fontWeight: "800",
+    letterSpacing: 0.4,
+  },
+  resumeSavedCtaBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 14,
+    backgroundColor: HOME_UI.accent,
+    borderWidth: 1,
+    borderColor: HOME_UI.accentSoft,
+    shadowColor: "#000",
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  resumeSavedCtaTxt: {
+    marginLeft: 8,
+    color: "#111827",
+    fontSize: 19,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+  },
+  resumeCtaWrap: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: "50%",
+    alignItems: "center",
+    zIndex: 12,
+  },
+  resumeCtaBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 14,
+    backgroundColor: HOME_UI.accent,
+    borderWidth: 1,
+    borderColor: HOME_UI.accentSoft,
+    shadowColor: "#000",
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  resumeCtaTxt: {
+    marginLeft: 8,
+    color: "#111827",
+    fontSize: 20,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+  },
 
-headerSlim: {
-  backgroundColor: "#11131a",
-  borderBottomWidth: 1,
-  borderBottomColor: "#1f2230",
-  paddingBottom: 8,
-},
-headerSlimRow: {
-  flexDirection: "row",
-  alignItems: "center",
-  justifyContent: "space-between",
-  paddingHorizontal: 12,
-},
-iconBtnSlim: {
-  width: 32, height: 32, borderRadius: 10,
-  backgroundColor: "#1b1e27",
-  alignItems: "center", justifyContent: "center",
-  borderWidth: 1, borderColor: "#2a2f3d",
-},
-titleRowSlim: { flexDirection: "row", alignItems: "center", gap: 8, flex: 1, justifyContent: "center" },
-logoSlim: { width: 22, height: 22, borderRadius: 6, backgroundColor: "#fff", borderWidth: 1, borderColor: "#FF8200" },
-titleSlim: { color: "#FF8200", fontSize: 16, fontWeight: "900", letterSpacing: 0.6 },
+  headerSlim: {
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,130,0,0.34)",
+    paddingBottom: 8,
+    overflow: "hidden",
+  },
+  headerGlow: {
+    position: "absolute",
+    right: -90,
+    top: -80,
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: "rgba(255,130,0,0.18)",
+  },
+  headerSlimRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    gap: 10,
+  },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  iconBtnSlim: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: "rgba(0,0,0,0.34)",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.34)",
+  },
+  titleRowSlim: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+  },
+  logoSlim: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: HOME_UI.accent,
+  },
+  titleSlim: {
+    color: HOME_UI.text,
+    fontSize: 16,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+  },
+  titleSubSlim: {
+    marginTop: 1,
+    color: "#D4D8E0",
+    fontSize: 11.5,
+    fontWeight: "700",
+  },
 
-chipsSlimRow: {
-  flexDirection: "row",
-  alignItems: "center",
-  gap: 6,
-  paddingHorizontal: 10,
-  marginTop: 6,
-},
-pill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14 },
-pillTxt: { fontWeight: "800", fontSize: 12.5 },
+  chipsSlimRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    marginTop: 6,
+    flexWrap: "wrap",
+  },
+  pill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  pillBest: {
+    backgroundColor: "rgba(209,243,255,0.95)",
+    borderColor: "rgba(146,204,226,0.95)",
+  },
+  pillScore: {
+    backgroundColor: "rgba(229,231,235,0.95)",
+    borderColor: "rgba(255,255,255,0.92)",
+  },
+  pillSpeed: {
+    backgroundColor: "rgba(253,230,138,0.95)",
+    borderColor: "rgba(255,205,95,0.95)",
+  },
+  pillBuff: {
+    backgroundColor: "rgba(233,213,255,0.95)",
+    borderColor: "rgba(196,167,238,0.95)",
+  },
+  pillTxt: {
+    fontWeight: "800",
+    fontSize: 12.5,
+  },
 
-helpPanel: {
-  marginTop: 8,
-  marginHorizontal: 10,
-  padding: 10,
-  borderRadius: 12,
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.12)",
-  backgroundColor: "rgba(255,255,255,0.04)",
-},
-helpTitle: { color: "#eaeef7", fontWeight: "900", fontSize: 13, marginBottom: 6 },
-helpItem: { flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 4 },
-helpIcon: { width: 18, height: 18, marginTop: 2 },
-helpText: { flex: 1, color: "#eaeef7", fontSize: 12.5, lineHeight: 18 },
-helpStrong: { fontWeight: "800", color: "#ffd166" },
-
+  helpPanel: {
+    marginTop: 8,
+    marginHorizontal: 10,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.34)",
+    backgroundColor: "rgba(19,27,42,0.94)",
+  },
+  helpTitle: {
+    color: HOME_UI.text,
+    fontWeight: "900",
+    fontSize: 13,
+    marginBottom: 6,
+  },
+  helpItem: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginTop: 4,
+  },
+  helpIcon: {
+    width: 18,
+    height: 18,
+    marginTop: 2,
+  },
+  helpText: {
+    flex: 1,
+    color: "#E4EAF4",
+    fontSize: 12.5,
+    lineHeight: 18,
+  },
+  helpStrong: {
+    fontWeight: "800",
+    color: "#FFD27A",
+  },
 });

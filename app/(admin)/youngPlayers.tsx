@@ -6,11 +6,9 @@ import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   FlatList,
-  Image,
   KeyboardAvoidingView,
   Platform,
   RefreshControl,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
@@ -18,7 +16,9 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
+import { AdminHero } from "../../components/admin/AdminHero";
 import { useAdmin } from "../../contexts/AdminContext";
 import { supabase } from "../../supabase";
 
@@ -30,8 +30,7 @@ type YoungPlayer = {
   categorie: "12U" | "15U" | null;
 };
 
-const CATS: Array<"12U" | "15U"> = ["12U", "15U"];
-const logoComets = require("../../assets/images/iconComets.png");
+const CATS: ("12U" | "15U")[] = ["12U", "15U"];
 
 // ========== Helpers date ==========
 const maskBirthdateFR = (raw: string) => {
@@ -67,9 +66,9 @@ export default function YoungPlayersAdminScreen() {
 
   useEffect(() => {
     const checkSession = async () => {
-      const { data: sessionData } = await supabase.auth.getSession();
+      await supabase.auth.getSession();
       // Vérifie ce que voit Postgres via RPC (optionnel / diagnostique)
-      const { data: who, error } = await supabase.rpc("whoami_email");
+      await supabase.rpc("whoami_email");
     };
     checkSession();
   }, []);
@@ -84,7 +83,6 @@ export default function YoungPlayersAdminScreen() {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [players, setPlayers] = useState<YoungPlayer[]>([]);
 
   // Ajout
@@ -101,7 +99,6 @@ export default function YoungPlayersAdminScreen() {
   const [editCat, setEditCat] = useState<"12U" | "15U">("12U");
 
   const fetchPlayers = useCallback(async () => {
-    setErrorMsg(null);
     try {
       const { data, error } = await supabase
         .from("young_players")
@@ -121,8 +118,7 @@ export default function YoungPlayersAdminScreen() {
       })) as YoungPlayer[];
 
       setPlayers(norm);
-    } catch (e: any) {
-      setErrorMsg("Erreur de chargement : " + (e?.message || e));
+    } catch {
       setPlayers([]);
     } finally {
       setLoading(false);
@@ -162,7 +158,7 @@ export default function YoungPlayersAdminScreen() {
         categorie: addCat as "12U" | "15U",
       };
 
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from("young_players")
         .insert(payload)
         .select("id, first_name, last_name, date_naissance, categorie");
@@ -256,7 +252,7 @@ export default function YoungPlayersAdminScreen() {
           style: "destructive",
           onPress: async () => {
             try {
-              const { data, error } = await supabase
+              const { error } = await supabase
                 .from("young_players")
                 .delete()
                 .eq("id", id as any)
@@ -388,39 +384,11 @@ export default function YoungPlayersAdminScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
       <StatusBar barStyle="light-content" />
-
-      {/* HERO (comme MembresAdminScreen) */}
-      <View
-        style={[
-          styles.hero,
-          {
-            paddingTop:
-              Platform.OS === "android"
-                ? (StatusBar.currentHeight || 0) + 14
-                : 26,
-          },
-        ]}
-      >
-        <View style={styles.heroStripe} />
-        <View style={styles.heroRow}>
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={styles.backBtn}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Icon name="chevron-back" size={24} color="#FF8200" />
-          </TouchableOpacity>
-          <Text style={styles.heroTitle}>Jeunes (12U / 15U)</Text>
-          <View style={{ width: 36 }} />
-        </View>
-        <View style={styles.heroProfileRow}>
-          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.heroName}>Gestion des jeunes joueurs</Text>
-            <Text style={styles.heroSub}>Ajoute, édite ou supprime des profils 12U / 15U</Text>
-          </View>
-        </View>
-      </View>
+      <AdminHero
+        title="Jeunes 12U / 15U"
+        subtitle="Ajoute, edite ou supprime des profils"
+        onBack={() => router.back()}
+      />
 
       {/* BODY */}
       <KeyboardAvoidingView
@@ -503,63 +471,6 @@ export default function YoungPlayersAdminScreen() {
 
 const styles = StyleSheet.create({
   // ===== HERO (nouveau) =====
-  hero: {
-    backgroundColor: "#11131a",
-    borderBottomWidth: 1,
-    borderBottomColor: "#1f2230",
-    paddingBottom: 10,
-  },
-  heroStripe: {
-    position: "absolute",
-    right: -60,
-    top: -40,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: "rgba(255,130,0,0.10)",
-    transform: [{ rotate: "18deg" }],
-  },
-  heroRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    gap: 10,
-  },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1b1e27",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#2a2f3d",
-  },
-  heroTitle: {
-    flex: 1,
-    textAlign: "center",
-    color: "#FF8200",
-    fontSize: 20,
-    fontWeight: "800",
-    letterSpacing: 1.1,
-  },
-  heroProfileRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    gap: 12,
-  },
-  heroLogo: {
-    width: 56,
-    height: 56,
-    borderRadius: 14,
-    backgroundColor: "#fff",
-    borderWidth: 2,
-    borderColor: "#FF8200",
-  },
-  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
-  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
 
   // ===== BODY & composants existants =====
   addCard: {
@@ -643,3 +554,5 @@ const styles = StyleSheet.create({
 
   emptyTxt: { color: "#9aa0ae", textAlign: "center", marginTop: 30, fontSize: 14.5 },
 });
+
+

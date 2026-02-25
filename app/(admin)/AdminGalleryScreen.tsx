@@ -13,7 +13,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image as RNImage,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
@@ -21,12 +20,13 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
-import { sortGalleryNewest } from "../lib/gallerySort";
+import { AdminHero } from "../../components/admin/AdminHero";
+import { sortGalleryNewest } from "../../lib/gallerySort";
 import { useAdmin } from "../../contexts/AdminContext";
 import { supabase } from "../../supabase";
 
-const logoComets = require("../../assets/images/iconComets.png");
 
 type GalleryItem = {
   id: number | string;
@@ -275,29 +275,11 @@ export default function AdminGalleryScreen({ navigation }: any) {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
       <StatusBar barStyle="light-content" />
-
-      {/* HERO */}
-      <View style={[styles.hero, { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26 }]}>
-        <View style={styles.heroStripe} />
-        <View style={styles.heroRow}>
-          <TouchableOpacity
-            onPress={() => (router.canGoBack() ? router.back() : navigation?.goBack?.())}
-            style={styles.backBtn}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Icon name="chevron-back" size={24} color="#FF8200" />
-          </TouchableOpacity>
-          <Text style={styles.heroTitle}>Galerie (admin)</Text>
-          <View style={{ width: 36 }} />
-        </View>
-        <View style={styles.heroProfileRow}>
-          <RNImage source={logoComets} style={styles.heroLogo} resizeMode="contain" />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.heroName}>Photos officielles du club</Text>
-            <Text style={styles.heroSub}>Ajoute, légende et supprime des images</Text>
-          </View>
-        </View>
-      </View>
+      <AdminHero
+        title="Galerie admin"
+        subtitle="Ajoute, legende et supprime des images"
+        onBack={() => (router.canGoBack() ? router.back() : navigation?.goBack?.())}
+      />
 
       {/* BODY */}
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -373,28 +355,6 @@ export default function AdminGalleryScreen({ navigation }: any) {
 }
 
 const styles = StyleSheet.create({
-  hero: {
-    backgroundColor: "#11131a",
-    borderBottomWidth: 1,
-    borderBottomColor: "#1f2230",
-    paddingBottom: 10,
-  },
-  heroStripe: {
-    position: "absolute",
-    right: -60, top: -40, width: 240, height: 240, borderRadius: 120,
-    backgroundColor: "rgba(255,130,0,0.10)", transform: [{ rotate: "18deg" }],
-  },
-  heroRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, gap: 10 },
-  backBtn: {
-    width: 36, height: 36, borderRadius: 18, backgroundColor: "#1b1e27",
-    alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#2a2f3d",
-  },
-  heroTitle: { flex: 1, textAlign: "center", color: "#FF8200", fontSize: 20, fontWeight: "800", letterSpacing: 1.1 },
-  heroProfileRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 10, gap: 12 },
-  heroLogo: { width: 56, height: 56, borderRadius: 14, backgroundColor: "#fff", borderWidth: 2, borderColor: "#FF8200" },
-  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
-  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
-
   card: {
     backgroundColor: "rgba(255,255,255,0.06)",
     borderRadius: 18,
@@ -426,3 +386,4 @@ const styles = StyleSheet.create({
   actionBtn: { flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 12 },
   actionTxt: { color: "#fff", fontWeight: "900", fontSize: 13.5 },
 });
+

@@ -2,6 +2,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import * as Calendar from "expo-calendar";
+import { Asset } from "expo-asset";
+import { Image as ExpoImage } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Notifications from "expo-notifications";
 import React, {
   useCallback,
@@ -15,22 +18,21 @@ import {
   Animated,
   Easing,
   FlatList,
-  Image,
   Linking,
   Platform,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 import LogoutButton from "../../components/LogoutButton";
 import { useAdmin } from "../../contexts/AdminContext";
 import { supabase } from "../../supabase";
-import { formatDateFr } from "../lib/date";
-import { resultColor, resultLabel } from "../lib/match";
+import { formatDateFr } from "../../lib/date";
+import { resultColor, resultLabel } from "../../lib/match";
 
 // ================== Palette Comets (sobre) ==================
 const COLORS = {
@@ -65,6 +67,27 @@ const COLORS = {
   amberPillBg: "#EBD3A0",
   amberPillBorder: "#C98F3C",
 };
+
+const TOP_TABS = [
+  { key: "upcoming", label: "A venir", icon: "calendar-outline" },
+  { key: "played", label: "Joues", icon: "list-outline" },
+] as const;
+
+const CATEGORY_FILTERS = ["Seniors", "15U", "12U"] as const;
+
+const CATEGORY_META: Record<
+  (typeof CATEGORY_FILTERS)[number],
+  { icon: string; tone: string }
+> = {
+  Seniors: { icon: "baseball-outline", tone: "#FFB366" },
+  "15U": { icon: "people-outline", tone: "#93C5FD" },
+  "12U": { icon: "sparkles-outline", tone: "#86EFAC" },
+};
+
+const MONTH_LABEL_FORMATTER = new Intl.DateTimeFormat("fr-FR", {
+  month: "long",
+  year: "numeric",
+});
 
 // ================== API utils ==================
 const PRIMARY_API =
@@ -125,7 +148,8 @@ const LOGO_MAP: Record<string, any> = {
   "Le Havre": require("../../assets/images/Le_Havre.png"),
   Rouen: require("../../assets/images/Rouen.jpg"),
   Honfleur: require("../../assets/images/Honfleur.png"),
-  "Saint-Lô": require("../../assets/images/Saint-Lô.jpg"),
+  "Saint-Lô": require("../../assets/images/Saint-Lo.jpg"),
+  "Saint-Lo": require("../../assets/images/Saint-Lo.jpg"),
 };
 
 // === Badges ===
@@ -178,6 +202,49 @@ function hexToRgba(hex: string, alpha = 0.33) {
 function normalizeName(name: string) {
   return name.replace(/^Les\s+/i, "").trim();
 }
+function parseDateValue(dateValue: string): Date | null {
+  if (!dateValue) return null;
+
+  // Priorite au format FR "JJ/MM/AAAA" (ou JJ-MM-AAAA) pour eviter
+  // l'interpretation ambigue en MM/JJ par le parser natif.
+  const frMatch = dateValue.match(/^\s*(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s+.*)?$/);
+  if (frMatch) {
+    const [, ddRaw, mmRaw, yyyyRaw] = frMatch;
+    const dd = Number(ddRaw);
+    const mm = Number(mmRaw);
+    const yyyy = Number(yyyyRaw);
+    const parsed = new Date(yyyy, mm - 1, dd);
+
+    if (
+      parsed.getFullYear() !== yyyy ||
+      parsed.getMonth() !== mm - 1 ||
+      parsed.getDate() !== dd
+    ) {
+      return null;
+    }
+
+    return parsed;
+  }
+
+  const nativeParsed = new Date(dateValue);
+  if (!Number.isNaN(nativeParsed.getTime())) return nativeParsed;
+  return null;
+}
+function getDateTimestamp(dateValue: string): number | null {
+  const parsed = parseDateValue(dateValue);
+  return parsed ? parsed.getTime() : null;
+}
+function getMonthKey(dateValue: string) {
+  const parsed = parseDateValue(dateValue);
+  if (!parsed) return "unknown";
+  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}`;
+}
+function getMonthLabel(dateValue: string) {
+  const parsed = parseDateValue(dateValue);
+  if (!parsed) return "Date inconnue";
+  const label = MONTH_LABEL_FORMATTER.format(parsed);
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
 
 // ================== Types ==================
 const TEAM_NAMES: Record<string, string> = {
@@ -218,6 +285,76 @@ type Eligibility = {
   eligible: boolean | null;
   category: "Seniors" | "15U" | "12U" | null;
 };
+type MatchListItem =
+  | { type: "month"; key: string; label: string }
+  | { type: "upcoming"; key: string; match: PlannedGame }
+  | { type: "played"; key: string; game: Game };
+
+function groupUpcomingByMonth(items: PlannedGame[]): MatchListItem[] {
+  const grouped: MatchListItem[] = [];
+  let currentMonth: string | null = null;
+
+  const sorted = [...items].sort((a, b) => {
+    const ta = getDateTimestamp(a.date);
+    const tb = getDateTimestamp(b.date);
+    if (ta === null && tb === null) return 0;
+    if (ta === null) return 1;
+    if (tb === null) return -1;
+    return ta - tb;
+  });
+
+  sorted.forEach((match) => {
+    const monthKey = getMonthKey(match.date);
+    if (monthKey !== currentMonth) {
+      currentMonth = monthKey;
+      grouped.push({
+        type: "month",
+        key: `month-upcoming-${monthKey}`,
+        label: getMonthLabel(match.date),
+      });
+    }
+    grouped.push({
+      type: "upcoming",
+      key: `upcoming-${String(match.id)}`,
+      match,
+    });
+  });
+
+  return grouped;
+}
+
+function groupPlayedByMonth(items: Game[]): MatchListItem[] {
+  const grouped: MatchListItem[] = [];
+  let currentMonth: string | null = null;
+
+  const sorted = [...items].sort((a, b) => {
+    const ta = getDateTimestamp(a.date);
+    const tb = getDateTimestamp(b.date);
+    if (ta === null && tb === null) return 0;
+    if (ta === null) return 1;
+    if (tb === null) return -1;
+    return ta - tb;
+  });
+
+  sorted.forEach((game) => {
+    const monthKey = getMonthKey(game.date);
+    if (monthKey !== currentMonth) {
+      currentMonth = monthKey;
+      grouped.push({
+        type: "month",
+        key: `month-played-${monthKey}`,
+        label: getMonthLabel(game.date),
+      });
+    }
+    grouped.push({
+      type: "played",
+      key: `played-${String(game.id)}`,
+      game,
+    });
+  });
+
+  return grouped;
+}
 
 // ================== Local storage ==================
 const storageKey = (adminId: string | number) => `comets:joined:${adminId}`;
@@ -280,13 +417,15 @@ function BadgeCoin({
       }}
     >
       {source ? (
-        <Image
+        <ExpoImage
           source={source}
-          resizeMode="cover"
           style={{ width: "100%", height: "100%" }}
+          contentFit="cover"
+          cachePolicy="memory-disk"
+          transition={100}
         />
       ) : (
-        <Text style={{ fontSize: size * 0.42 }}>🏅</Text>
+        <Icon name="trophy-outline" size={Math.round(size * 0.42)} color="#64748B" />
       )}
     </View>
   );
@@ -334,7 +473,7 @@ function CometsToast({
       }, 2700);
       return () => clearTimeout(id);
     }
-  }, [visible]);
+  }, [visible, onClose, opacity, translateY]);
   if (!visible || !data) return null;
   return (
     <View
@@ -436,6 +575,7 @@ function CometsToast({
 // ================== Screen ==================
 export default function MatchsScreen() {
   const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
   const { admin, setAdmin } = useAdmin() as any;
 
   const [games, setGames] = useState<Game[]>([]);
@@ -456,7 +596,6 @@ export default function MatchsScreen() {
   const [declined, setDeclined] = useState<Record<string, boolean>>({});
   const [posting, setPosting] = useState<Record<string, boolean>>({});
   const [showScrollTop, setShowScrollTop] = useState(false);
-  const [hydratingJoined, setHydratingJoined] = useState(false);
 
   // ÉLIGIBILITÉ + catégorie
   const [elig, setElig] = useState<Eligibility>({
@@ -471,7 +610,7 @@ export default function MatchsScreen() {
   const [toastVisible, setToastVisible] = useState(false);
   const [toastData, setToastData] = useState<ToastData | null>(null);
 
-  const flatListRef = useRef<FlatList>(null);
+  const flatListRef = useRef<FlatList<MatchListItem>>(null);
 
   // INIT NOTIFS
   useEffect(() => {
@@ -482,6 +621,30 @@ export default function MatchsScreen() {
       }).catch(() => {});
     }
   }, []);
+
+  useEffect(() => {
+    Asset.loadAsync([
+      ...Object.values(LOGO_MAP),
+      ...Object.values(BADGE_ASSETS),
+    ]).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const remoteLogos = Array.from(
+      new Set(
+        plannedGames
+          .map((m) => m.logo)
+          .filter(
+            (logo): logo is string =>
+              typeof logo === "string" && /^https?:\/\//i.test(logo),
+          ),
+      ),
+    );
+
+    remoteLogos.slice(0, 24).forEach((uri) => {
+      ExpoImage.prefetch(uri).catch(() => {});
+    });
+  }, [plannedGames]);
 
   // Load games played
   useEffect(() => {
@@ -523,7 +686,6 @@ export default function MatchsScreen() {
     const local = await readJoinedFromStorage(admin.id);
     if (local?.map) setJoined(local.map);
 
-    setHydratingJoined(true);
     try {
       let apiMap: Record<string, boolean> = {};
       let apiDeclinedMap: Record<string, boolean> = {};
@@ -547,8 +709,6 @@ export default function MatchsScreen() {
       await writeJoinedToStorage(admin.id, merged);
     } catch {
       setDeclined({});
-    } finally {
-      setHydratingJoined(false);
     }
   }, [admin?.id]);
 
@@ -601,8 +761,11 @@ export default function MatchsScreen() {
   }, [plannedGames]);
 
   // Data filtering
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const today = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, []);
   const playedGames = useMemo(
     () =>
       games.filter(
@@ -611,8 +774,12 @@ export default function MatchsScreen() {
     [games],
   );
   const upcomingGames = useMemo(
-    () => plannedGames.filter((pg) => new Date(pg.date) >= today),
-    [plannedGames],
+    () =>
+      plannedGames.filter((pg) => {
+        const parsed = parseDateValue(pg.date);
+        return !!parsed && parsed >= today;
+      }),
+    [plannedGames, today],
   );
 
   // filtre catégorie appliqué aux à-venir
@@ -633,7 +800,12 @@ export default function MatchsScreen() {
     return base;
   }, [upcomingGames]);
 
-  const dataToShow = selectedTab === "played" ? playedGames : filteredUpcoming;
+  const upcomingList = useMemo(
+    () => groupUpcomingByMonth(filteredUpcoming),
+    [filteredUpcoming],
+  );
+  const playedList = useMemo(() => groupPlayedByMonth(playedGames), [playedGames]);
+  const dataToShow = selectedTab === "played" ? playedList : upcomingList;
 
   // Native calendar
   async function addMatchToCalendar(match: PlannedGame) {
@@ -802,6 +974,7 @@ export default function MatchsScreen() {
       !item.categorie ||
       (elig.category !== null && item.categorie === elig.category);
     const canRespond = elig.eligible === true && catOk;
+    const showParticipationControls = !!admin?.id && canRespond;
     const joinDisabled = isJoined || isPosting || !canRespond;
     const leaveDisabled = isDeclined || isPosting || !canRespond;
     const count = counts[mid] ?? 0;
@@ -813,36 +986,17 @@ export default function MatchsScreen() {
     const joinOpacity = joinDisabled ? (isJoined ? 0.45 : 0.7) : 1;
     const declineOpacity = leaveDisabled ? (isDeclined ? 0.45 : 0.7) : 1;
 
-    // Raison(s) claire(s) de non inscription
-    const reasons: string[] = [];
-    if (!admin?.id) {
-      reasons.push("Connecte-toi pour participer.");
-    } else {
-      if (elig.eligible === false) {
-        reasons.push("Tu dois être membre du club pour participer.");
-      } else if (elig.eligible === null) {
-        reasons.push("Vérification du profil en cours…");
-      }
-      if (!catOk) {
-        reasons.push(
-          `Match réservé ${item.categorie ?? "?"} — ton profil est ${elig.category ?? "?"}.`,
-        );
-      }
-      if (isJoined) {
-        reasons.push("Tu es deja inscrit a ce match.");
-      }
-      if (isDeclined) {
-        reasons.push("Tu as deja indique que tu ne participes pas.");
-      }
-    }
-
     return (
       <View style={styles.card}>
         <View style={styles.cardTopRow}>
           <Text style={styles.matchBadgeUpcoming}>À venir</Text>
+          <Text style={styles.matchDate} numberOfLines={2}>
+            {formatDateFr(item.date)}
+          </Text>
+        </View>
 
+        {showParticipationControls && (
           <View style={styles.cardTopMetaRow}>
-            {/* Compteur d'inscrits bien visible */}
             <View style={styles.countPill}>
               <Icon name="people-outline" size={14} color={COLORS.slateDark} />
               <Text style={styles.countPillTxt}>
@@ -852,9 +1006,8 @@ export default function MatchsScreen() {
             <View style={styles.statePill}>
               <Text style={styles.statePillTxt}>{stateLabel}</Text>
             </View>
-            <Text style={styles.matchDate}>{formatDateFr(item.date)}</Text>
           </View>
-        </View>
+        )}
 
         <View style={styles.venueRow}>
           <Icon
@@ -873,7 +1026,13 @@ export default function MatchsScreen() {
           <View style={styles.teamCol}>
             {item.is_home ? (
               <>
-                <Image source={LOGO_MAP["Honfleur"]} style={styles.logoTeam} />
+                <ExpoImage
+                  source={LOGO_MAP["Honfleur"]}
+                  style={styles.logoTeam}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                  transition={90}
+                />
                 <Text style={[styles.teamName, { color: COLORS.orange }]}>
                   Honfleur
                 </Text>
@@ -881,9 +1040,12 @@ export default function MatchsScreen() {
             ) : (
               <>
                 {getOpponentLogo(item.opponent) ? (
-                  <Image
+                  <ExpoImage
                     source={getOpponentLogo(item.opponent)}
                     style={styles.logoTeam}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                    transition={90}
                   />
                 ) : (
                   <View style={[styles.logoTeam]} />
@@ -905,9 +1067,12 @@ export default function MatchsScreen() {
             {item.is_home ? (
               <>
                 {getOpponentLogo(item.opponent) ? (
-                  <Image
+                  <ExpoImage
                     source={getOpponentLogo(item.opponent)}
                     style={styles.logoTeam}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                    transition={90}
                   />
                 ) : (
                   <View style={[styles.logoTeam]} />
@@ -921,7 +1086,13 @@ export default function MatchsScreen() {
               </>
             ) : (
               <>
-                <Image source={LOGO_MAP["Honfleur"]} style={styles.logoTeam} />
+                <ExpoImage
+                  source={LOGO_MAP["Honfleur"]}
+                  style={styles.logoTeam}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                  transition={90}
+                />
                 <Text style={[styles.teamName, { color: COLORS.orange }]}>
                   Honfleur
                 </Text>
@@ -970,20 +1141,8 @@ export default function MatchsScreen() {
             </Text>
           )}
         </View>
-
-        {/* Bannière d’info si inscription impossible */}
-        {reasons.length > 0 && !isJoined && (
-          <View style={styles.infoBanner}>
-            <Icon
-              name="information-circle-outline"
-              size={18}
-              color={COLORS.slateDark}
-            />
-            <Text style={styles.infoBannerTxt}>{reasons.join(" ")}</Text>
-          </View>
-        )}
-
-        {/* Actions */}
+        {showParticipationControls && (
+          <>
         <TouchableOpacity
           style={styles.calBtn}
           activeOpacity={0.88}
@@ -1052,6 +1211,8 @@ export default function MatchsScreen() {
             {isPosting ? "Mise a jour..." : "Je ne participe pas"}
           </Text>
         </TouchableOpacity>
+          </>
+        )}
       </View>
     );
   };
@@ -1083,7 +1244,9 @@ export default function MatchsScreen() {
       <View style={styles.card}>
         <View style={styles.cardTopRow}>
           <Text style={styles.matchBadgePlayed}>Match #{g.game_number}</Text>
-          <Text style={styles.matchDate}>{formatDateFr(g.date)}</Text>
+          <Text style={styles.matchDate} numberOfLines={2}>
+            {formatDateFr(g.date)}
+          </Text>
         </View>
 
         <View style={styles.venueRow}>
@@ -1099,7 +1262,15 @@ export default function MatchsScreen() {
 
         <View style={styles.scoresRow}>
           <View style={styles.teamScoreCol}>
-            {leftLogo && <Image source={leftLogo} style={styles.logoTeam} />}
+            {leftLogo && (
+              <ExpoImage
+                source={leftLogo}
+                style={styles.logoTeam}
+                contentFit="cover"
+                cachePolicy="memory-disk"
+                transition={90}
+              />
+            )}
             <Text
               style={[
                 styles.teamName,
@@ -1115,7 +1286,15 @@ export default function MatchsScreen() {
           <Text style={styles.vsDash}>—</Text>
 
           <View style={styles.teamScoreCol}>
-            {rightLogo && <Image source={rightLogo} style={styles.logoTeam} />}
+            {rightLogo && (
+              <ExpoImage
+                source={rightLogo}
+                style={styles.logoTeam}
+                contentFit="cover"
+                cachePolicy="memory-disk"
+                transition={90}
+              />
+            )}
             <Text
               style={[
                 styles.teamName,
@@ -1161,187 +1340,144 @@ export default function MatchsScreen() {
   const isLoadingList =
     (selectedTab === "played" && loading) ||
     (selectedTab === "upcoming" && loadingPlanned);
+  const totalUpcoming = upcomingGames.length;
+  const totalPlayed = playedGames.length;
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.bg }}>
+    <SafeAreaView style={styles.safe} edges={["left", "right", "bottom"]}>
       <StatusBar barStyle="light-content" />
 
-      {/* HERO */}
-      <View
-        style={{
-          backgroundColor: COLORS.surface,
-          borderBottomWidth: 1,
-          borderBottomColor: COLORS.surfaceBorder,
-          paddingBottom: 10,
-          paddingTop:
-            Platform.OS === "android"
-              ? (StatusBar.currentHeight || 0) + 14
-              : 26,
-        }}
-      >
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            paddingHorizontal: 12,
-          }}
-        >
-          <TouchableOpacity
-            onPress={() =>
-              // @ts-ignore
-              (navigation as any).canGoBack()
-                ? (navigation as any).goBack()
-                : (navigation as any).navigate("Home")
-            }
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 18,
-              backgroundColor: "#1b1e27",
-              alignItems: "center",
-              justifyContent: "center",
-              borderWidth: 1,
-              borderColor: COLORS.cardBorder,
-            }}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Icon name="chevron-back" size={24} color={COLORS.orange} />
-          </TouchableOpacity>
-
-          <Text
-            style={{
-              flex: 1,
-              textAlign: "center",
-              color: COLORS.orange,
-              fontSize: 20,
-              fontWeight: "800",
-              letterSpacing: 1.1,
-            }}
-          >
-            Calendrier & Résultats
-          </Text>
-          <LogoutButton />
-        </View>
-
-        {/* Onglets haut : joués / à venir */}
-        <View
-          style={{
-            flexDirection: "row",
-            paddingHorizontal: 12,
-            paddingTop: 10,
-            gap: 8,
-          }}
-        >
-          {[
+      <View style={styles.heroWrap}>
+        <LinearGradient
+          colors={["#17263D", "#101A2A", "#0B101A"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[
+            styles.heroGradient,
             {
-              label: "Matchs à venir",
-              key: "upcoming",
-              icon: "calendar-outline",
+              paddingTop:
+                Platform.OS === "android"
+                  ? Math.max(StatusBar.currentHeight || 0, insets.top) + 6
+                  : insets.top + 2,
             },
-            { label: "Matchs joués", key: "played", icon: "list-outline" },
-          ].map((tab) => {
-            const active = selectedTab === tab.key;
-            return (
-              <TouchableOpacity
-                key={tab.key}
-                onPress={() => {
-                  setSelectedTab(tab.key as any);
-                  flatListRef.current?.scrollToOffset({
-                    offset: 0,
-                    animated: true,
-                  });
-                }}
-                style={{
-                  flex: 1,
-                  backgroundColor: active ? COLORS.orange : COLORS.card,
-                  borderWidth: 1,
-                  borderColor: active ? COLORS.orange : COLORS.cardBorder,
-                  paddingVertical: 10,
-                  borderRadius: 12,
-                  alignItems: "center",
-                  flexDirection: "row",
-                  justifyContent: "center",
-                }}
-                activeOpacity={0.9}
-              >
-                <Icon
-                  name={tab.icon as any}
-                  size={16}
-                  color={active ? "#fff" : COLORS.orange}
-                />
-                <Text
-                  style={{
-                    color: active ? "#fff" : COLORS.orange,
-                    fontWeight: "900",
-                    fontSize: 13.5,
-                    letterSpacing: 0.3,
-                    marginLeft: 8,
-                  }}
-                >
-                  {tab.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+          ]}
+        >
+          <LinearGradient
+            colors={["rgba(255,130,0,0.24)", "rgba(255,130,0,0)"]}
+            start={{ x: 1, y: 0 }}
+            end={{ x: 0, y: 1 }}
+            style={styles.heroShine}
+          />
 
-        {/* Sous-onglets catégorie (Seniors par défaut) */}
-        {selectedTab === "upcoming" && (
-          <View
-            style={{
-              flexDirection: "row",
-              gap: 8,
-              paddingHorizontal: 12,
-              paddingTop: 10,
-              flexWrap: "wrap",
-            }}
-          >
-            {(["Seniors", "15U", "12U"] as const).map((f) => {
-              const active = catFilter === f;
+          <View style={styles.heroTopRow}>
+            <TouchableOpacity
+              onPress={() =>
+                // @ts-ignore
+                (navigation as any).canGoBack()
+                  ? // @ts-ignore
+                    (navigation as any).goBack()
+                  : // @ts-ignore
+                    (navigation as any).navigate("Home")
+              }
+              style={styles.backBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Icon name="chevron-back" size={22} color="#F3F4F6" />
+            </TouchableOpacity>
+
+            <View style={styles.heroTitleWrap}>
+              <Text style={styles.heroTitle}>Calendrier des matchs</Text>
+              <Text style={styles.heroSub}>Saison {new Date().getFullYear()}</Text>
+            </View>
+
+            <LogoutButton />
+          </View>
+
+          <View style={styles.heroMetaCompactRow}>
+            <Text style={styles.heroMetaText}>
+              {totalUpcoming} a venir | {totalPlayed} joues
+            </Text>
+            <View style={styles.heroPill}>
+              <Icon
+                name={selectedTab === "upcoming" ? "calendar-outline" : "trophy-outline"}
+                size={13}
+                color="#FFDDBA"
+              />
+              <Text style={styles.heroPillText}>
+                {selectedTab === "upcoming" ? catFilter : "Resultats"}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.tabs}>
+            {TOP_TABS.map((tab) => {
+              const active = selectedTab === tab.key;
               return (
                 <TouchableOpacity
-                  key={f}
+                  key={tab.key}
                   onPress={() => {
-                    setCatFilter(f);
+                    setSelectedTab(tab.key);
                     flatListRef.current?.scrollToOffset({
                       offset: 0,
                       animated: true,
                     });
                   }}
-                  style={{
-                    backgroundColor: active
-                      ? COLORS.orange
-                      : "rgba(255,255,255,0.06)",
-                    borderColor: active
-                      ? COLORS.orange
-                      : COLORS.orangeSoftBorder,
-                    borderWidth: 1,
-                    borderRadius: 999,
-                    paddingVertical: 8,
-                    paddingHorizontal: 14,
-                  }}
+                  style={[styles.tabBtn, active && styles.tabBtnActive]}
                   activeOpacity={0.9}
                 >
-                  <Text
-                    style={{
-                      color: active ? "#fff" : COLORS.text,
-                      fontWeight: active ? "900" : "800",
-                    }}
-                  >
-                    {f} ({catCounts[f]})
+                  <View style={[styles.tabIconWrap, active && styles.tabIconWrapActive]}>
+                    <Icon
+                      name={tab.icon}
+                      size={14}
+                      color={active ? "#111827" : COLORS.orange}
+                    />
+                  </View>
+                  <Text style={[styles.tabBtnText, active && styles.tabBtnTextActive]}>
+                    {tab.label}
                   </Text>
                 </TouchableOpacity>
               );
             })}
           </View>
-        )}
+
+          {selectedTab === "upcoming" && (
+            <View style={styles.catRow}>
+              {CATEGORY_FILTERS.map((f) => {
+                const active = catFilter === f;
+                return (
+                  <TouchableOpacity
+                    key={f}
+                    onPress={() => {
+                      setCatFilter(f);
+                      flatListRef.current?.scrollToOffset({
+                        offset: 0,
+                        animated: true,
+                      });
+                    }}
+                    style={[styles.catBtn, active && styles.catBtnActive]}
+                    activeOpacity={0.9}
+                  >
+                    <Icon
+                      name={CATEGORY_META[f].icon}
+                      size={14}
+                      color={active ? "#111827" : CATEGORY_META[f].tone}
+                    />
+                    <Text style={[styles.catBtnText, active && styles.catBtnTextActive]}>
+                      {f} ({catCounts[f]})
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+        </LinearGradient>
       </View>
 
       {/* LISTE */}
-      <View style={{ flex: 1 }}>
+      <View style={styles.listWrap}>
         {isLoadingList ? (
           <View style={styles.loaderBox}>
-            <Text style={styles.loaderTxt}>Chargement…</Text>
+            <Text style={styles.loaderTxt}>Chargement...</Text>
           </View>
         ) : errorMsg ? (
           <View style={styles.loaderBox}>
@@ -1352,26 +1488,38 @@ export default function MatchsScreen() {
             <FlatList
               ref={flatListRef}
               data={dataToShow}
-              keyExtractor={(it: any) => String(it.id)}
-              contentContainerStyle={{ padding: 14, paddingBottom: 36 }}
+              keyExtractor={(item) => item.key}
+              contentContainerStyle={styles.listContent}
+              showsVerticalScrollIndicator={false}
               ListEmptyComponent={
                 <Text style={styles.emptyTxt}>
                   {selectedTab === "upcoming"
-                    ? `Aucun match en ${catFilter} à venir.`
-                    : "Aucun match joué à afficher."}
+                    ? `Aucun match en ${catFilter} a venir.`
+                    : "Aucun match joue a afficher."}
                 </Text>
               }
-              renderItem={({ item }) =>
-                selectedTab === "upcoming" ? (
-                  <UpcomingCard item={item as PlannedGame} />
-                ) : (
-                  <PlayedCard g={item as Game} />
-                )
-              }
+              renderItem={({ item }) => {
+                if (item.type === "month") {
+                  return (
+                    <View style={styles.monthHeaderRow}>
+                      <View style={styles.monthHeaderLine} />
+                      <Text style={styles.monthHeaderText}>{item.label}</Text>
+                      <View style={styles.monthHeaderLine} />
+                    </View>
+                  );
+                }
+                if (item.type === "upcoming") return <UpcomingCard item={item.match} />;
+                return <PlayedCard g={item.game} />;
+              }}
               onScroll={(e) =>
                 setShowScrollTop(e.nativeEvent.contentOffset.y > 240)
               }
               scrollEventThrottle={16}
+              initialNumToRender={8}
+              maxToRenderPerBatch={10}
+              windowSize={7}
+              updateCellsBatchingPeriod={30}
+              removeClippedSubviews={Platform.OS === "android"}
             />
             {showScrollTop && (
               <TouchableOpacity
@@ -1384,7 +1532,7 @@ export default function MatchsScreen() {
                 }
                 activeOpacity={0.8}
               >
-                <Icon name="chevron-up" size={30} color={COLORS.orange} />
+                <Icon name="chevron-up" size={28} color={COLORS.orange} />
               </TouchableOpacity>
             )}
           </>
@@ -1406,6 +1554,186 @@ export default function MatchsScreen() {
 
 // ================== Styles ==================
 const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: "#0B0F17",
+  },
+  heroWrap: {
+    marginHorizontal: 10,
+    marginTop: 8,
+    borderRadius: 18,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.22)",
+    backgroundColor: "#0E1524",
+  },
+  heroGradient: {
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+  },
+  heroShine: {
+    ...StyleSheet.absoluteFillObject,
+    top: 0,
+    bottom: "58%",
+  },
+  heroTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  backBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.24)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heroTitleWrap: {
+    flex: 1,
+  },
+  heroTitle: {
+    color: "#FFFFFF",
+    fontSize: 19,
+    lineHeight: 22,
+    fontWeight: "800",
+  },
+  heroSub: {
+    marginTop: 1,
+    color: "#BEC8DB",
+    fontSize: 12,
+  },
+  heroMetaCompactRow: {
+    marginTop: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  heroMetaText: {
+    flexShrink: 1,
+    color: "#CBD2DF",
+    fontSize: 12,
+  },
+  heroPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.24)",
+    backgroundColor: "rgba(0,0,0,0.28)",
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  heroPillText: {
+    color: "#FFDDBA",
+    fontWeight: "700",
+    fontSize: 11,
+  },
+  tabs: {
+    flexDirection: "row",
+    marginTop: 8,
+    gap: 6,
+  },
+  tabBtn: {
+    flex: 1,
+    minHeight: 36,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    backgroundColor: "rgba(0,0,0,0.3)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    paddingHorizontal: 6,
+  },
+  tabBtnActive: {
+    backgroundColor: "#FF8200",
+    borderColor: "#FFB366",
+  },
+  tabIconWrap: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "rgba(255,130,0,0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabIconWrapActive: {
+    backgroundColor: "rgba(255,255,255,0.62)",
+  },
+  tabBtnText: {
+    color: "#E5E7EB",
+    fontWeight: "700",
+    fontSize: 12,
+  },
+  tabBtnTextActive: {
+    color: "#111827",
+    fontWeight: "800",
+  },
+  catRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    gap: 6,
+  },
+  catBtn: {
+    flex: 1,
+    minHeight: 34,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    backgroundColor: "rgba(0,0,0,0.26)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    paddingHorizontal: 6,
+  },
+  catBtnActive: {
+    backgroundColor: "#FF9E3A",
+    borderColor: "#FFBD80",
+  },
+  catBtnText: {
+    color: "#E5E7EB",
+    fontWeight: "700",
+    fontSize: 11.5,
+  },
+  catBtnTextActive: {
+    color: "#111827",
+    fontWeight: "800",
+  },
+  listWrap: {
+    flex: 1,
+  },
+  listContent: {
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 40,
+  },
+  monthHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 6,
+    marginBottom: 8,
+  },
+  monthHeaderLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "rgba(255,255,255,0.14)",
+  },
+  monthHeaderText: {
+    color: "#FFD4A2",
+    fontWeight: "900",
+    fontSize: 12,
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+  },
+
   loaderBox: { flex: 1, alignItems: "center", justifyContent: "center" },
   loaderTxt: { color: COLORS.orange, fontWeight: "bold", fontSize: 18 },
   errorTxt: {
@@ -1422,16 +1750,16 @@ const styles = StyleSheet.create({
   },
 
   card: {
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: "#111827",
     borderRadius: 18,
-    padding: 16,
-    marginBottom: 12,
+    padding: 14,
+    marginBottom: 10,
     shadowColor: "#000",
-    shadowOpacity: 0.18,
+    shadowOpacity: 0.22,
     shadowRadius: 12,
     elevation: 3,
     borderWidth: 1,
-    borderColor: COLORS.orangeSoftBorder,
+    borderColor: "rgba(255,130,0,0.2)",
   },
   cardTopRow: {
     flexDirection: "row",
@@ -1440,43 +1768,42 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   cardTopMetaRow: {
-    flex: 1,
-    minWidth: 0,
-    marginLeft: 8,
+    marginTop: 8,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "flex-end",
     flexWrap: "wrap",
     gap: 8,
   },
 
   matchBadgeUpcoming: {
-    color: COLORS.blue,
-    backgroundColor: COLORS.blueSoftBg,
-    borderColor: COLORS.blueSoftBorder,
+    color: "#DBEAFE",
+    backgroundColor: "rgba(59,130,246,0.24)",
+    borderColor: "rgba(147,197,253,0.56)",
     borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 10,
     fontWeight: "900",
-    fontSize: 12.5,
+    fontSize: 12,
   },
   matchBadgePlayed: {
-    color: COLORS.orange,
-    backgroundColor: COLORS.orangeSoftBg,
-    borderColor: COLORS.orangeSoftBorder,
+    color: "#FFE2C2",
+    backgroundColor: "rgba(255,130,0,0.24)",
+    borderColor: "rgba(255,195,130,0.62)",
     borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 10,
     fontWeight: "900",
-    fontSize: 12.5,
+    fontSize: 12,
   },
   matchDate: {
     color: "#d5d8df",
     fontWeight: "700",
     fontSize: 13.5,
     flexShrink: 1,
+    minWidth: 0,
+    maxWidth: "62%",
     textAlign: "right",
   },
 
@@ -1484,36 +1811,44 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    marginTop: 8,
+    marginTop: 10,
   },
-  venueTxt: { color: COLORS.textMuted, fontWeight: "700", fontSize: 13.5 },
+  venueTxt: { color: COLORS.textMuted, fontWeight: "700", fontSize: 13 },
 
   vsRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     marginTop: 12,
+    gap: 8,
   },
-  teamCol: { flex: 1, alignItems: "center" },
+  teamCol: { flex: 1, alignItems: "center", minWidth: 0 },
   teamName: {
     color: COLORS.text,
     fontWeight: "900",
-    fontSize: 15,
+    fontSize: 14.5,
     marginTop: 6,
   },
   logoTeam: {
-    width: 48,
-    height: 48,
-    borderRadius: 10,
+    width: 52,
+    height: 52,
+    borderRadius: 12,
     backgroundColor: "#fff",
     borderWidth: 2,
     borderColor: COLORS.orange,
   },
   vs: {
     color: COLORS.orange,
+    backgroundColor: "rgba(255,130,0,0.16)",
+    borderColor: "rgba(255,130,0,0.45)",
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     fontWeight: "900",
-    fontSize: 16,
-    marginHorizontal: 10,
+    fontSize: 12.5,
+    letterSpacing: 0.3,
+    marginHorizontal: 6,
   },
 
   scoresRow: {
@@ -1576,28 +1911,33 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: COLORS.orange,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.24)",
+    backgroundColor: "rgba(0,0,0,0.3)",
     borderRadius: 12,
     paddingVertical: 10,
   },
-  calBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 14.5 },
+  calBtnTxt: { color: "#E5E7EB", fontWeight: "800", fontSize: 13.5 },
 
   joinBtn: {
     marginTop: 10,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    gap: 8,
     backgroundColor: COLORS.blue,
     borderRadius: 12,
     paddingVertical: 10,
   },
-  joinBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 14.5 },
+  joinBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 14 },
 
   unsubscribeBtn: {
     marginTop: 10,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    gap: 8,
     backgroundColor: COLORS.danger,
     borderRadius: 12,
     paddingVertical: 10,
@@ -1623,18 +1963,18 @@ const styles = StyleSheet.create({
     position: "absolute",
     right: 18,
     bottom: 25,
-    backgroundColor: "#101017EE",
-    borderRadius: 25,
-    width: 50,
-    height: 50,
+    backgroundColor: "#101827EE",
+    borderRadius: 24,
+    width: 48,
+    height: 48,
     alignItems: "center",
     justifyContent: "center",
     shadowColor: COLORS.orange,
     shadowOpacity: 0.17,
     shadowRadius: 8,
     elevation: 3,
-    borderWidth: 2,
-    borderColor: COLORS.orange,
+    borderWidth: 1.5,
+    borderColor: "#FF9E3A",
   },
 
   // Compteur d'inscrits (pill visible) — moins flashy
@@ -1689,3 +2029,4 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 });
+

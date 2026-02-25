@@ -7,22 +7,20 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
-  Image,
   Linking,
-  Platform,
   RefreshControl,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
-import { getSupabase } from "../lib/supabase";
+import { AdminHero } from "../../components/admin/AdminHero";
+import { getSupabase } from "../../lib/supabase";
 import { useAdmin } from "../../contexts/AdminContext";
 
-const logoComets = require("../../assets/images/iconComets.png");
 
 // ===== Types & helpers =====
 type Cotisation = {
@@ -166,40 +164,11 @@ export default function CotisationAdminScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
       <StatusBar barStyle="light-content" />
-
-      {/* HERO (design MessagesScreen) */}
-      <View
-        style={[
-          styles.hero,
-          { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 14 : 26 },
-        ]}
-      >
-        <View style={styles.heroStripe} />
-
-        <View style={styles.heroRow}>
-          <TouchableOpacity
-            onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))}
-            style={styles.backBtn}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            activeOpacity={0.9}
-          >
-            <Icon name="chevron-back" size={24} color="#FF8200" />
-          </TouchableOpacity>
-
-          <Text style={styles.heroTitle}>Cotisations</Text>
-
-          <View style={{ width: 36 }} />
-        </View>
-
-        <View style={styles.heroProfileRow}>
-          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
-
-          <View style={{ flex: 1 }}>
-            <Text style={styles.heroName}>Finances du club</Text>
-            <Text style={styles.heroSub}>Paiements reçus • Filtre par catégorie</Text>
-          </View>
-        </View>
-      </View>
+      <AdminHero
+        title="Cotisations"
+        subtitle="Paiements recus - Filtre par categorie"
+        onBack={() => (router.canGoBack() ? router.back() : router.replace("/"))}
+      />
 
       {/* FILTRES */}
       <View style={{ paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 }}>
@@ -335,65 +304,6 @@ export default function CotisationAdminScreen() {
 }
 
 const styles = StyleSheet.create({
-  // HERO (comme MessagesScreen)
-  hero: {
-    backgroundColor: "#11131a",
-    borderBottomWidth: 1,
-    borderBottomColor: "#1f2230",
-    paddingBottom: 10,
-  },
-  heroStripe: {
-    position: "absolute",
-    right: -60,
-    top: -40,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: "rgba(255,130,0,0.10)",
-    transform: [{ rotate: "18deg" }],
-  },
-  heroRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    gap: 10,
-  },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1b1e27",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#2a2f3d",
-  },
-  heroTitle: {
-    flex: 1,
-    textAlign: "center",
-    color: "#FF8200",
-    fontSize: 20,
-    fontWeight: "800",
-    letterSpacing: 1.1,
-  },
-  heroProfileRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    gap: 12,
-  },
-  heroLogo: {
-    width: 56,
-    height: 56,
-    borderRadius: 14,
-    backgroundColor: "#fff",
-    borderWidth: 2,
-    borderColor: "#FF8200",
-  },
-  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
-  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
-
   // Filtres
   filtersRow: {
     flexDirection: "row",
@@ -477,3 +387,4 @@ const styles = StyleSheet.create({
     borderColor: "#FF8200",
   },
 });
+

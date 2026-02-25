@@ -3,7 +3,6 @@
 
 import React, { useEffect, useState, useMemo } from "react";
 import {
-  SafeAreaView,
   View,
   Text,
   FlatList,
@@ -14,6 +13,7 @@ import {
   Platform,
   StyleSheet,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 import { supabase } from "../../supabase";
 import { useAdmin } from "../../contexts/AdminContext";

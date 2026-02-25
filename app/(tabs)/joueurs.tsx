@@ -2,13 +2,12 @@
 "use client";
 
 import { useNavigation } from "@react-navigation/native";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { LinearGradient } from "expo-linear-gradient";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
-  Image,
   Linking,
   Platform,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
@@ -16,17 +15,17 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
+
 import LogoutButton from "../../components/LogoutButton";
 import { supabase } from "../../supabase";
 
-const logoComets = require("../../assets/images/iconComets.png");
-
 type YoungPlayer = {
-  id: string; // uuid en base
+  id: string;
   first_name: string;
   last_name: string;
-  date_naissance: string | null; // "YYYY-MM-DD" ou "DD/MM/YYYY"
+  date_naissance: string | null;
   categorie: "12U" | "15U" | null;
 };
 
@@ -38,29 +37,110 @@ type Player = {
   yob: number | null;
   player_link: string | null;
   team_abbr: string | null;
+  status: string | null;
+};
+
+type PlayerCardData = {
+  id: string;
+  first_name: string;
+  last_name: string;
+  year: number | string;
+  link: string;
+  number?: number;
+  team?: string;
 };
 
 const CATEGORIES = ["Senior", "15U", "12U"] as const;
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
-// ---- Helpers année depuis date_naissance (ISO ou FR) ----
-const getBirthYearFromDate = (val?: string | null): number | null => {
-  if (!val) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
-    return parseInt(val.slice(0, 4), 10);
-  }
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(val)) {
-    return parseInt(val.slice(6, 10), 10);
-  }
-  return null;
+const CATEGORY_META: Record<
+  (typeof CATEGORIES)[number],
+  { icon: string; tone: string; label: string }
+> = {
+  Senior: { icon: "baseball-outline", tone: "#FF8200", label: "Senior" },
+  "15U": { icon: "people-outline", tone: "#3B82F6", label: "15U" },
+  "12U": { icon: "sparkles-outline", tone: "#10B981", label: "12U" },
 };
+
+function getBirthYearFromDate(val?: string | null): number | null {
+  if (!val) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(val)) return parseInt(val.slice(0, 4), 10);
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(val)) return parseInt(val.slice(6, 10), 10);
+  return null;
+}
+
+function isActiveSenior(status?: string | null) {
+  return /\bactive\b/i.test(status ?? "");
+}
+
+const PlayerCard = React.memo(function PlayerCard({
+  first_name,
+  last_name,
+  year,
+  link,
+  number,
+  team,
+}: {
+  first_name: string;
+  last_name: string;
+  year: number | string;
+  link: string;
+  number?: number;
+  team?: string;
+}) {
+  return (
+    <View style={styles.card}>
+      <View style={styles.cardHeader}>
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>
+            {(first_name?.[0] || "").toUpperCase()}
+            {(last_name?.[0] || "").toUpperCase()}
+          </Text>
+        </View>
+
+        <View style={styles.infoCol}>
+          <Text style={styles.nameText} numberOfLines={1} ellipsizeMode="tail">
+            {first_name} {last_name}
+          </Text>
+
+          <View style={styles.metaRow}>
+            {typeof number === "number" ? (
+              <View style={[styles.metaPill, styles.metaPillNumber]}>
+                <Text style={[styles.metaTxt, styles.metaTxtNumber]}>#{number}</Text>
+              </View>
+            ) : null}
+
+            {team ? (
+              <View style={[styles.metaPill, styles.metaPillTeam]}>
+                <Text style={[styles.metaTxt, styles.metaTxtTeam]}>{team}</Text>
+              </View>
+            ) : null}
+
+            <View style={[styles.metaPill, styles.metaPillYear]}>
+              <Text style={[styles.metaTxt, styles.metaTxtYear]}>{year}</Text>
+            </View>
+          </View>
+        </View>
+      </View>
+
+      {!!link && (
+        <TouchableOpacity
+          onPress={() => Linking.openURL(link)}
+          style={styles.ffbsBtn}
+          activeOpacity={0.9}
+        >
+          <Text style={styles.ffbsBtnText}>Voir la fiche FFBS</Text>
+          <Icon name="open-outline" size={16} color="#E5E7EB" />
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+});
 
 export default function JoueursScreen() {
   const navigation = useNavigation();
 
-  // Seniors: toujours la table `players`
   const [players, setPlayers] = useState<Player[]>([]);
-  // Jeunes: maintenant via `young_players` (12U/15U)
   const [youngPlayers, setYoungPlayers] = useState<YoungPlayer[]>([]);
 
   const [loading, setLoading] = useState(true);
@@ -73,52 +153,56 @@ export default function JoueursScreen() {
 
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
-  const flatListRef = useRef<FlatList>(null);
+  const flatListRef = useRef<FlatList<PlayerCardData>>(null);
 
   useEffect(() => {
+    let mounted = true;
+
     const fetchAll = async () => {
       setLoading(true);
       setErrorMsg(null);
+
       try {
-        // Seniors
         const { data: playersData, error: errorPlayers } = await supabase
           .from("players")
-          .select("id, last_name, first_name, number, yob, player_link, team_abbr");
+          .select("id, last_name, first_name, number, yob, player_link, team_abbr, status");
 
-        if (errorPlayers) {
-          setErrorMsg("Erreur Supabase Players : " + errorPlayers.message);
-        } else {
-          setPlayers((playersData || []) as Player[]);
-        }
-
-        // Jeunes 12U/15U via young_players
         const { data: ypData, error: ypErr } = await supabase
           .from("young_players")
           .select("id, first_name, last_name, date_naissance, categorie")
           .in("categorie", ["12U", "15U"]);
 
+        if (!mounted) return;
+
+        if (errorPlayers) {
+          setErrorMsg(`Erreur Supabase players: ${errorPlayers.message}`);
+        } else {
+          setPlayers((playersData || []) as Player[]);
+        }
+
         if (ypErr) {
-          setErrorMsg((prev) =>
-            (prev ? prev + " · " : "") + "Erreur Supabase YoungPlayers : " + ypErr.message
-          );
+          setErrorMsg((prev) => `${prev ? `${prev} | ` : ""}Erreur Supabase jeunes: ${ypErr.message}`);
         } else {
           setYoungPlayers((ypData || []) as YoungPlayer[]);
         }
       } catch (e: any) {
-        setErrorMsg("Gros crash côté JS : " + (e?.message || e));
+        if (!mounted) return;
+        setErrorMsg(`Erreur cote application: ${e?.message || e}`);
       } finally {
-        setLoading(false);
+        if (mounted) setLoading(false);
       }
     };
 
     fetchAll();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
-  // Data de base selon l’onglet
-  const allData = useMemo(() => {
+  const allData = useMemo<PlayerCardData[]>(() => {
     if (selectedCat === "Senior") {
-      // Seniors → `players` inchangé
-      return [...players]
+      return [...players.filter((p) => isActiveSenior(p.status))]
         .sort(
           (a, b) =>
             a.last_name.localeCompare(b.last_name) ||
@@ -135,8 +219,7 @@ export default function JoueursScreen() {
         }));
     }
 
-    // 15U / 12U → utilise young_players
-    const list = youngPlayers
+    return youngPlayers
       .filter(
         (yp) =>
           (yp.categorie || "").toUpperCase() === selectedCat.toUpperCase()
@@ -157,19 +240,17 @@ export default function JoueursScreen() {
           first_name: yp.first_name || "",
           last_name: yp.last_name || "",
           year: year ?? "--",
-          link: "", // pas de fiche FFBS pour jeunes
-          number: undefined as number | undefined,
+          link: "",
+          number: undefined,
           team: "",
         };
       });
-
-    return list;
   }, [players, youngPlayers, selectedCat]);
 
-  // Filtre texte + alphabet
   const dataToShow = useMemo(() => {
     const q = query.trim().toUpperCase();
     let base = allData;
+
     if (q) {
       base = base.filter(
         (it) =>
@@ -177,6 +258,7 @@ export default function JoueursScreen() {
           (it.last_name || "").toUpperCase().includes(q)
       );
     }
+
     if (activeLetter) {
       base = base.filter(
         (it) =>
@@ -184,285 +266,254 @@ export default function JoueursScreen() {
           (it.first_name || "").toUpperCase().startsWith(activeLetter)
       );
     }
+
     return base;
   }, [allData, query, activeLetter]);
 
-  // Compteurs pour onglets
   const counts = useMemo(() => {
-    const senior = players.length;
+    const senior = players.filter((p) => isActiveSenior(p.status)).length;
     const u15 = youngPlayers.filter((yp) => (yp.categorie || "").toUpperCase() === "15U").length;
     const u12 = youngPlayers.filter((yp) => (yp.categorie || "").toUpperCase() === "12U").length;
+
     return { Senior: senior, "15U": u15, "12U": u12 } as Record<
       (typeof CATEGORIES)[number],
       number
     >;
   }, [players, youngPlayers]);
 
-  // UI
-  const CategoryTab = ({
-    cat,
-    icon,
-  }: {
-    cat: (typeof CATEGORIES)[number];
-    icon: string;
-  }) => {
-    const active = selectedCat === cat;
+  const totalPlayers = counts.Senior + counts["15U"] + counts["12U"];
+  const hasAnyData = totalPlayers > 0;
+
+  const onSelectCategory = useCallback((cat: (typeof CATEGORIES)[number]) => {
+    setSelectedCat(cat);
+    setActiveLetter(null);
+    setQuery("");
+    setShowFilter(false);
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, []);
+
+  const onClearFilters = useCallback(() => {
+    setActiveLetter(null);
+    setShowFilter(false);
+  }, []);
+
+  const renderItem = useCallback(({ item }: { item: PlayerCardData }) => {
     return (
-      <TouchableOpacity
-        onPress={() => {
-          setSelectedCat(cat);
-          setActiveLetter(null);
-          setQuery("");
-          setShowFilter(false);
-          flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-        }}
-        style={[styles.tabBtn, active && styles.tabBtnActive]}
-        activeOpacity={0.9}
-      >
-        <Text style={[styles.tabIcon, active && { color: "#fff" }]}>{icon}</Text>
-        <Text style={[styles.tabBtnText, active && styles.tabBtnTextActive]}>
-          {cat} · {counts[cat] ?? 0}
-        </Text>
-      </TouchableOpacity>
+      <PlayerCard
+        first_name={item.first_name}
+        last_name={item.last_name}
+        year={item.year}
+        link={item.link}
+        number={item.number}
+        team={item.team}
+      />
     );
-  };
+  }, []);
 
-  const Card = ({
-    first_name,
-    last_name,
-    year,
-    link,
-    number,
-    team,
-  }: {
-    first_name: string;
-    last_name: string;
-    year: number | string;
-    link: string;
-    number?: number;
-    team?: string;
-  }) => (
-    <View style={styles.card}>
-      <View style={styles.cardHeader}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>
-            {(first_name?.[0] || "").toUpperCase()}
-            {(last_name?.[0] || "").toUpperCase()}
-          </Text>
-        </View>
-        <View style={styles.infoCol}>
-          <Text style={styles.nameText} numberOfLines={1} ellipsizeMode="tail">
-            {first_name} {last_name}
-          </Text>
-          <View style={styles.metaRow}>
-            {typeof number === "number" ? (
-              <View style={[styles.metaPill, { backgroundColor: "#FFD7A1" }]}>
-                <Text style={[styles.metaTxt, { color: "#7C2D12" }]}>#{number}</Text>
-              </View>
-            ) : null}
-            {team ? (
-              <View style={[styles.metaPill, { backgroundColor: "#D1F3FF" }]}>
-                <Text style={[styles.metaTxt, { color: "#0C7499" }]}>{team}</Text>
-              </View>
-            ) : null}
-            <View style={[styles.metaPill, { backgroundColor: "#FFE66D" }]}>
-              <Text style={[styles.metaTxt, { color: "#8a6a08" }]}>{year}</Text>
-            </View>
-          </View>
-        </View>
-      </View>
+  const keyExtractor = useCallback((item: PlayerCardData) => item.id, []);
 
-      {!!link && (
-        <TouchableOpacity
-          onPress={() => Linking.openURL(link)}
-          style={styles.ffbsBtn}
-          activeOpacity={0.88}
-        >
-          <Text style={styles.ffbsBtnText}>Fiche FFBS</Text>
-          <Icon name="open-outline" size={17} color="#fff" style={{ marginLeft: 4 }} />
-        </TouchableOpacity>
-      )}
-    </View>
-  );
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.stateSafe}>
+        <StatusBar barStyle="light-content" />
+        <Text style={styles.stateLoadingText}>Chargement...</Text>
+      </SafeAreaView>
+    );
+  }
+
+  if (errorMsg && !hasAnyData) {
+    return (
+      <SafeAreaView style={styles.stateSafe}>
+        <StatusBar barStyle="light-content" />
+        <Text style={styles.stateErrorText}>{errorMsg}</Text>
+      </SafeAreaView>
+    );
+  }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
+    <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" />
 
-      {/* HÉRO */}
-      <View style={styles.hero}>
-        <View style={styles.heroStripe} />
-
-        <View style={styles.heroRow}>
-          <TouchableOpacity
-            onPress={() =>
-              // @ts-ignore
-              (navigation as any).canGoBack()
-                ? // @ts-ignore
-                  (navigation as any).goBack()
-                : // @ts-ignore
-                  (navigation as any).navigate("Home")
-            }
-            style={styles.backBtnHero}
-          >
-            <Icon name="chevron-back" size={26} color="#FF8200" />
-          </TouchableOpacity>
-          <Text style={styles.heroTitle}>Les Comets — Effectif</Text>
-          <LogoutButton />
-        </View>
-
-        <View style={styles.heroProfileRow}>
-          <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.heroName}>Joueurs 2025</Text>
-            <Text style={styles.heroSub}>Roster & jeunes catégories</Text>
-          </View>
-        </View>
-
-        {/* Onglets catégories */}
-        <View style={styles.tabs}>
-          <CategoryTab cat="Senior" icon="⚾️" />
-          <CategoryTab cat="15U" icon="🧢" />
-          <CategoryTab cat="12U" icon="⭐️" />
-        </View>
-
-        {/* Recherche */}
-        <View style={styles.searchWrap}>
-          <Icon name="search" size={18} color="#FF8200" />
-          <TextInput
-            value={query}
-            onChangeText={(t) => setQuery(t)}
-            placeholder="Rechercher un joueur…"
-            placeholderTextColor="#a6acb8"
-            style={styles.searchInput}
-            autoCorrect={false}
-            autoCapitalize="none"
-            returnKeyType="search"
+      <View style={styles.heroWrap}>
+        <LinearGradient
+          colors={["#17263D", "#101A2A", "#0B101A"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[
+            styles.heroGradient,
+            {
+              paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 8 : 10,
+            },
+          ]}
+        >
+          <LinearGradient
+            colors={["rgba(255,130,0,0.24)", "rgba(255,130,0,0)"]}
+            start={{ x: 1, y: 0 }}
+            end={{ x: 0, y: 1 }}
+            style={styles.heroShine}
           />
-          {!!query && (
-            <TouchableOpacity
-              onPress={() => setQuery("")}
-              style={styles.clearBtn}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            >
-              <Icon name="close" size={18} color="#a6acb8" />
-            </TouchableOpacity>
-          )}
-        </View>
 
-        {/* Filtrer (A-Z) — pliable */}
-        <View style={{ marginHorizontal: 14, marginTop: 8, marginBottom: 10 }}>
-          <TouchableOpacity
-            onPress={() => setShowFilter((s) => !s)}
-            activeOpacity={0.85}
-            style={styles.filterHeader}
-          >
-            <Text style={styles.filterTitle}>Filtrer</Text>
-            <Icon
-              name={showFilter ? "chevron-up" : "chevron-down"}
-              size={18}
-              color="#FF8200"
-            />
-          </TouchableOpacity>
+          <View style={styles.heroTopRow}>
+            <TouchableOpacity
+              onPress={() =>
+                // @ts-ignore
+                (navigation as any).canGoBack()
+                  ? // @ts-ignore
+                    (navigation as any).goBack()
+                  : // @ts-ignore
+                    (navigation as any).navigate("Home")
+              }
+              style={styles.backBtn}
+            >
+              <Icon name="chevron-back" size={22} color="#F3F4F6" />
+            </TouchableOpacity>
+
+            <View style={styles.heroTitleWrap}>
+              <Text style={styles.heroTitle}>Joueurs Comets</Text>
+              <Text style={styles.heroSub}>Saison {new Date().getFullYear()}</Text>
+            </View>
+
+            <LogoutButton />
+          </View>
+
+          <View style={styles.heroMetaCompactRow}>
+            <Text style={styles.heroMetaText}>{totalPlayers} joueurs references</Text>
+            <View style={styles.heroPill}>
+              <Icon name="people-outline" size={13} color="#FFDDBA" />
+              <Text style={styles.heroPillText}>{selectedCat}</Text>
+            </View>
+          </View>
+
+          <View style={styles.tabs}>
+            {CATEGORIES.map((cat) => {
+              const active = selectedCat === cat;
+              const meta = CATEGORY_META[cat];
+
+              return (
+                <TouchableOpacity
+                  key={cat}
+                  onPress={() => onSelectCategory(cat)}
+                  style={[styles.tabBtn, active && styles.tabBtnActive]}
+                  activeOpacity={0.9}
+                >
+                  <View style={[styles.tabIconWrap, active && styles.tabIconWrapActive]}>
+                    <Icon name={meta.icon as any} size={14} color={active ? "#111827" : meta.tone} />
+                  </View>
+                  <Text style={[styles.tabBtnText, active && styles.tabBtnTextActive]}>
+                    {meta.label} ({counts[cat] ?? 0})
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <View style={styles.searchRow}>
+            <View style={styles.searchWrap}>
+              <Icon name="search-outline" size={18} color="#AAB2C2" />
+              <TextInput
+                value={query}
+                onChangeText={setQuery}
+                placeholder="Rechercher un joueur"
+                placeholderTextColor="#9BA5B8"
+                style={styles.searchInput}
+                autoCorrect={false}
+                autoCapitalize="none"
+                returnKeyType="search"
+              />
+              {!!query && (
+                <TouchableOpacity onPress={() => setQuery("")} style={styles.clearBtn}>
+                  <Icon name="close" size={16} color="#AAB2C2" />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <TouchableOpacity
+              onPress={() => setShowFilter((v) => !v)}
+              activeOpacity={0.85}
+              style={[styles.filterChip, (showFilter || !!activeLetter) && styles.filterChipActive]}
+            >
+              <Icon
+                name="funnel-outline"
+                size={15}
+                color={(showFilter || !!activeLetter) ? "#111827" : "#FF9E3A"}
+              />
+              <Text
+                style={[
+                  styles.filterChipText,
+                  (showFilter || !!activeLetter) && styles.filterChipTextActive,
+                ]}
+              >
+                {activeLetter ? `Lettre ${activeLetter}` : "Filtre"}
+              </Text>
+            </TouchableOpacity>
+          </View>
 
           {showFilter && (
             <View style={styles.alphaRow}>
               <TouchableOpacity
                 style={[styles.alphaBtn, !activeLetter && styles.alphaBtnActive]}
-                onPress={() => {
-                  setActiveLetter(null);
-                  setShowFilter(false);
-                }}
-                activeOpacity={0.75}
+                onPress={onClearFilters}
+                activeOpacity={0.8}
               >
-                <Text
-                  style={[
-                    styles.alphaBtnText,
-                    !activeLetter && styles.alphaBtnTextActive,
-                  ]}
-                >
-                  TOUT
-                </Text>
+                <Text style={[styles.alphaBtnText, !activeLetter && styles.alphaBtnTextActive]}>TOUT</Text>
               </TouchableOpacity>
+
               {ALPHABET.map((letter) => (
                 <TouchableOpacity
                   key={letter}
-                  style={[
-                    styles.alphaBtn,
-                    activeLetter === letter && styles.alphaBtnActive,
-                  ]}
+                  style={[styles.alphaBtn, activeLetter === letter && styles.alphaBtnActive]}
                   onPress={() => {
                     setActiveLetter(letter);
                     setShowFilter(false);
                   }}
-                  activeOpacity={0.75}
+                  activeOpacity={0.8}
                 >
-                  <Text
-                    style={[
-                      styles.alphaBtnText,
-                      activeLetter === letter && styles.alphaBtnTextActive,
-                    ]}
-                  >
+                  <Text style={[styles.alphaBtnText, activeLetter === letter && styles.alphaBtnTextActive]}>
                     {letter}
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
           )}
-        </View>
+        </LinearGradient>
       </View>
 
-      {/* LISTE */}
       <View style={{ flex: 1 }}>
-        {loading ? (
-          <View style={styles.loaderBox}>
-            <Text style={styles.loaderTxt}>Chargement…</Text>
-          </View>
-        ) : errorMsg ? (
-          <View style={styles.loaderBox}>
-            <Text style={styles.errorTxt}>{errorMsg}</Text>
-          </View>
-        ) : (
-          <>
-            <FlatList
-              ref={flatListRef}
-              data={dataToShow}
-              keyExtractor={(item) => String(item.id)}
-              contentContainerStyle={{ padding: 14, paddingBottom: 36 }}
-              ListEmptyComponent={
-                <Text style={styles.emptyTxt}>
-                  Aucun joueur à afficher dans cette catégorie.
-                </Text>
-              }
-              renderItem={({ item }) => (
-                <Card
-                  first_name={item.first_name}
-                  last_name={item.last_name}
-                  year={item.year}
-                  link={item.link}
-                  number={item.number}
-                  team={item.team}
-                />
-              )}
-              onScroll={(e) => {
-                const y = e.nativeEvent.contentOffset.y;
-                setShowScrollTop(y > 240);
-              }}
-              scrollEventThrottle={16}
-            />
+        <FlatList
+          ref={flatListRef}
+          data={dataToShow}
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.listContent}
+          ListHeaderComponent={
+            errorMsg ? (
+              <View style={styles.warningCard}>
+                <Icon name="alert-circle-outline" size={16} color="#F59E0B" />
+                <Text style={styles.warningText}>{errorMsg}</Text>
+              </View>
+            ) : null
+          }
+          ListEmptyComponent={
+            <Text style={styles.emptyTxt}>Aucun joueur a afficher dans cette categorie.</Text>
+          }
+          onScroll={(e) => setShowScrollTop(e.nativeEvent.contentOffset.y > 240)}
+          scrollEventThrottle={16}
+          initialNumToRender={12}
+          maxToRenderPerBatch={12}
+          windowSize={7}
+          updateCellsBatchingPeriod={30}
+          removeClippedSubviews={Platform.OS === "android"}
+        />
 
-            {showScrollTop && (
-              <TouchableOpacity
-                style={styles.scrollTopBtn}
-                onPress={() =>
-                  flatListRef.current?.scrollToOffset({ offset: 0, animated: true })
-                }
-                activeOpacity={0.75}
-              >
-                <Icon name="chevron-up" size={30} color="#FF8200" />
-              </TouchableOpacity>
-            )}
-          </>
+        {showScrollTop && (
+          <TouchableOpacity
+            style={styles.scrollTopBtn}
+            onPress={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: true })}
+            activeOpacity={0.85}
+          >
+            <Icon name="chevron-up" size={28} color="#FF9E3A" />
+          </TouchableOpacity>
         )}
       </View>
     </SafeAreaView>
@@ -470,249 +521,379 @@ export default function JoueursScreen() {
 }
 
 const styles = StyleSheet.create({
-  // HÉRO
-  hero: {
-    backgroundColor: "#11131a",
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#1f2230",
-    paddingTop:
-      Platform.OS === "android"
-        ? (StatusBar.currentHeight || 0) + 12
-        : 22,
+  safe: {
+    flex: 1,
+    backgroundColor: "#0B0F17",
   },
-  heroStripe: {
-    position: "absolute",
-    right: -60,
-    top: -40,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: "rgba(255,130,0,0.10)",
-    transform: [{ rotate: "18deg" }],
-  },
-  heroRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingTop: 4,
-    gap: 10,
-  },
-  backBtnHero: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1b1e27",
+  stateSafe: {
+    flex: 1,
+    backgroundColor: "#0B0F17",
     alignItems: "center",
     justifyContent: "center",
+  },
+  stateLoadingText: {
+    color: "#FF8200",
+    fontWeight: "800",
+    fontSize: 18,
+  },
+  stateErrorText: {
+    color: "#F87171",
+    textAlign: "center",
+    paddingHorizontal: 20,
+    lineHeight: 20,
+  },
+
+  heroWrap: {
+    marginHorizontal: 10,
+    marginTop: 8,
+    borderRadius: 18,
+    overflow: "hidden",
     borderWidth: 1,
-    borderColor: "#2a2f3d",
+    borderColor: "rgba(255,130,0,0.22)",
+    backgroundColor: "#0E1524",
+  },
+  heroGradient: {
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+  },
+  heroShine: {
+    ...StyleSheet.absoluteFillObject,
+    top: 0,
+    bottom: "58%",
+  },
+  heroTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  backBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.24)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heroTitleWrap: {
+    flex: 1,
   },
   heroTitle: {
-    flex: 1,
-    textAlign: "center",
-    color: "#FF8200",
-    fontSize: 20,
+    color: "#FFFFFF",
+    fontSize: 19,
+    lineHeight: 22,
     fontWeight: "800",
-    letterSpacing: 1.1,
   },
-  heroProfileRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    gap: 12,
+  heroSub: {
+    marginTop: 1,
+    color: "#BEC8DB",
+    fontSize: 12,
   },
-  heroLogo: {
-    width: 56,
-    height: 56,
-    borderRadius: 14,
-    backgroundColor: "#fff",
-    borderWidth: 2,
-    borderColor: "#FF8200",
-  },
-  heroName: { color: "#fff", fontSize: 18, fontWeight: "900" },
-  heroSub: { color: "#c7cad1", fontSize: 12.5, marginTop: 2 },
-
-  // Onglets catégories
-  tabs: {
-    flexDirection: "row",
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    gap: 8,
-  },
-  tabBtn: {
-    flex: 1,
-    backgroundColor: "#141821",
-    borderWidth: 1,
-    borderColor: "#252a38",
-    paddingVertical: 9,
-    borderRadius: 12,
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "center",
-    gap: 6,
-  },
-  tabIcon: { color: "#FF8200", fontSize: 14 },
-  tabBtnText: {
-    color: "#FF8200",
-    fontWeight: "900",
-    fontSize: 13.5,
-    letterSpacing: 0.3,
-  },
-  tabBtnActive: { backgroundColor: "#FF8200", borderColor: "#FF8200" },
-  tabBtnTextActive: { color: "#fff" },
-
-  // Recherche
-  searchWrap: {
-    marginTop: 10,
-    marginHorizontal: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: "#141821",
-    borderWidth: 1,
-    borderColor: "#252a38",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  searchInput: {
-    flex: 1,
-    color: "#fff",
-    fontWeight: "700",
-    fontSize: 14.5,
-  },
-  clearBtn: {
-    padding: 2,
-    borderRadius: 12,
-    backgroundColor: "transparent",
-  },
-
-  // Filtrer (header)
-  filterHeader: {
+  heroMetaCompactRow: {
+    marginTop: 6,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "#141821",
-    borderWidth: 1,
-    borderColor: "#252a38",
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    gap: 8,
   },
-  filterTitle: {
-    color: "#FF8200",
-    fontWeight: "900",
-    fontSize: 16,
-    letterSpacing: 0.5,
+  heroMetaText: {
+    flexShrink: 1,
+    color: "#CBD2DF",
+    fontSize: 12,
+  },
+  heroPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.24)",
+    backgroundColor: "rgba(0,0,0,0.28)",
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  heroPillText: {
+    color: "#FFDDBA",
+    fontWeight: "700",
+    fontSize: 11,
   },
 
-  // Alphabet
+  tabs: {
+    flexDirection: "row",
+    marginTop: 8,
+    gap: 6,
+  },
+  tabBtn: {
+    flex: 1,
+    minHeight: 36,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    backgroundColor: "rgba(0,0,0,0.3)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    paddingHorizontal: 6,
+  },
+  tabBtnActive: {
+    backgroundColor: "#FF8200",
+    borderColor: "#FFB366",
+  },
+  tabIconWrap: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "rgba(255,130,0,0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabIconWrapActive: {
+    backgroundColor: "rgba(255,255,255,0.62)",
+  },
+  tabBtnText: {
+    color: "#E5E7EB",
+    fontWeight: "700",
+    fontSize: 11.5,
+  },
+  tabBtnTextActive: {
+    color: "#111827",
+    fontWeight: "800",
+  },
+
+  searchRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  searchWrap: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "rgba(0,0,0,0.3)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  searchInput: {
+    flex: 1,
+    color: "#F3F4F6",
+    fontSize: 13.5,
+    fontWeight: "600",
+  },
+  clearBtn: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+
+  filterChip: {
+    height: 36,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(0,0,0,0.26)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+  },
+  filterChipActive: {
+    backgroundColor: "#FF9E3A",
+    borderColor: "#FFBD80",
+  },
+  filterChipText: {
+    color: "#FF9E3A",
+    fontWeight: "700",
+    fontSize: 12,
+  },
+  filterChipTextActive: {
+    color: "#111827",
+  },
   alphaRow: {
+    marginTop: 7,
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "center",
-    alignItems: "center",
-    gap: 4,
-    paddingTop: 10,
+    gap: 5,
   },
   alphaBtn: {
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: "#fff6ee",
-    borderWidth: 1.3,
-    borderColor: "#FF8200",
     minWidth: 28,
-    alignItems: "center",
-    marginBottom: 4,
-  },
-  alphaBtnActive: { backgroundColor: "#FF8200" },
-  alphaBtnText: { color: "#FF8200", fontWeight: "900", fontSize: 13.5 },
-  alphaBtnTextActive: { color: "#fff" },
-
-  // Liste & états
-  loaderBox: { flex: 1, alignItems: "center", justifyContent: "center" },
-  loaderTxt: { color: "#FF8200", fontWeight: "bold", fontSize: 18 },
-  errorTxt: { color: "tomato", fontSize: 15, textAlign: "center", paddingHorizontal: 20 },
-  emptyTxt: { color: "#9aa0ae", fontSize: 15, textAlign: "center", marginTop: 40 },
-
-  // Cartes
-  card: {
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderRadius: 18,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: "#000",
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    elevation: 3,
+    height: 28,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: "rgba(255,130,0,0.22)",
-  },
-  cardHeader: { flexDirection: "row", alignItems: "center" },
-  avatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    borderColor: "rgba(255,255,255,0.25)",
+    backgroundColor: "rgba(0,0,0,0.3)",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#18181C",
-    borderWidth: 2,
-    borderColor: "#FF8200",
-    marginRight: 12,
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.18,
-    shadowRadius: 8,
+    paddingHorizontal: 8,
+  },
+  alphaBtnActive: {
+    backgroundColor: "#FF8200",
+    borderColor: "#FFB366",
+  },
+  alphaBtnText: {
+    color: "#E5E7EB",
+    fontWeight: "700",
+    fontSize: 11.5,
+  },
+  alphaBtnTextActive: {
+    color: "#111827",
+    fontWeight: "800",
+  },
+
+  listContent: {
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 40,
+  },
+  warningCard: {
+    marginBottom: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(245,158,11,0.45)",
+    backgroundColor: "rgba(245,158,11,0.12)",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  warningText: {
+    flex: 1,
+    color: "#FDE68A",
+    fontSize: 12.5,
+    lineHeight: 18,
+  },
+  emptyTxt: {
+    color: "#AAB2C2",
+    fontSize: 15,
+    textAlign: "center",
+    marginTop: 34,
+  },
+
+  card: {
+    backgroundColor: "#111827",
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.2)",
+    shadowColor: "#000",
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
     elevation: 3,
   },
-  avatarText: { color: "#FF8200", fontWeight: "900", fontSize: 22, letterSpacing: 1 },
-  infoCol: { flex: 1, minWidth: 0 },
-  nameText: {
-    color: "#fff",
-    fontSize: 16.5,
-    fontWeight: "900",
-    letterSpacing: 0.3,
+  cardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
   },
-  metaRow: { flexDirection: "row", gap: 6, marginTop: 6, flexWrap: "wrap" },
-  metaPill: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
-  metaTxt: { fontWeight: "800", fontSize: 12 },
-
-  // Bouton FFBS
+  avatar: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0D1523",
+    borderWidth: 2,
+    borderColor: "#FF9E3A",
+    marginRight: 12,
+  },
+  avatarText: {
+    color: "#FFE4C6",
+    fontWeight: "900",
+    fontSize: 20,
+    letterSpacing: 0.8,
+  },
+  infoCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  nameText: {
+    color: "#F3F4F6",
+    fontSize: 16,
+    fontWeight: "900",
+    letterSpacing: 0.2,
+  },
+  metaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 6,
+  },
+  metaPill: {
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  metaPillNumber: {
+    backgroundColor: "rgba(255,130,0,0.24)",
+    borderColor: "rgba(255,195,130,0.65)",
+  },
+  metaPillTeam: {
+    backgroundColor: "rgba(59,130,246,0.22)",
+    borderColor: "rgba(147,197,253,0.6)",
+  },
+  metaPillYear: {
+    backgroundColor: "rgba(16,185,129,0.22)",
+    borderColor: "rgba(110,231,183,0.65)",
+  },
+  metaTxt: {
+    fontWeight: "800",
+    fontSize: 11.5,
+  },
+  metaTxtNumber: {
+    color: "#FFE2C2",
+  },
+  metaTxtTeam: {
+    color: "#DBEAFE",
+  },
+  metaTxtYear: {
+    color: "#D1FAE5",
+  },
   ffbsBtn: {
-    marginTop: 12,
+    marginTop: 11,
     alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FF8200",
-    borderRadius: 10,
-    paddingHorizontal: 14,
+    gap: 6,
+    paddingHorizontal: 12,
     paddingVertical: 8,
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.12,
-    shadowRadius: 5,
-    elevation: 2,
-    maxWidth: "100%",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.25)",
+    backgroundColor: "rgba(0,0,0,0.3)",
   },
-  ffbsBtnText: { color: "#fff", fontWeight: "900", fontSize: 13.5, flexShrink: 1 },
+  ffbsBtnText: {
+    color: "#E5E7EB",
+    fontWeight: "800",
+    fontSize: 12.5,
+  },
 
-  // Scroll-to-top
   scrollTopBtn: {
     position: "absolute",
     right: 18,
     bottom: 25,
-    backgroundColor: "#101017EE",
-    borderRadius: 25,
-    width: 50,
-    height: 50,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.17,
+    borderWidth: 1.5,
+    borderColor: "#FF9E3A",
+    backgroundColor: "#101827EE",
+    shadowColor: "#FF9E3A",
+    shadowOpacity: 0.16,
     shadowRadius: 8,
     elevation: 3,
-    borderWidth: 2,
-    borderColor: "#FF8200",
   },
 });

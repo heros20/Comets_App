@@ -5,21 +5,19 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   FlatList,
-  Platform,
   RefreshControl,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
-  Image,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
+import { AdminHero } from "../../components/admin/AdminHero";
 import { useNavigation } from "@react-navigation/native";
 import { useAdmin } from "../../contexts/AdminContext";
 
-const logoComets = require("../../assets/images/iconComets.png");
 
 // ================== API utils ==================
 const PRIMARY_API =
@@ -210,48 +208,20 @@ export default function MatchsAdminScreen() {
 
   const toggle = (mid: string) =>
     setExpanded((m) => ({ ...m, [mid]: !m[mid] }));
-
   const Header = () => (
-    <View
-      style={[
-        styles.hero,
-        { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 12 : 22 },
-      ]}
+    <AdminHero
+      title="Matchs participations"
+      subtitle="Suivi des inscrits par categorie"
+      onBack={() =>
+        // @ts-ignore
+        (navigation as any).canGoBack()
+          ? // @ts-ignore
+            (navigation as any).goBack()
+          : // @ts-ignore
+            (navigation as any).navigate("AdminMenuScreen")
+      }
     >
-      <View style={styles.heroStripe} />
-      <View style={styles.heroRow}>
-        <TouchableOpacity
-          onPress={() =>
-            // @ts-ignore
-            (navigation as any).canGoBack()
-              ? // @ts-ignore
-                (navigation as any).goBack()
-              : // @ts-ignore
-                (navigation as any).navigate("AdminMenuScreen")
-          }
-          style={styles.backBtnHero}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          activeOpacity={0.9}
-        >
-          <Icon name="chevron-back" size={26} color="#FF8200" />
-        </TouchableOpacity>
-        <Text style={styles.heroTitle}>Matchs — Participations</Text>
-        <View style={{ width: 36 }} />
-      </View>
-
-      <View style={styles.heroProfileRow}>
-        <View style={styles.heroAvatar}>
-          <Icon name="calendar-outline" size={26} color="#FF8200" />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.heroName}>Suivi des inscrits</Text>
-          <Text style={styles.heroEmail}>Liste des joueurs par match</Text>
-        </View>
-        <Image source={logoComets} style={styles.heroLogo} resizeMode="contain" />
-      </View>
-
-      {/* sous-onglets catégories */}
-      <View style={{ flexDirection: "row", gap: 8, paddingHorizontal: 12, paddingTop: 10, flexWrap: "wrap" }}>
+      <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
         {(["Seniors", "15U", "12U"] as const).map((f) => {
           const counts = categoryCounts[f];
           const active = catFilter === f;
@@ -279,7 +249,7 @@ export default function MatchsAdminScreen() {
           );
         })}
       </View>
-    </View>
+    </AdminHero>
   );
 
   const ItemCard = ({ it }: { it: AdminMatchItem }) => {
@@ -413,79 +383,6 @@ export default function MatchsAdminScreen() {
 }
 
 const styles = StyleSheet.create({
-  // HERO
-  hero: {
-    backgroundColor: "#11131a",
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: "#1f2230",
-  },
-  heroStripe: {
-    position: "absolute",
-    right: -60,
-    top: -40,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: "rgba(255,130,0,0.10)",
-    transform: [{ rotate: "18deg" }],
-  },
-  heroRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingTop: Platform.OS === "ios" ? 10 : 6,
-  },
-  backBtnHero: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1b1e27",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#2a2f3d",
-  },
-  heroTitle: {
-    flex: 1,
-    textAlign: "center",
-    color: "#FF8200",
-    fontSize: 20,
-    fontWeight: "800",
-    letterSpacing: 1.1,
-  },
-  heroProfileRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    gap: 14,
-  },
-  heroAvatar: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
-    backgroundColor: "#18181C",
-    borderWidth: 3,
-    borderColor: "#FF8200",
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: "#FF8200",
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  heroName: { color: "#fff", fontSize: 18, fontWeight: "800", marginBottom: 2 },
-  heroEmail: { color: "#c7cad1", fontSize: 13 },
-
-  heroLogo: {
-    width: 56,
-    height: 56,
-    borderRadius: 14,
-    backgroundColor: "#fff",
-    borderWidth: 2,
-    borderColor: "#FF8200",
-  },
 
   // LIST
   loaderBox: { flex: 1, alignItems: "center", justifyContent: "center" },
@@ -615,3 +512,4 @@ const styles = StyleSheet.create({
 
   noteTxt: { color: "#FF8200", fontWeight: "bold", fontSize: 12.5, marginTop: 6 },
 });
+
