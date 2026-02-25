@@ -64,6 +64,7 @@ const BG_Y_OFFSET_PREVIEW = -60;
 const ENABLE_COLLECTIBLES = true;
 const ENABLE_SHIELD = true;
 const ENABLE_DOUBLEJUMP = true;
+const ENABLE_PLATFORMS = true;
 const ENABLE_HAPTICS_DEFAULT = true;
 
 // Gameplay
@@ -88,6 +89,15 @@ const OBSTACLE_MAX_GAP_BASE = 820;
 const OBSTACLE_MIN_W = 26;
 const OBSTACLE_MAX_W = 50;
 const OBSTACLE_BASE_H = 58;
+const OBSTACLE_PATTERN_MIN_SCORE = 1800;
+
+const PLATFORM_H = 16;
+const PLATFORM_MIN_W = 150;
+const PLATFORM_MAX_W = 230;
+const PLATFORM_MAX_OFFSCREEN = 40;
+const PLATFORM_PATTERN_COOLDOWN_MIN = 720;
+const PLATFORM_PATTERN_COOLDOWN_MAX = 1120;
+const PLATFORM_GATE_COIN_COUNT = 7;
 
 const COYOTE_TIME = 0.14;
 const JUMP_BUFFER = 0.14;
@@ -108,6 +118,7 @@ const KEY_SETTINGS = "COMETS_RUNNER_SETTINGS";
 const KEY_ACH = "COMETS_RUNNER_ACHIEVEMENTS";
 const KEY_COMETS_PROGRESS = "COMETS_RUNNER_COMETS_PROGRESS"; // persistance C-O-M-E-T-S
 const KEY_PAUSE_SNAPSHOT = "COMETS_RUNNER_PAUSE_SNAPSHOT";
+const KEY_DAILY_MISSIONS = "COMETS_RUNNER_DAILY_MISSIONS";
 
 
 const DOUBLEJUMP_DURATION = 10_000;
@@ -168,21 +179,90 @@ const mapSystemeSolaireBG = require("../../assets/game/maps/systeme_solaire.png"
 // Types
 type Obstacle = { id: number; x: number; w: number; h: number; y: number; variant: 0 | 1 };
 type Collectible = { id: number; x: number; y: number; r: number };
+type PlatformBlock = { id: number; x: number; y: number; w: number; h: number };
 type PowerUpKind = "shield" | "doublejump" | "x2" | "letter";
 type PowerUp = { id: number; x: number; y: number; r: number; kind: PowerUpKind; letter?: CometsLetter };
 type GameState = "ready" | "running" | "paused" | "gameover";
 type Settings = { mute: boolean; haptics: boolean; highContrast: boolean; };
+type SpawnPattern = "platform_gate" | "double_trouble" | "risk_lane";
 
 type LBRow = {
   admin_id: string;
   best_score: number;
   admins?: { first_name: string | null; last_name: string | null } | null;
 };
+type LBAdminJoin = { first_name: string | null; last_name: string | null };
+type LBWeeklyRunRow = { admin_id: string | null; score: number | null; created_at: string | null };
+type LBProfileJoinRow = { admin_id: string; admins: LBAdminJoin | LBAdminJoin[] | null };
+
+type DailyMissionId = "runs" | "coins" | "score";
+type DailyMissionState = {
+  dateKey: string;
+  runs: number;
+  coins: number;
+  bestScore: number;
+};
+
+const DAILY_MISSIONS: readonly {
+  id: DailyMissionId;
+  label: string;
+  target: number;
+  tint: string;
+}[] = [
+  { id: "runs", label: "3 parties", target: 3, tint: "#60A5FA" },
+  { id: "coins", label: "40 pieces", target: 40, tint: "#F59E0B" },
+  { id: "score", label: "Score 2500", target: 2500, tint: "#A78BFA" },
+];
 
 // Helpers
 const randf = (min: number, max: number) => Math.random() * (max - min) + min;
 const randi = (min: number, max: number) => Math.floor(randf(min, max));
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
+
+function getDailyMissionDateKey(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function createDailyMissionState(dateKey = getDailyMissionDateKey()): DailyMissionState {
+  return { dateKey, runs: 0, coins: 0, bestScore: 0 };
+}
+
+function normalizeDailyMissionState(raw: unknown, todayKey = getDailyMissionDateKey()): DailyMissionState {
+  if (!raw || typeof raw !== "object") return createDailyMissionState(todayKey);
+
+  const data = raw as Partial<DailyMissionState>;
+  if (typeof data.dateKey !== "string" || data.dateKey !== todayKey) {
+    return createDailyMissionState(todayKey);
+  }
+
+  const runs = Number.isFinite(Number(data.runs)) ? Math.max(0, Math.floor(Number(data.runs))) : 0;
+  const coins = Number.isFinite(Number(data.coins)) ? Math.max(0, Math.floor(Number(data.coins))) : 0;
+  const bestScore =
+    Number.isFinite(Number(data.bestScore)) ? Math.max(0, Math.floor(Number(data.bestScore))) : 0;
+
+  return { dateKey: todayKey, runs, coins, bestScore };
+}
+
+function getDailyMissionValue(state: DailyMissionState, missionId: DailyMissionId) {
+  switch (missionId) {
+    case "runs":
+      return state.runs;
+    case "coins":
+      return state.coins;
+    case "score":
+      return state.bestScore;
+  }
+}
+
+function getDailyMissionDoneCount(state: DailyMissionState) {
+  return DAILY_MISSIONS.reduce(
+    (acc, mission) => (getDailyMissionValue(state, mission.id) >= mission.target ? acc + 1 : acc),
+    0,
+  );
+}
 
 function circleRectCollide(
   cx: number,
@@ -288,10 +368,12 @@ type PauseSnapshot = {
     mapA: MapName;
     mapB: MapName;
     obstacles: Obstacle[];
+    platforms: PlatformBlock[];
     collectibles: Collectible[];
     powerUps: PowerUp[];
     lastId: number;
     spawnedLetterIdx: number[];
+    patternCooldownDist: number;
   };
 };
 
@@ -445,6 +527,9 @@ export default function CometsRunnerScreen() {
   const [best, setBest] = useState(0);
   const [showHelp, setShowHelp] = useState(false);
   const [pendingSnapshot, setPendingSnapshot] = useState<PauseSnapshot | null>(null);
+  const [dailyMissions, setDailyMissions] = useState<DailyMissionState>(() => createDailyMissionState());
+  const dailyMissionsRef = useRef<DailyMissionState>(createDailyMissionState());
+  const runCoinsCollectedRef = useRef(0);
 
   // 🎉 Ultra visuel 20k — overlay éphémère (déclenché plus tard)
   const [bigEventUntil, setBigEventUntil] = useState<number>(0);
@@ -514,6 +599,49 @@ export default function CometsRunnerScreen() {
       }
     }
   }, [showToast]);
+
+  const persistDailyMissions = useCallback((next: DailyMissionState) => {
+    dailyMissionsRef.current = next;
+    setDailyMissions(next);
+    AsyncStorage.setItem(KEY_DAILY_MISSIONS, JSON.stringify(next)).catch(() => {});
+  }, []);
+
+  const loadDailyMissions = useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem(KEY_DAILY_MISSIONS);
+      const parsed = raw ? JSON.parse(raw) : null;
+      const normalized = normalizeDailyMissionState(parsed);
+      persistDailyMissions(normalized);
+    } catch {
+      const fallback = createDailyMissionState();
+      persistDailyMissions(fallback);
+    }
+  }, [persistDailyMissions]);
+
+  const applyRunToDailyMissions = useCallback(
+    (finalScore: number) => {
+      const prev = normalizeDailyMissionState(dailyMissionsRef.current);
+      const next: DailyMissionState = {
+        dateKey: prev.dateKey,
+        runs: prev.runs + 1,
+        coins: prev.coins + Math.max(0, Math.floor(runCoinsCollectedRef.current)),
+        bestScore: Math.max(prev.bestScore, Math.max(0, Math.floor(finalScore))),
+      };
+
+      runCoinsCollectedRef.current = 0;
+      persistDailyMissions(next);
+
+      const unlocked = DAILY_MISSIONS.filter(
+        (mission) =>
+          getDailyMissionValue(prev, mission.id) < mission.target &&
+          getDailyMissionValue(next, mission.id) >= mission.target,
+      );
+      if (unlocked.length > 0) {
+        showToast(`Mission: ${unlocked[0].label}`);
+      }
+    },
+    [persistDailyMissions, showToast],
+  );
 
   // Buffs
   const [hasShield, setHasShield] = useState(false);
@@ -615,8 +743,10 @@ export default function CometsRunnerScreen() {
   const speedRef = useRef(START_SPEED);
   const targetSpeedRef = useRef(START_SPEED);
   const obstaclesRef = useRef<Obstacle[]>([]);
+  const platformsRef = useRef<PlatformBlock[]>([]);
   const collectiblesRef = useRef<Collectible[]>([]);
   const powerUpsRef = useRef<PowerUp[]>([]);
+  const patternCooldownDistRef = useRef(0);
   const lastIdRef = useRef(1);
 
   // Popups points (+xxx)
@@ -694,17 +824,84 @@ export default function CometsRunnerScreen() {
   const [top5, setTop5] = useState<LBRow[] | null>(null);
   const loadTop5 = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("game_profiles")
-        .select("admin_id,best_score,admins(first_name,last_name)")
-        .order("best_score", { ascending: false })
-        .limit(5);
-      if (error) {
-        console.log("loadTop5 error:", error.message);
+      const since = new Date();
+      since.setDate(since.getDate() - 7);
+
+      const { data: runs, error: runsError } = await supabase
+        .from("game_runs")
+        .select("admin_id,score,created_at")
+        .gte("created_at", since.toISOString())
+        .order("created_at", { ascending: false })
+        .limit(3000);
+      if (runsError) {
+        console.log("loadTop5 weekly runs error:", runsError.message);
         setTop5([]);
         return;
       }
-      setTop5((data as any as LBRow[]) ?? []);
+
+      const toTs = (input: string | null) => {
+        const t = input ? Date.parse(input) : 0;
+        return Number.isFinite(t) ? t : 0;
+      };
+
+      const byAdmin = new Map<
+        string,
+        { admin_id: string; best_score: number; last_run_at: string | null; admins: LBAdminJoin | null }
+      >();
+
+      for (const run of (runs ?? []) as LBWeeklyRunRow[]) {
+        const adminKey = String(run.admin_id ?? "").trim();
+        if (!adminKey) continue;
+
+        const score = Math.max(0, Math.floor(Number(run.score ?? 0)));
+        const createdAt = typeof run.created_at === "string" ? run.created_at : null;
+        const existing = byAdmin.get(adminKey);
+        if (!existing) {
+          byAdmin.set(adminKey, {
+            admin_id: adminKey,
+            best_score: score,
+            last_run_at: createdAt,
+            admins: null,
+          });
+          continue;
+        }
+
+        existing.best_score = Math.max(existing.best_score, score);
+        if (toTs(createdAt) > toTs(existing.last_run_at)) {
+          existing.last_run_at = createdAt;
+        }
+      }
+
+      const adminIds = Array.from(byAdmin.keys());
+      if (adminIds.length > 0) {
+        const { data: profiles, error: profilesError } = await supabase
+          .from("game_profiles")
+          .select("admin_id,admins(first_name,last_name)")
+          .in("admin_id", adminIds);
+        if (profilesError) {
+          console.log("loadTop5 weekly profiles error:", profilesError.message);
+        } else {
+          for (const profile of (profiles ?? []) as LBProfileJoinRow[]) {
+            const target = byAdmin.get(profile.admin_id);
+            if (!target) continue;
+            target.admins = Array.isArray(profile.admins) ? (profile.admins[0] ?? null) : (profile.admins ?? null);
+          }
+        }
+      }
+
+      const weeklyTop5: LBRow[] = Array.from(byAdmin.values())
+        .sort((a, b) => {
+          if (b.best_score !== a.best_score) return b.best_score - a.best_score;
+          return toTs(b.last_run_at) - toTs(a.last_run_at);
+        })
+        .slice(0, 5)
+        .map((row) => ({
+          admin_id: row.admin_id,
+          best_score: row.best_score,
+          admins: row.admins,
+        }));
+
+      setTop5(weeklyTop5);
     } catch (e) {
       console.log("loadTop5 catch:", (e as any)?.message);
       setTop5([]);
@@ -899,10 +1096,12 @@ useEffect(() => {
         mapA: mapARef.current,
         mapB: mapBRef.current,
         obstacles: obstaclesRef.current.map((o) => ({ ...o })),
+        platforms: platformsRef.current.map((p) => ({ ...p })),
         collectibles: collectiblesRef.current.map((c) => ({ ...c })),
         powerUps: powerUpsRef.current.map((p) => ({ ...p })),
         lastId: lastIdRef.current,
         spawnedLetterIdx: Array.from(spawnedLetterIdxThisRunRef.current),
+        patternCooldownDist: patternCooldownDistRef.current,
       },
     };
   }, []);
@@ -955,11 +1154,12 @@ useEffect(() => {
       try { const rawS = await AsyncStorage.getItem(KEY_SETTINGS); if (rawS) setSettings(s => ({ ...s, ...JSON.parse(rawS) })); } catch {}
       try { const rawA = await AsyncStorage.getItem(KEY_ACH); if (rawA) setAchievements(prev => ({ ...prev, ...JSON.parse(rawA) })); } catch {}
       try { const raw = await AsyncStorage.getItem(KEY_BEST); if (raw) setBest(parseInt(raw, 10) || 0); } catch {}
+      await loadDailyMissions();
       // précharge le pool coin pour éliminer le "vide" initial
       try { await ensureCoinPool(); } catch {}
       // progression COMETS chargée ailleurs
     })();
-  }, [ensureCoinPool]);
+  }, [ensureCoinPool, loadDailyMissions]);
 
   useEffect(() => {
     (async () => {
@@ -985,7 +1185,10 @@ useEffect(() => {
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", async (state) => {
-      if (state === "active") return;
+      if (state === "active") {
+        await loadDailyMissions();
+        return;
+      }
       if (gameStateRef.current !== "running") return;
 
       setGameState("paused");
@@ -995,7 +1198,7 @@ useEffect(() => {
       await savePauseSnapshot(buildPauseSnapshot(now));
     });
     return () => sub.remove();
-  }, [buildPauseSnapshot, setPlayingStatusBar]);
+  }, [buildPauseSnapshot, loadDailyMissions, setPlayingStatusBar]);
 
 
   // === alignement si sol change
@@ -1010,6 +1213,10 @@ useEffect(() => {
 
     // obstacles
     obstaclesRef.current = obstaclesRef.current.map(o => ({ ...o, y: GROUND_Y - o.h }));
+    platformsRef.current = platformsRef.current.map((p) => ({
+      ...p,
+      y: clamp(p.y + dy, 20, GROUND_Y - p.h - 40),
+    }));
 
     // collectibles / power-ups
     const clampCenter = (y: number, r: number) => Math.max(r + 8, Math.min(y, GROUND_Y - r - 4));
@@ -1023,9 +1230,11 @@ useEffect(() => {
   // Reset monde
   const resetWorld = useCallback(() => {
     obstaclesRef.current = [];
+    platformsRef.current = [];
     collectiblesRef.current = [];
     powerUpsRef.current = [];
     popupsRef.current = [];
+    patternCooldownDistRef.current = 0;
     lastIdRef.current = 1;
 
     const assist = 1 - Math.min(0.12, failStreakRef.current * 0.04);
@@ -1034,6 +1243,7 @@ useEffect(() => {
 
     scoreRef.current = 0;
     setScore(0);
+    runCoinsCollectedRef.current = 0;
     milestonesRef.current.clear();
     comboRef.current = 0;
 
@@ -1181,6 +1391,23 @@ useEffect(() => {
           };
         })
         .filter((o): o is Obstacle => !!o);
+      const normalizedPlatforms: PlatformBlock[] = (Array.isArray(world.platforms) ? world.platforms : [])
+        .map((p: any): PlatformBlock | null => {
+          const id = Math.floor(toNum(p?.id, NaN));
+          const x = toNum(p?.x, NaN);
+          const y = toNum(p?.y, NaN);
+          const w = toNum(p?.w, NaN);
+          const h = toNum(p?.h, NaN);
+          if (![id, x, y, w, h].every(Number.isFinite)) return null;
+          return {
+            id: Math.max(1, id),
+            x,
+            y: clamp(y, 20, GROUND_Y - 16),
+            w: Math.max(40, w),
+            h: Math.max(6, h),
+          };
+        })
+        .filter((p): p is PlatformBlock => !!p);
       const normalizedCollectibles: Collectible[] = (Array.isArray(world.collectibles) ? world.collectibles : [])
         .map((c: any): Collectible | null => {
           const id = Math.floor(toNum(c?.id, NaN));
@@ -1208,8 +1435,10 @@ useEffect(() => {
         .filter((p): p is PowerUp => !!p);
 
       obstaclesRef.current = normalizedObstacles;
+      platformsRef.current = normalizedPlatforms;
       collectiblesRef.current = normalizedCollectibles;
       powerUpsRef.current = normalizedPowerUps;
+      patternCooldownDistRef.current = Math.max(0, toNum(world.patternCooldownDist, 0));
 
       const restoredIdx = (Array.isArray(world.spawnedLetterIdx) ? world.spawnedLetterIdx : [])
         .map((idx) => Math.floor(toNum(idx, NaN)))
@@ -1219,6 +1448,7 @@ useEffect(() => {
       const maxEntityId = Math.max(
         0,
         ...normalizedObstacles.map((o) => o.id),
+        ...normalizedPlatforms.map((p) => p.id),
         ...normalizedCollectibles.map((c) => c.id),
         ...normalizedPowerUps.map((p) => p.id),
       );
@@ -1231,6 +1461,8 @@ useEffect(() => {
       mapARef.current = snap.mapName ?? activeMapForScore(scoreRef.current);
       mapBRef.current = mapARef.current;
       mapFadeRef.current = 0;
+      platformsRef.current = [];
+      patternCooldownDistRef.current = 0;
     }
 
     setPendingSnapshot(null);
@@ -1268,7 +1500,10 @@ useEffect(() => {
   }, [setPlayingStatusBar]);
 
   const endGame = useCallback(async () => {
+    if (gameStateRef.current === "gameover") return;
+    gameStateRef.current = "gameover";
     const finalScore = scoreRef.current;
+    applyRunToDailyMissions(finalScore);
     setGameState("gameover");
     restartAllowedAtRef.current = Date.now() + 2000;
     setPlayingStatusBar(false);
@@ -1292,7 +1527,7 @@ useEffect(() => {
     } catch (e) {
       console.log("endGame error:", (e as any)?.message);
     }
-  }, [adminId, saveRunToCloud, loadTop5, resetPersistentLetters, setPlayingStatusBar]);
+  }, [adminId, applyRunToDailyMissions, saveRunToCloud, loadTop5, resetPersistentLetters, setPlayingStatusBar]);
 
   // helpers
   const doubleJumpActive = useCallback(
@@ -1339,6 +1574,180 @@ useEffect(() => {
       collectiblesRef.current.push({ id: ++lastIdRef.current, x, y, r: R_COLLECTIBLE });
     }
   }, [H_SINGLE, H_DOUBLE, H_STAR_MIN, clampYCenter, yForHeight]);
+
+  const spawnPlatformBlock = useCallback((x: number, y: number, w: number, h = PLATFORM_H) => {
+    const platform: PlatformBlock = {
+      id: ++lastIdRef.current,
+      x,
+      y: clamp(y, 24, GROUND_Y - h - 40),
+      w: Math.max(90, w),
+      h: Math.max(8, h),
+    };
+    platformsRef.current.push(platform);
+    return platform;
+  }, [GROUND_Y]);
+
+  const spawnPlatformGatedCoins = useCallback((platform: PlatformBlock) => {
+    const platformRise = Math.max(40, GROUND_Y - platform.y - platform.h);
+    const gatedRise = Math.max(H_DOUBLE * 1.08, platformRise + H_SINGLE * 0.88);
+    const y = clampYCenter(GROUND_Y - gatedRise, R_COLLECTIBLE);
+    const releaseOffset = clamp(speedRef.current * 0.14, 28, 64);
+    const startX = platform.x + platform.w + releaseOffset;
+    const count = PLATFORM_GATE_COIN_COUNT;
+    const gap = 30;
+    for (let i = 0; i < count; i++) {
+      collectiblesRef.current.push({
+        id: ++lastIdRef.current,
+        x: startX + i * gap,
+        y,
+        r: R_COLLECTIBLE,
+      });
+    }
+  }, [GROUND_Y, H_DOUBLE, H_SINGLE, clampYCenter]);
+
+  const spawnPattern = useCallback((minGap: number, gapMul: number, scoreNow: number): boolean => {
+    if (!ENABLE_PLATFORMS) return false;
+    if (scoreNow < OBSTACLE_PATTERN_MIN_SCORE) return false;
+    if (patternCooldownDistRef.current > 0) return false;
+
+    const harden = clamp(0.2 * (scoreNow / 120000), 0, 0.2);
+    const localGapMul = gapMul * (1 - harden);
+    const baseLead = Math.max(minGap, Math.floor(SCREEN_W * 0.78));
+    const lead = Math.floor(baseLead * localGapMul);
+    const extraLead = Math.max(1, Math.floor(OBSTACLE_MAX_GAP_BASE * localGapMul));
+    const anchorX = SCREEN_W + lead + randi(20, extraLead);
+
+    const roll = Math.random();
+    const pattern: SpawnPattern =
+      roll < 0.42 ? "platform_gate" : roll < 0.74 ? "double_trouble" : "risk_lane";
+
+    if (pattern === "platform_gate") {
+      const platformW = randi(PLATFORM_MIN_W, PLATFORM_MAX_W);
+      const platformRise = randf(H_SINGLE * 0.72, Math.min(H_DOUBLE * 0.86, H_SINGLE * 1.08));
+      const platformX = anchorX + randi(40, 160);
+      const platformY = GROUND_Y - platformRise - PLATFORM_H;
+      const platform = spawnPlatformBlock(platformX, platformY, platformW);
+
+      const entryW = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W);
+      const entryH = OBSTACLE_BASE_H + randi(-6, 6);
+      obstaclesRef.current.push({
+        id: ++lastIdRef.current,
+        x: platformX - randi(95, 145),
+        w: entryW,
+        h: entryH,
+        y: GROUND_Y - entryH,
+        variant: Math.random() < 0.5 ? 0 : 1,
+      });
+
+      if (Math.random() < 0.62) {
+        const exitW = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W);
+        const exitH = OBSTACLE_BASE_H + randi(-8, 8);
+        obstaclesRef.current.push({
+          id: ++lastIdRef.current,
+          x: platformX + platformW + randi(70, 140),
+          w: exitW,
+          h: exitH,
+          y: GROUND_Y - exitH,
+          variant: Math.random() < 0.5 ? 0 : 1,
+        });
+      }
+
+      spawnPlatformGatedCoins(platform);
+      patternCooldownDistRef.current = randi(PLATFORM_PATTERN_COOLDOWN_MIN, PLATFORM_PATTERN_COOLDOWN_MAX);
+      return true;
+    }
+
+    if (pattern === "double_trouble") {
+      const w1 = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W);
+      const h1 = OBSTACLE_BASE_H + randi(-8, 8);
+      const x1 = anchorX;
+      obstaclesRef.current.push({
+        id: ++lastIdRef.current,
+        x: x1,
+        w: w1,
+        h: h1,
+        y: GROUND_Y - h1,
+        variant: Math.random() < 0.5 ? 0 : 1,
+      });
+
+      const w2 = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W);
+      const h2 = OBSTACLE_BASE_H + randi(-8, 8);
+      const gap = randi(170, 250);
+      const x2 = x1 + w1 + gap;
+      obstaclesRef.current.push({
+        id: ++lastIdRef.current,
+        x: x2,
+        w: w2,
+        h: h2,
+        y: GROUND_Y - h2,
+        variant: Math.random() < 0.5 ? 0 : 1,
+      });
+
+      if (ENABLE_COLLECTIBLES) {
+        const y = clampYCenter(yForHeight(randf(H_SINGLE * 0.56, H_SINGLE * 0.92)), R_COLLECTIBLE);
+        const coinGap = 34;
+        const coinX = x1 + w1 + Math.max(26, (gap - coinGap * 2) / 2);
+        for (let i = 0; i < 3; i++) {
+          collectiblesRef.current.push({
+            id: ++lastIdRef.current,
+            x: coinX + i * coinGap,
+            y,
+            r: R_COLLECTIBLE,
+          });
+        }
+      }
+
+      patternCooldownDistRef.current = randi(PLATFORM_PATTERN_COOLDOWN_MIN, PLATFORM_PATTERN_COOLDOWN_MAX);
+      return true;
+    }
+
+    const primaryW = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W + 10);
+    const primaryH = OBSTACLE_BASE_H + randi(-4, 10);
+    const primaryX = anchorX + randi(0, 80);
+    obstaclesRef.current.push({
+      id: ++lastIdRef.current,
+      x: primaryX,
+      w: primaryW,
+      h: primaryH,
+      y: GROUND_Y - primaryH,
+      variant: Math.random() < 0.5 ? 0 : 1,
+    });
+
+    const platformW = randi(120, 180);
+    const platformRise = randf(H_SINGLE * 0.66, Math.min(H_DOUBLE * 0.82, H_SINGLE * 1.02));
+    const platformX = primaryX + primaryW + randi(84, 140);
+    const platformY = GROUND_Y - platformRise - PLATFORM_H;
+    const platform = spawnPlatformBlock(platformX, platformY, platformW);
+
+    const rewardY = clampYCenter(platform.y - 24, R_X2);
+    if (Math.random() < 0.55) {
+      powerUpsRef.current.push({
+        id: ++lastIdRef.current,
+        x: platform.x + platform.w * 0.5,
+        y: rewardY,
+        r: R_X2,
+        kind: "x2",
+      });
+    } else {
+      collectiblesRef.current.push({
+        id: ++lastIdRef.current,
+        x: platform.x + platform.w * 0.5,
+        y: rewardY,
+        r: R_COLLECTIBLE,
+      });
+    }
+
+    patternCooldownDistRef.current = randi(PLATFORM_PATTERN_COOLDOWN_MIN, PLATFORM_PATTERN_COOLDOWN_MAX);
+    return true;
+  }, [
+    GROUND_Y,
+    H_DOUBLE,
+    H_SINGLE,
+    clampYCenter,
+    spawnPlatformBlock,
+    spawnPlatformGatedCoins,
+    yForHeight,
+  ]);
 
   // Spawn d'une lettre au palier désiré (0..5)
   const spawnLetterAtIndex = useCallback((idx: number) => {
@@ -1471,6 +1880,7 @@ useEffect(() => {
       fenceOffsetRef.current += s * FENCE_SPEED * dt;
       mapAOffsetRef.current += s * BG_SPEED * dt;
       mapBOffsetRef.current += s * BG_SPEED * dt;
+      patternCooldownDistRef.current = Math.max(0, patternCooldownDistRef.current - s * dt);
 
       // Gravité & saut
       const gravityBase = GRAVITY_BASE * diff.gravityMul;
@@ -1479,9 +1889,25 @@ useEffect(() => {
 
       let newY = yRef.current + velYRef.current * dt;
       const floorY = GROUND_Y - PLAYER_SIZE;
+      let landingY = floorY;
 
-      if (newY >= floorY) {
-        newY = floorY;
+      if (ENABLE_PLATFORMS && velYRef.current >= 0 && platformsRef.current.length > 0) {
+        const prevBottom = yRef.current + PLAYER_SIZE;
+        const nextBottom = newY + PLAYER_SIZE;
+        const playerLeft = playerX + 6;
+        const playerRight = playerX + PLAYER_SIZE - 6;
+
+        for (const p of platformsRef.current) {
+          const overlapX = playerRight > p.x + 8 && playerLeft < p.x + p.w - 8;
+          if (!overlapX) continue;
+          const crossedTop = prevBottom <= p.y + 6 && nextBottom >= p.y;
+          if (!crossedTop) continue;
+          landingY = Math.min(landingY, p.y - PLAYER_SIZE);
+        }
+      }
+
+      if (newY >= landingY) {
+        newY = landingY;
         if (!groundedRef.current) {
           groundedRef.current = true;
           lastGroundedTimeRef.current = ts / 1000;
@@ -1494,6 +1920,8 @@ useEffect(() => {
           } else {
             velYRef.current = 0;
           }
+        } else {
+          velYRef.current = 0;
         }
       } else {
         groundedRef.current = false;
@@ -1512,7 +1940,15 @@ useEffect(() => {
 
       // Monde actif
       if (obstaclesRef.current.length === 0) {
-        spawnObstacle(OBSTACLE_MIN_GAP_BASE, diff.gapMul, scoreRef.current);
+        if (!spawnPattern(OBSTACLE_MIN_GAP_BASE, diff.gapMul, scoreRef.current)) {
+          spawnObstacle(OBSTACLE_MIN_GAP_BASE, diff.gapMul, scoreRef.current);
+        }
+      }
+
+      for (let i = platformsRef.current.length - 1; i >= 0; i--) {
+        const p = platformsRef.current[i];
+        p.x -= s * dt;
+        if (p.x + p.w <= -PLATFORM_MAX_OFFSCREEN) platformsRef.current.splice(i, 1);
       }
 
       for (let i = obstaclesRef.current.length - 1; i >= 0; i--) {
@@ -1523,7 +1959,10 @@ useEffect(() => {
 
       const last = obstaclesRef.current[obstaclesRef.current.length - 1];
       if (!last || last.x < SCREEN_W - randi(Math.floor(OBSTACLE_MIN_GAP_BASE * 0.7), OBSTACLE_MAX_GAP_BASE)) {
-        spawnObstacle(randi(OBSTACLE_MIN_GAP_BASE, OBSTACLE_MAX_GAP_BASE), diff.gapMul, scoreRef.current);
+        const nextMinGap = randi(OBSTACLE_MIN_GAP_BASE, OBSTACLE_MAX_GAP_BASE);
+        if (!spawnPattern(nextMinGap, diff.gapMul, scoreRef.current)) {
+          spawnObstacle(nextMinGap, diff.gapMul, scoreRef.current);
+        }
       }
 
       // ===== Collectibles (coins) =====
@@ -1535,6 +1974,7 @@ useEffect(() => {
         const cy = yRef.current + PLAYER_SIZE / 2;
 
         if (circleCircleCollide(cx, cy, PLAYER_SIZE * 0.38, c.x, c.y, c.r)) {
+          runCoinsCollectedRef.current += 1;
           comboRef.current = Math.min(10, comboRef.current + 1);
           if (comboRef.current >= 10) unlock("combo_10");
 
@@ -1769,6 +2209,7 @@ useEffect(() => {
     gameState,
     endGame,
     spawnObstacle,
+    spawnPattern,
     spawnX2BonusForDoubleJump,
     settings.haptics,
     GROUND_Y,
@@ -1844,6 +2285,7 @@ useEffect(() => {
 
   const speedMult = Math.min(MULT_MAX, MULT_MIN + Math.max(0, speedRef.current - START_SPEED) / MULT_SCALE).toFixed(1);
   const scoreBuff = getActiveScoreMult();
+  const dailyMissionDoneCount = useMemo(() => getDailyMissionDoneCount(dailyMissions), [dailyMissions]);
 
   const secsLeft = (ms: number) => Math.max(0, Math.ceil((ms - Date.now()) / 1000));
   const invBarInfo = () => {
@@ -1960,6 +2402,28 @@ useEffect(() => {
   </View>
 
   {/* 3. Bulle d’aide claire sur les bonus */}
+  <View style={styles.missionHudWrap}>
+    <View style={styles.missionHudHeader}>
+      <Text style={styles.missionHudTitle}>Missions du jour</Text>
+      <Text style={styles.missionHudCount}>
+        {dailyMissionDoneCount}/{DAILY_MISSIONS.length}
+      </Text>
+    </View>
+    {DAILY_MISSIONS.map((mission) => {
+      const value = getDailyMissionValue(dailyMissions, mission.id);
+      const done = value >= mission.target;
+      return (
+        <View key={mission.id} style={styles.missionHudRow}>
+          <View style={[styles.missionHudDot, { backgroundColor: done ? "#22c55e" : mission.tint }]} />
+          <Text style={styles.missionHudLabel}>{mission.label}</Text>
+          <Text style={[styles.missionHudValue, done && styles.missionHudValueDone]}>
+            {Math.min(value, mission.target)}/{mission.target}
+          </Text>
+        </View>
+      );
+    })}
+  </View>
+
   {showHelp && (
     <View style={styles.helpPanel}>
       <Text style={styles.helpTitle}>À quoi servent les bonus ?</Text>
@@ -2213,6 +2677,26 @@ useEffect(() => {
             );
           })()}
 
+          {/* Platforms */}
+          {ENABLE_PLATFORMS &&
+            platformsRef.current.map((p) => (
+              <View
+                key={`pl-${p.id}`}
+                style={[
+                  styles.platformBlock,
+                  {
+                    left: p.x,
+                    top: p.y,
+                    width: p.w,
+                    height: p.h,
+                    opacity: mapNow === "systeme_solaire" ? 0.94 : 1,
+                  },
+                ]}
+              >
+                <View style={styles.platformTop} />
+              </View>
+            ))}
+
           {/* Obstacles */}
           {obstaclesRef.current.map((o) => (
             <Image
@@ -2395,6 +2879,7 @@ useEffect(() => {
           top5={top5}
           myId={adminId || ""}
           myScore={score}
+          dailyMissions={dailyMissions}
         />
       )}
     </SafeAreaView>
@@ -2503,6 +2988,7 @@ function GameOverModal({
   top5,
   myId,
   myScore,
+  dailyMissions,
 }: {
   visible: boolean;
   onRestart: () => void;
@@ -2510,6 +2996,7 @@ function GameOverModal({
   top5: LBRow[] | null;
   myId: string;
   myScore: number;
+  dailyMissions: DailyMissionState;
 }) {
   const { width, height } = useWindowDimensions();
 
@@ -2560,7 +3047,7 @@ function GameOverModal({
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onRestart}>
       {/* Backdrop neutre pour éviter un restart accidentel */}
-      <Pressable
+      <View
         style={{
           flex: 1,
           backgroundColor: "rgba(7,10,17,0.72)",
@@ -2572,7 +3059,7 @@ function GameOverModal({
         }}
       >
         {/* Carte (stop propagation) */}
-        <Pressable onPress={() => {}} style={cardStyle}>
+        <View style={cardStyle}>
           <ScrollView
             style={{ maxHeight: maxH }}
             contentContainerStyle={{
@@ -2580,6 +3067,7 @@ function GameOverModal({
               paddingBottom: ms(36), // pour ne jamais couper le bas
               alignItems: "center",
             }}
+            nestedScrollEnabled
             showsVerticalScrollIndicator={false}
           >
 {/* Bouton Rejouez */}
@@ -2622,7 +3110,7 @@ function GameOverModal({
                   fontSize: ms(14),
                 }}
               >
-                Top scores
+                Top scores (7 jours)
               </Text>
 
               {top5 === null ? (
@@ -2631,7 +3119,7 @@ function GameOverModal({
                 </Text>
               ) : top5.length === 0 ? (
                 <Text style={{ color: HOME_UI.muted, textAlign: "center", fontSize: ms(12) }}>
-                  Aucun score pour le moment
+                  Aucun score sur 7 jours
                 </Text>
               ) : (
                 <>
@@ -2728,6 +3216,58 @@ function GameOverModal({
               </Text>
             </View>
 
+            <View
+              style={{
+                alignSelf: "stretch",
+                marginTop: ms(8),
+                padding: ms(10),
+                borderRadius: ms(12),
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.18)",
+                backgroundColor: "rgba(20,29,44,0.86)",
+              }}
+            >
+              <Text
+                style={{
+                  color: HOME_UI.text,
+                  fontWeight: "900",
+                  textAlign: "center",
+                  fontSize: ms(13),
+                  marginBottom: ms(6),
+                }}
+              >
+                Missions: {getDailyMissionDoneCount(dailyMissions)}/{DAILY_MISSIONS.length}
+              </Text>
+              {DAILY_MISSIONS.map((mission) => {
+                const value = getDailyMissionValue(dailyMissions, mission.id);
+                const done = value >= mission.target;
+                return (
+                  <View
+                    key={`go-${mission.id}`}
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: ms(4),
+                    }}
+                  >
+                    <Text style={{ color: "#d8dfec", fontSize: ms(12), fontWeight: "700" }}>
+                      {mission.label}
+                    </Text>
+                    <Text
+                      style={{
+                        color: done ? "#86efac" : "#bec8d8",
+                        fontSize: ms(12),
+                        fontWeight: "800",
+                      }}
+                    >
+                      {Math.min(value, mission.target)}/{mission.target}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+
             {/* Bouton leaderboard */}
             <TouchableOpacity
               onPress={onLeaderboard}
@@ -2753,8 +3293,8 @@ function GameOverModal({
               </View>
             </TouchableOpacity>
           </ScrollView>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -2825,6 +3365,22 @@ const styles = StyleSheet.create({
     position: "absolute",
     borderTopLeftRadius: 6,
     borderTopRightRadius: 6,
+  },
+  platformBlock: {
+    position: "absolute",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.25)",
+    backgroundColor: "rgba(19,27,42,0.92)",
+    overflow: "hidden",
+  },
+  platformTop: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    height: 5,
+    backgroundColor: "rgba(255,130,0,0.9)",
   },
 
   toast: {
@@ -3146,6 +3702,57 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     fontSize: 12.5,
   },
+  missionHudWrap: {
+    marginTop: 8,
+    marginHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.35)",
+    backgroundColor: "rgba(10,16,28,0.86)",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 4,
+  },
+  missionHudHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 2,
+  },
+  missionHudTitle: {
+    color: HOME_UI.text,
+    fontWeight: "900",
+    fontSize: 12,
+  },
+  missionHudCount: {
+    color: "#86efac",
+    fontWeight: "900",
+    fontSize: 11.5,
+  },
+  missionHudRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  missionHudDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  missionHudLabel: {
+    flex: 1,
+    color: "#d8dfec",
+    fontSize: 11.5,
+    fontWeight: "700",
+  },
+  missionHudValue: {
+    color: "#bec8d8",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  missionHudValueDone: {
+    color: "#86efac",
+  },
 
   helpPanel: {
     marginTop: 8,
@@ -3184,3 +3791,5 @@ const styles = StyleSheet.create({
     color: "#FFD27A",
   },
 });
+
+
