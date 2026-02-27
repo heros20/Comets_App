@@ -1,6 +1,6 @@
 "use client";
 
-import { useNavigation } from "@react-navigation/native";
+import { useLocalSearchParams } from "expo-router";
 import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -22,6 +22,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 
+import { DrawerMenuButton } from "../../components/navigation/AppDrawer";
 import { sortGalleryNewest } from "../../lib/gallerySort";
 
 const GALLERY_API = "https://les-comets-honfleur.vercel.app/api/gallery";
@@ -105,8 +106,10 @@ function formatDateLabel(value?: string | null) {
 }
 
 export default function GalleryScreen() {
-  const navigation = useNavigation();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const params = useLocalSearchParams<{ photoId?: string | string[] }>();
+  const rawPhotoId = Array.isArray(params.photoId) ? params.photoId[0] : params.photoId;
+  const targetPhotoId = rawPhotoId ? String(rawPhotoId) : "";
 
   const [gallery, setGallery] = useState<GalleryItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -116,6 +119,7 @@ export default function GalleryScreen() {
 
   const [modalIdx, setModalIdx] = useState<number | null>(null);
   const pagerRef = useRef<ScrollView>(null);
+  const focusedPhotoIdRef = useRef<string | null>(null);
 
   const colCount = windowWidth >= 900 ? 4 : windowWidth >= 640 ? 3 : 2;
   const gap = 10;
@@ -226,6 +230,22 @@ export default function GalleryScreen() {
     [windowWidth]
   );
 
+  useEffect(() => {
+    if (!targetPhotoId || !gallery.length) return;
+    if (focusedPhotoIdRef.current === targetPhotoId) return;
+
+    const photoIndex = gallery.findIndex((item) => String(item.id ?? "") === targetPhotoId);
+    if (photoIndex < 0) return;
+
+    focusedPhotoIdRef.current = targetPhotoId;
+    openModalAt(photoIndex);
+  }, [gallery, openModalAt, targetPhotoId]);
+
+  useEffect(() => {
+    if (targetPhotoId) return;
+    focusedPhotoIdRef.current = null;
+  }, [targetPhotoId]);
+
   const closeModal = useCallback(() => setModalIdx(null), []);
 
   const onMomentumEnd = useCallback(
@@ -298,20 +318,7 @@ export default function GalleryScreen() {
           />
 
           <View style={styles.heroTopRow}>
-            <TouchableOpacity
-              onPress={() =>
-                // @ts-ignore
-                (navigation as any).canGoBack()
-                  ? // @ts-ignore
-                    (navigation as any).goBack()
-                  : // @ts-ignore
-                    (navigation as any).navigate("Home")
-              }
-              style={styles.backBtn}
-              activeOpacity={0.9}
-            >
-              <Icon name="chevron-back" size={22} color="#F3F4F6" />
-            </TouchableOpacity>
+            <DrawerMenuButton style={styles.backBtn} />
 
             <View style={styles.heroTitleWrap}>
               <Text style={styles.heroTitle}>Galerie Comets</Text>

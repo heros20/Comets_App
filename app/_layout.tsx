@@ -10,6 +10,10 @@ import { InteractionManager, View } from "react-native";
 import "react-native-reanimated";
 
 import PushGateway from "../components/PushGateway";
+import {
+  AppDrawerProvider,
+  GlobalAppDrawer,
+} from "../components/navigation/AppDrawer";
 import PremiumRouteLoader from "../components/ui/PremiumRouteLoader";
 import { AdminProvider } from "../contexts/AdminContext";
 import { useColorScheme } from "../hooks/useColorScheme";
@@ -41,6 +45,8 @@ function GlobalRouteLoader() {
       joueurs: "Joueurs",
       profil: "Profil",
       galleryscreen: "Galerie",
+      cometsrunscreen: "Comets Run",
+      cometsleaderboardscreen: "Classement Comets Run",
       actudetail: "Actualit\u00E9",
       login: "Connexion",
       register: "Inscription",
@@ -169,24 +175,27 @@ export default function RootLayout() {
 
   return (
     <AdminProvider>
-      <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            title: "",
-          }}
-        >
-          <Stack.Screen name="index" options={{ headerShown: false }} />
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="(admin)" options={{ headerShown: false, title: "" }} />
-          <Stack.Screen name="+not-found" />
-        </Stack>
+      <AppDrawerProvider>
+        <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              title: "",
+            }}
+          >
+            <Stack.Screen name="index" options={{ headerShown: false }} />
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="(admin)" options={{ headerShown: false, title: "" }} />
+            <Stack.Screen name="+not-found" />
+          </Stack>
 
-        <PushGateway />
-        <GlobalRouteLoader />
+          <PushGateway />
+          <GlobalRouteLoader />
+          <GlobalAppDrawer />
 
-        <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
-      </ThemeProvider>
+          <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
+        </ThemeProvider>
+      </AppDrawerProvider>
     </AdminProvider>
   );
 }

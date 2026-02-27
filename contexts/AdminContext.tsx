@@ -3,8 +3,8 @@
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
-import React, { createContext, useContext, useEffect, useState } from "react";
-import { Platform } from "react-native";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { AppState, Platform } from "react-native";
 import { supabase } from "../supabase";
 
 type Role = "admin" | "member" | "guest";
@@ -47,6 +47,10 @@ const API_BASE = "https://les-comets-honfleur.vercel.app";
 const SESSION_KEY = "session";
 const EXPO_PUSH_TOKEN_KEY = "expoPushToken";
 
+function isAuthRole(value: unknown): value is "admin" | "member" {
+  return value === "admin" || value === "member";
+}
+
 function getProjectId(): string | undefined {
   const fromExtraPublic =
     (Constants.expoConfig as any)?.extra?.EXPO_PUBLIC_PROJECT_ID ??
@@ -70,9 +74,49 @@ async function ensureAndroidChannel() {
   });
 }
 
+async function fetchWithTimeout(url: string, init?: RequestInit, ms = 12000) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...(init ?? {}), signal: ctrl.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+function parseStoredSession(raw: string | null): Admin | null {
+  if (!raw) return null;
+
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  if (!isAuthRole(parsed?.role)) return null;
+
+  const id = parsed?.id != null ? String(parsed.id).trim() : "";
+  const email = typeof parsed?.email === "string" ? parsed.email.trim().toLowerCase() : "";
+  if (!id || !email) return null;
+
+  return {
+    id,
+    email,
+    role: parsed.role,
+    participations:
+      typeof parsed?.participations === "number" && Number.isFinite(parsed.participations)
+        ? parsed.participations
+        : 0,
+    first_name: typeof parsed?.first_name === "string" ? parsed.first_name : undefined,
+    last_name: typeof parsed?.last_name === "string" ? parsed.last_name : undefined,
+  };
+}
+
 export function AdminProvider({ children }: { children: React.ReactNode }) {
   const [admin, setAdmin] = useState<Admin | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const checkingRef = useRef<Promise<void> | null>(null);
 
   const isAdmin = admin?.role === "admin";
   const isMember = admin?.role === "member";
@@ -81,7 +125,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     ensureAndroidChannel().catch(() => {});
   }, []);
 
-  async function ensurePushTokenRegistered(userId: string, userEmail?: string) {
+  const ensurePushTokenRegistered = useCallback(async (userId: string, userEmail?: string) => {
     try {
       const { status, granted, ios } = await Notifications.requestPermissionsAsync();
       const allowed =
@@ -127,42 +171,75 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         }
       }
     } catch {}
-  }
+  }, []);
 
-  const checkSession = async () => {
-    setIsLoading(true);
-    try {
-      const sessionStr = await SecureStore.getItemAsync(SESSION_KEY);
-      if (sessionStr) {
-        const s = JSON.parse(sessionStr) as {
-          id: string;
-          email: string;
-          role: Role;
-          participations?: number;
-        };
-        setAdmin({
-          id: s.id,
-          email: s.email,
-          role: s.role,
-          participations: s.participations ?? 0,
-        });
-        if (s.id) ensurePushTokenRegistered(s.id, s.email);
-      } else {
-        setAdmin(null);
+  const runSessionCheck = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      if (checkingRef.current) return checkingRef.current;
+
+      const task = (async () => {
+        const silent = !!opts?.silent;
+        if (!silent) setIsLoading(true);
+        try {
+          const sessionStr = await SecureStore.getItemAsync(SESSION_KEY);
+          const hydrated = parseStoredSession(sessionStr);
+
+          if (!hydrated) {
+            await SecureStore.deleteItemAsync(EXPO_PUSH_TOKEN_KEY);
+            await SecureStore.deleteItemAsync(SESSION_KEY);
+            setAdmin(null);
+            return;
+          }
+
+          setAdmin((prev) => {
+            if (
+              prev &&
+              prev.id === hydrated.id &&
+              prev.email === hydrated.email &&
+              prev.role === hydrated.role &&
+              (prev.participations ?? 0) === (hydrated.participations ?? 0) &&
+              (prev.first_name ?? "") === (hydrated.first_name ?? "") &&
+              (prev.last_name ?? "") === (hydrated.last_name ?? "")
+            ) {
+              return prev;
+            }
+            return hydrated;
+          });
+        } catch {
+          setAdmin(null);
+        } finally {
+          if (!silent) setIsLoading(false);
+        }
+      })();
+
+      checkingRef.current = task;
+      try {
+        await task;
+      } finally {
+        checkingRef.current = null;
       }
-    } catch {
-      setAdmin(null);
-    }
-    setIsLoading(false);
-  };
+    },
+    [],
+  );
+
+  const checkSession = useCallback(async () => {
+    await runSessionCheck({ silent: false });
+  }, [runSessionCheck]);
 
   useEffect(() => {
     checkSession();
-  }, []);
+  }, [checkSession]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") runSessionCheck({ silent: true }).catch(() => {});
+    });
+    return () => sub.remove();
+  }, [runSessionCheck]);
 
   const login = async (email: string, password: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/login`, {
+      const res = await fetchWithTimeout(`${API_BASE}/api/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -170,21 +247,36 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       });
       if (!res.ok) return false;
 
-      const data = await res.json();
-      if (!data?.success || !data?.role || !data?.id) return false;
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      if (!data?.success || !isAuthRole(data?.role)) return false;
 
-      const sess = {
-        email: data.email as string,
-        id: data.id as string,
-        role: data.role as Role,
-        participations: (data.participations as number) ?? 0,
-        first_name: (data.first_name as string | undefined) ?? undefined,
-        last_name: (data.last_name as string | undefined) ?? undefined,
+      const id = data?.id != null ? String(data.id).trim() : "";
+      const emailNormalized =
+        typeof data?.email === "string" && data.email.trim()
+          ? data.email.trim().toLowerCase()
+          : email.trim().toLowerCase();
+      if (!id || !emailNormalized) return false;
+
+      const sess: Admin = {
+        email: emailNormalized,
+        id,
+        role: data.role,
+        participations:
+          typeof data?.participations === "number" && Number.isFinite(data.participations)
+            ? data.participations
+            : 0,
+        first_name: typeof data?.first_name === "string" ? data.first_name : undefined,
+        last_name: typeof data?.last_name === "string" ? data.last_name : undefined,
       };
+
       await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(sess));
       setAdmin(sess);
-
-      await ensurePushTokenRegistered(sess.id, sess.email);
+      ensurePushTokenRegistered(sess.id, sess.email).catch(() => {});
 
       return true;
     } catch {
@@ -194,7 +286,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
 
   const register = async (email: string, password: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/register`, {
+      const res = await fetchWithTimeout(`${API_BASE}/api/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -247,6 +339,3 @@ export function useAdmin() {
   if (!ctx) throw new Error("useAdmin must be used within AdminProvider");
   return ctx;
 }
-
-
-

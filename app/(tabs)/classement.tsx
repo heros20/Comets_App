@@ -3,7 +3,6 @@
 import { Asset } from "expo-asset";
 import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
-import { useNavigation } from "@react-navigation/native";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
@@ -18,6 +17,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 
+import { DrawerMenuButton } from "../../components/navigation/AppDrawer";
 import LogoutButton from "../../components/LogoutButton";
 import { supabase } from "../../supabase";
 
@@ -174,8 +174,6 @@ const TeamRow = React.memo(function TeamRow({
 });
 
 export default function ClassementScreen() {
-  const navigation = useNavigation();
-
   const [classement, setClassement] = useState<ClassementData | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -367,20 +365,7 @@ export default function ClassementScreen() {
           />
 
           <View style={styles.heroTopRow}>
-            <TouchableOpacity
-              onPress={() =>
-                // @ts-ignore
-                (navigation as any).canGoBack()
-                  ? // @ts-ignore
-                    (navigation as any).goBack()
-                  : // @ts-ignore
-                    (navigation as any).navigate("Home")
-              }
-              style={styles.backBtn}
-              activeOpacity={0.9}
-            >
-              <Icon name="chevron-back" size={22} color="#F3F4F6" />
-            </TouchableOpacity>
+            <DrawerMenuButton style={styles.backBtn} />
 
             <View style={styles.heroTitleWrap}>
               <Text style={styles.heroTitle}>Classement Comets</Text>

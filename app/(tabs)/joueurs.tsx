@@ -1,7 +1,6 @@
 // app/screens/JoueursScreen.tsx
 "use client";
 
-import { useNavigation } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -18,6 +17,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 
+import { DrawerMenuButton } from "../../components/navigation/AppDrawer";
 import LogoutButton from "../../components/LogoutButton";
 import { supabase } from "../../supabase";
 
@@ -138,8 +138,6 @@ const PlayerCard = React.memo(function PlayerCard({
 });
 
 export default function JoueursScreen() {
-  const navigation = useNavigation();
-
   const [players, setPlayers] = useState<Player[]>([]);
   const [youngPlayers, setYoungPlayers] = useState<YoungPlayer[]>([]);
 
@@ -354,19 +352,7 @@ export default function JoueursScreen() {
           />
 
           <View style={styles.heroTopRow}>
-            <TouchableOpacity
-              onPress={() =>
-                // @ts-ignore
-                (navigation as any).canGoBack()
-                  ? // @ts-ignore
-                    (navigation as any).goBack()
-                  : // @ts-ignore
-                    (navigation as any).navigate("Home")
-              }
-              style={styles.backBtn}
-            >
-              <Icon name="chevron-back" size={22} color="#F3F4F6" />
-            </TouchableOpacity>
+            <DrawerMenuButton style={styles.backBtn} />
 
             <View style={styles.heroTitleWrap}>
               <Text style={styles.heroTitle}>Joueurs Comets</Text>

@@ -19,6 +19,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 
+import { DrawerMenuButton } from "../../components/navigation/AppDrawer";
 import { markArticleRead } from "../../lib/newsNotifyStore";
 
 const logoComets = require("../../assets/images/iconComets.png");
@@ -353,37 +354,38 @@ export default function ActusScreen() {
     [onOpenArticle]
   );
 
-  const pagination = filtered.length > 0 && pageCount > 1 && !loading && (
-    <View style={styles.pagination}>
-      <TouchableOpacity
-        onPress={() => {
-          setPage((p) => Math.max(1, p - 1));
-          listRef.current?.scrollToOffset({ offset: 0, animated: true });
-        }}
-        disabled={page === 1}
-        style={[styles.pagBtn, page === 1 && styles.pagBtnDisabled]}
-        activeOpacity={0.85}
-      >
-        <Text style={styles.pagBtnTxt}>Precedent</Text>
-      </TouchableOpacity>
+  const pagination =
+    filtered.length > 0 && pageCount > 1 && !loading ? (
+      <View style={styles.pagination}>
+        <TouchableOpacity
+          onPress={() => {
+            setPage((p) => Math.max(1, p - 1));
+            listRef.current?.scrollToOffset({ offset: 0, animated: true });
+          }}
+          disabled={page === 1}
+          style={[styles.pagBtn, page === 1 && styles.pagBtnDisabled]}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.pagBtnTxt}>Precedent</Text>
+        </TouchableOpacity>
 
-      <Text style={styles.pagIndicator}>
-        Page {page} / {pageCount}
-      </Text>
+        <Text style={styles.pagIndicator}>
+          Page {page} / {pageCount}
+        </Text>
 
-      <TouchableOpacity
-        onPress={() => {
-          setPage((p) => Math.min(pageCount, p + 1));
-          listRef.current?.scrollToOffset({ offset: 0, animated: true });
-        }}
-        disabled={page === pageCount}
-        style={[styles.pagBtn, page === pageCount && styles.pagBtnDisabled]}
-        activeOpacity={0.85}
-      >
-        <Text style={styles.pagBtnTxt}>Suivant</Text>
-      </TouchableOpacity>
-    </View>
-  );
+        <TouchableOpacity
+          onPress={() => {
+            setPage((p) => Math.min(pageCount, p + 1));
+            listRef.current?.scrollToOffset({ offset: 0, animated: true });
+          }}
+          disabled={page === pageCount}
+          style={[styles.pagBtn, page === pageCount && styles.pagBtnDisabled]}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.pagBtnTxt}>Suivant</Text>
+        </TouchableOpacity>
+      </View>
+    ) : null;
 
   if (loading) {
     return (
@@ -421,20 +423,7 @@ export default function ActusScreen() {
           />
 
           <View style={styles.heroTopRow}>
-            <TouchableOpacity
-              onPress={() =>
-                // @ts-ignore
-                (navigation as any).canGoBack()
-                  ? // @ts-ignore
-                    (navigation as any).goBack()
-                  : // @ts-ignore
-                    (navigation as any).navigate("Home")
-              }
-              style={styles.backBtn}
-              activeOpacity={0.9}
-            >
-              <Icon name="chevron-back" size={22} color="#F3F4F6" />
-            </TouchableOpacity>
+            <DrawerMenuButton style={styles.backBtn} />
 
             <View style={styles.heroTitleWrap}>
               <Text style={styles.heroTitle}>Actualites Comets</Text>

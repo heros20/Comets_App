@@ -2,7 +2,7 @@
 
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -23,7 +23,7 @@ import { useAdmin } from "../../contexts/AdminContext";
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { login } = useAdmin();
+  const { login, isAdmin, isMember } = useAdmin();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -34,6 +34,13 @@ export default function LoginScreen() {
 
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const passwordRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    if (isAdmin || isMember) {
+      setLoading(false);
+      router.replace("/");
+    }
+  }, [isAdmin, isMember, router]);
 
   const canSubmit = useMemo(() => {
     return !loading && email.trim().length > 4 && password.length > 2;
@@ -63,9 +70,21 @@ export default function LoginScreen() {
     setDebug("");
 
     try {
-      const success = await login(cleanEmail, password);
-      if (!success) {
-        setError("Identifiants invalides. Reessaie.");
+      const result = await Promise.race<
+        { ok: boolean; timeout: false } | { ok: false; timeout: true }
+      >([
+        login(cleanEmail, password).then((ok) => ({ ok, timeout: false as const })),
+        new Promise<{ ok: false; timeout: true }>((resolve) =>
+          setTimeout(() => resolve({ ok: false, timeout: true }), 12000),
+        ),
+      ]);
+
+      if (!result.ok) {
+        setError(
+          result.timeout
+            ? "Connexion trop longue. Verifie le reseau puis reessaie."
+            : "Identifiants invalides. Reessaie.",
+        );
         shake();
         return;
       }

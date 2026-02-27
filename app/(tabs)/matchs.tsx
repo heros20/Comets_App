@@ -1,9 +1,10 @@
 // app/screens/MatchsScreen.tsx
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import { useFocusEffect } from "@react-navigation/native";
 import * as Calendar from "expo-calendar";
 import { Asset } from "expo-asset";
 import { Image as ExpoImage } from "expo-image";
+import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Notifications from "expo-notifications";
 import React, {
@@ -18,6 +19,7 @@ import {
   Animated,
   Easing,
   FlatList,
+  Image as RNImage,
   Linking,
   Platform,
   StatusBar,
@@ -28,6 +30,7 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
+import { DrawerMenuButton } from "../../components/navigation/AppDrawer";
 import LogoutButton from "../../components/LogoutButton";
 import { useAdmin } from "../../contexts/AdminContext";
 import { supabase } from "../../supabase";
@@ -70,7 +73,7 @@ const COLORS = {
 
 const TOP_TABS = [
   { key: "upcoming", label: "A venir", icon: "calendar-outline" },
-  { key: "played", label: "Joues", icon: "list-outline" },
+  { key: "played", label: "joués", icon: "list-outline" },
 ] as const;
 
 const CATEGORY_FILTERS = ["Seniors", "15U", "12U"] as const;
@@ -574,7 +577,7 @@ function CometsToast({
 
 // ================== Screen ==================
 export default function MatchsScreen() {
-  const navigation = useNavigation();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { admin, setAdmin } = useAdmin() as any;
 
@@ -738,26 +741,33 @@ export default function MatchsScreen() {
   );
 
   // ===== Comptage des inscrits (par match) =====
-  const fetchCountFor = useCallback(async (mid: string | number) => {
-    const key = String(mid);
-    try {
-      const { count, error } = await supabase
-        .from("match_participations")
-        .select("*", { head: true, count: "exact" })
-        .eq("match_id", key);
-      if (!error && typeof count === "number") {
-        setCounts((c) => ({ ...c, [key]: count }));
-      }
-    } catch {}
-  }, []);
-
-  // Précharge les comptes pour les matchs à venir visibles
   useEffect(() => {
     const ids = plannedGames.map((m) => String(m.id));
-    ids.forEach((id) => {
-      if (counts[id] === undefined) fetchCountFor(id);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!ids.length) return;
+
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("match_participations")
+          .select("match_id")
+          .in("match_id", ids);
+        if (error) return;
+
+        const next: Record<string, number> = {};
+        ids.forEach((id) => {
+          next[id] = 0;
+        });
+        ((data ?? []) as { match_id: string | number | null }[]).forEach(
+          (row) => {
+            const key = String(row.match_id ?? "");
+            if (!key) return;
+            next[key] = (next[key] ?? 0) + 1;
+          },
+        );
+
+        setCounts(next);
+      } catch {}
+    })();
   }, [plannedGames]);
 
   // Data filtering
@@ -963,12 +973,29 @@ export default function MatchsScreen() {
     return LOGO_MAP[opponent] || LOGO_MAP[normalizeName(opponent)] || null;
   }
 
+  const openUpcomingDetail = useCallback(
+    (item: PlannedGame) => {
+      const href = `/match-detail?kind=upcoming&matchId=${encodeURIComponent(String(item.id))}`;
+      router.push(href as any);
+    },
+    [router],
+  );
+
+  const openPlayedDetail = useCallback(
+    (game: Game) => {
+      const href = `/match-detail?kind=played&matchId=${encodeURIComponent(String(game.id))}`;
+      router.push(href as any);
+    },
+    [router],
+  );
+
   // ================== UI Components ==================
   const UpcomingCard = ({ item }: { item: PlannedGame }) => {
     const mid = String(item.id);
     const isJoined = !!joined[mid];
     const isDeclined = !!declined[mid];
     const isPosting = !!posting[mid];
+    const opponentLogo = getOpponentLogo(item.opponent);
 
     const catOk =
       !item.categorie ||
@@ -987,13 +1014,27 @@ export default function MatchsScreen() {
     const declineOpacity = leaveDisabled ? (isDeclined ? 0.45 : 0.7) : 1;
 
     return (
-      <View style={styles.card}>
+      <TouchableOpacity
+        style={styles.card}
+        activeOpacity={0.96}
+        onPress={() => openUpcomingDetail(item)}
+      >
         <View style={styles.cardTopRow}>
           <Text style={styles.matchBadgeUpcoming}>À venir</Text>
           <Text style={styles.matchDate} numberOfLines={2}>
             {formatDateFr(item.date)}
           </Text>
         </View>
+
+        <TouchableOpacity
+          style={styles.detailBtn}
+          activeOpacity={0.85}
+          onPress={() => openUpcomingDetail(item)}
+        >
+          <Icon name="eye-outline" size={14} color="#CBD5E1" />
+          <Text style={styles.detailBtnTxt}>Voir le détail</Text>
+          <Icon name="chevron-forward" size={14} color="#94A3B8" />
+        </TouchableOpacity>
 
         {showParticipationControls && (
           <View style={styles.cardTopMetaRow}>
@@ -1026,12 +1067,11 @@ export default function MatchsScreen() {
           <View style={styles.teamCol}>
             {item.is_home ? (
               <>
-                <ExpoImage
+                <RNImage
                   source={LOGO_MAP["Honfleur"]}
                   style={styles.logoTeam}
-                  contentFit="cover"
-                  cachePolicy="memory-disk"
-                  transition={90}
+                  resizeMode="cover"
+                  fadeDuration={0}
                 />
                 <Text style={[styles.teamName, { color: COLORS.orange }]}>
                   Honfleur
@@ -1039,13 +1079,12 @@ export default function MatchsScreen() {
               </>
             ) : (
               <>
-                {getOpponentLogo(item.opponent) ? (
-                  <ExpoImage
-                    source={getOpponentLogo(item.opponent)}
+                {opponentLogo ? (
+                  <RNImage
+                    source={opponentLogo}
                     style={styles.logoTeam}
-                    contentFit="cover"
-                    cachePolicy="memory-disk"
-                    transition={90}
+                    resizeMode="cover"
+                    fadeDuration={0}
                   />
                 ) : (
                   <View style={[styles.logoTeam]} />
@@ -1066,13 +1105,12 @@ export default function MatchsScreen() {
           <View style={styles.teamCol}>
             {item.is_home ? (
               <>
-                {getOpponentLogo(item.opponent) ? (
-                  <ExpoImage
-                    source={getOpponentLogo(item.opponent)}
+                {opponentLogo ? (
+                  <RNImage
+                    source={opponentLogo}
                     style={styles.logoTeam}
-                    contentFit="cover"
-                    cachePolicy="memory-disk"
-                    transition={90}
+                    resizeMode="cover"
+                    fadeDuration={0}
                   />
                 ) : (
                   <View style={[styles.logoTeam]} />
@@ -1086,12 +1124,11 @@ export default function MatchsScreen() {
               </>
             ) : (
               <>
-                <ExpoImage
+                <RNImage
                   source={LOGO_MAP["Honfleur"]}
                   style={styles.logoTeam}
-                  contentFit="cover"
-                  cachePolicy="memory-disk"
-                  transition={90}
+                  resizeMode="cover"
+                  fadeDuration={0}
                 />
                 <Text style={[styles.teamName, { color: COLORS.orange }]}>
                   Honfleur
@@ -1141,8 +1178,6 @@ export default function MatchsScreen() {
             </Text>
           )}
         </View>
-        {showParticipationControls && (
-          <>
         <TouchableOpacity
           style={styles.calBtn}
           activeOpacity={0.88}
@@ -1165,55 +1200,57 @@ export default function MatchsScreen() {
           />
           <Text style={styles.calBtnTxt}>Ajouter au calendrier</Text>
         </TouchableOpacity>
-        {/* Boutons participation / non participation */}
-        <TouchableOpacity
-          disabled={joinDisabled}
-          accessibilityState={{ disabled: joinDisabled }}
-          onPress={() => handleParticipate(item)}
-          style={[
-            styles.joinBtn,
-            isJoined ? styles.actionBtnCurrent : null,
-            {
-              opacity: joinOpacity,
-              marginTop: 10,
-            },
-          ]}
-          activeOpacity={0.9}
-        >
-          <Icon
-            name="baseball-outline"
-            size={18}
-            color={isJoined ? COLORS.textMuted : "#fff"}
-            style={{ marginRight: 7 }}
-          />
-          <Text style={[styles.joinBtnTxt, isJoined ? styles.actionBtnCurrentTxt : null]}>
-            {isPosting ? "Inscription..." : "Je participe"}
-          </Text>
-        </TouchableOpacity>
+        {showParticipationControls && (
+          <>
+            {/* Boutons participation / non participation */}
+            <TouchableOpacity
+              disabled={joinDisabled}
+              accessibilityState={{ disabled: joinDisabled }}
+              onPress={() => handleParticipate(item)}
+              style={[
+                styles.joinBtn,
+                isJoined ? styles.actionBtnCurrent : null,
+                {
+                  opacity: joinOpacity,
+                  marginTop: 10,
+                },
+              ]}
+              activeOpacity={0.9}
+            >
+              <Icon
+                name="baseball-outline"
+                size={18}
+                color={isJoined ? COLORS.textMuted : "#fff"}
+                style={{ marginRight: 7 }}
+              />
+              <Text style={[styles.joinBtnTxt, isJoined ? styles.actionBtnCurrentTxt : null]}>
+                {isPosting ? "Inscription..." : "Je participe"}
+              </Text>
+            </TouchableOpacity>
 
-        <TouchableOpacity
-          onPress={() => handleUnparticipate(item)}
-          disabled={leaveDisabled}
-          style={[
-            styles.unsubscribeBtn,
-            isDeclined ? styles.actionBtnCurrent : null,
-            { opacity: declineOpacity },
-          ]}
-          activeOpacity={0.9}
-        >
-          <Icon
-            name="close-circle-outline"
-            size={18}
-            color={isDeclined ? COLORS.textMuted : "#fff"}
-            style={{ marginRight: 7 }}
-          />
-          <Text style={[styles.joinBtnTxt, isDeclined ? styles.actionBtnCurrentTxt : null]}>
-            {isPosting ? "Mise a jour..." : "Je ne participe pas"}
-          </Text>
-        </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => handleUnparticipate(item)}
+              disabled={leaveDisabled}
+              style={[
+                styles.unsubscribeBtn,
+                isDeclined ? styles.actionBtnCurrent : null,
+                { opacity: declineOpacity },
+              ]}
+              activeOpacity={0.9}
+            >
+              <Icon
+                name="close-circle-outline"
+                size={18}
+                color={isDeclined ? COLORS.textMuted : "#fff"}
+                style={{ marginRight: 7 }}
+              />
+              <Text style={[styles.joinBtnTxt, isDeclined ? styles.actionBtnCurrentTxt : null]}>
+                {isPosting ? "Mise a jour..." : "Je ne participe pas"}
+              </Text>
+            </TouchableOpacity>
           </>
         )}
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -1241,13 +1278,27 @@ export default function MatchsScreen() {
       : (g.team_score ?? "--");
 
     return (
-      <View style={styles.card}>
+      <TouchableOpacity
+        style={styles.card}
+        activeOpacity={0.96}
+        onPress={() => openPlayedDetail(g)}
+      >
         <View style={styles.cardTopRow}>
           <Text style={styles.matchBadgePlayed}>Match #{g.game_number}</Text>
           <Text style={styles.matchDate} numberOfLines={2}>
             {formatDateFr(g.date)}
           </Text>
         </View>
+
+        <TouchableOpacity
+          style={styles.detailBtn}
+          activeOpacity={0.85}
+          onPress={() => openPlayedDetail(g)}
+        >
+          <Icon name="eye-outline" size={14} color="#CBD5E1" />
+          <Text style={styles.detailBtnTxt}>Voir le détail</Text>
+          <Icon name="chevron-forward" size={14} color="#94A3B8" />
+        </TouchableOpacity>
 
         <View style={styles.venueRow}>
           <Icon
@@ -1263,12 +1314,11 @@ export default function MatchsScreen() {
         <View style={styles.scoresRow}>
           <View style={styles.teamScoreCol}>
             {leftLogo && (
-              <ExpoImage
+              <RNImage
                 source={leftLogo}
                 style={styles.logoTeam}
-                contentFit="cover"
-                cachePolicy="memory-disk"
-                transition={90}
+                resizeMode="cover"
+                fadeDuration={0}
               />
             )}
             <Text
@@ -1287,12 +1337,11 @@ export default function MatchsScreen() {
 
           <View style={styles.teamScoreCol}>
             {rightLogo && (
-              <ExpoImage
+              <RNImage
                 source={rightLogo}
                 style={styles.logoTeam}
-                contentFit="cover"
-                cachePolicy="memory-disk"
-                transition={90}
+                resizeMode="cover"
+                fadeDuration={0}
               />
             )}
             <Text
@@ -1333,7 +1382,7 @@ export default function MatchsScreen() {
             </TouchableOpacity>
           )}
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -1370,20 +1419,7 @@ export default function MatchsScreen() {
           />
 
           <View style={styles.heroTopRow}>
-            <TouchableOpacity
-              onPress={() =>
-                // @ts-ignore
-                (navigation as any).canGoBack()
-                  ? // @ts-ignore
-                    (navigation as any).goBack()
-                  : // @ts-ignore
-                    (navigation as any).navigate("Home")
-              }
-              style={styles.backBtn}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Icon name="chevron-back" size={22} color="#F3F4F6" />
-            </TouchableOpacity>
+            <DrawerMenuButton style={styles.backBtn} />
 
             <View style={styles.heroTitleWrap}>
               <Text style={styles.heroTitle}>Calendrier des matchs</Text>
@@ -1395,7 +1431,7 @@ export default function MatchsScreen() {
 
           <View style={styles.heroMetaCompactRow}>
             <Text style={styles.heroMetaText}>
-              {totalUpcoming} a venir | {totalPlayed} joues
+              {totalUpcoming} à venir | {totalPlayed} joués
             </Text>
             <View style={styles.heroPill}>
               <Icon
@@ -1494,8 +1530,8 @@ export default function MatchsScreen() {
               ListEmptyComponent={
                 <Text style={styles.emptyTxt}>
                   {selectedTab === "upcoming"
-                    ? `Aucun match en ${catFilter} a venir.`
-                    : "Aucun match joue a afficher."}
+                    ? `Aucun match en ${catFilter} à venir.`
+                    : "Aucun match joué a afficher."}
                 </Text>
               }
               renderItem={({ item }) => {
@@ -1805,6 +1841,24 @@ const styles = StyleSheet.create({
     minWidth: 0,
     maxWidth: "62%",
     textAlign: "right",
+  },
+  detailBtn: {
+    alignSelf: "flex-end",
+    marginTop: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+  },
+  detailBtnTxt: {
+    color: "#CBD5E1",
+    fontSize: 11.5,
+    fontWeight: "800",
   },
 
   venueRow: {

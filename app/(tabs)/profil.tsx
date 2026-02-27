@@ -1,7 +1,7 @@
 // app/screens/ProfilPlayerScreen.tsx
 "use client";
 
-import { useNavigation, useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect } from "@react-navigation/native";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LinearGradient } from "expo-linear-gradient";
 import {
@@ -21,6 +21,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 import { Picker } from "@react-native-picker/picker";
+import { DrawerMenuButton } from "../../components/navigation/AppDrawer";
 import { useAdmin } from "../../contexts/AdminContext";
 import { supabase } from "../../supabase";
 
@@ -142,7 +143,6 @@ const POSITIONS = [
 const ALLOWED_POSITIONS = POSITIONS.map((p) => p.value);
 
 export default function ProfilPlayerScreen() {
-  const navigation = useNavigation();
   const { logout, admin } = useAdmin();
 
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
@@ -152,7 +152,6 @@ export default function ProfilPlayerScreen() {
   const [cotisations, setCotisations] = useState<any[]>([]);
   const [youngPlayers, setYoungPlayers] = useState<any[]>([]);
 
-  const [edit, setEdit] = useState(false);
   const [form, setForm] = useState<any>({});
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -176,30 +175,7 @@ export default function ProfilPlayerScreen() {
   // Refetch sur focus (évite profil vide après inactivité)
   const lastFetchRef = useRef<number>(0);
 
-  useEffect(() => {
-    fetchAll(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useFocusEffect(
-    useCallback(() => {
-      const now = Date.now();
-      if (!lastFetchRef.current || now - lastFetchRef.current > 60_000) {
-        fetchAll(false);
-      }
-    }, [])
-  );
-
-  useEffect(() => {
-    if (!loading) {
-      setShowSlowLoading(false);
-      return;
-    }
-    const timer = setTimeout(() => setShowSlowLoading(true), 650);
-    return () => clearTimeout(timer);
-  }, [loading]);
-
-  const ensureSession = async () => {
+  const ensureSession = useCallback(async () => {
     // Assure une session valide (evite profil vide si token perime)
     const { data } = await supabase.auth.getSession();
     if (!data?.session) {
@@ -213,9 +189,9 @@ export default function ProfilPlayerScreen() {
       data: { session },
     } = await supabase.auth.getSession();
     return session?.access_token || null;
-  };
+  }, []);
 
-  const fetchAll = async (initial = false) => {
+  const fetchAll = useCallback(async (initial = false) => {
     if (initial) setLoading(true);
     try {
       const token = await ensureSession();
@@ -292,7 +268,35 @@ export default function ProfilPlayerScreen() {
     } finally {
       if (initial) setLoading(false);
     }
-  };
+  }, [
+    admin?.email,
+    admin?.first_name,
+    admin?.last_name,
+    admin?.participations,
+    ensureSession,
+  ]);
+
+  useEffect(() => {
+    fetchAll(true);
+  }, [fetchAll]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const now = Date.now();
+      if (!lastFetchRef.current || now - lastFetchRef.current > 60_000) {
+        fetchAll(false);
+      }
+    }, [fetchAll])
+  );
+
+  useEffect(() => {
+    if (!loading) {
+      setShowSlowLoading(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowSlowLoading(true), 650);
+    return () => clearTimeout(timer);
+  }, [loading]);
 
   // === Lien FFBS (d'après players)
   const ffbsLink = useMemo(() => {
@@ -400,7 +404,6 @@ export default function ProfilPlayerScreen() {
         }));
       }
 
-      setEdit(false);
       setActiveTab("overview");
       Alert.alert("Succès", "Profil mis à jour !");
     } catch {
@@ -464,7 +467,6 @@ export default function ProfilPlayerScreen() {
   };
 
   const handleCancelProfile = () => {
-    setEdit(false);
     setActiveTab("overview");
     setForm({
       email: profile?.email ?? "",
@@ -628,8 +630,6 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
     <TouchableOpacity
       onPress={() => {
         setActiveTab(id);
-        if (id === "edit") setEdit(true);
-        else setEdit(false);
       }}
       style={[styles.tabBtn, active && styles.tabBtnActive]}
       activeOpacity={0.9}
@@ -663,19 +663,7 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
           />
 
           <View style={styles.heroRow}>
-            <TouchableOpacity
-              onPress={() =>
-                // @ts-ignore
-                (navigation as any).canGoBack()
-                  ? // @ts-ignore
-                    (navigation as any).goBack()
-                  : // @ts-ignore
-                    (navigation as any).navigate("Home")
-              }
-              style={styles.backBtnHero}
-            >
-              <Icon name="chevron-back" size={22} color="#F3F4F6" />
-            </TouchableOpacity>
+            <DrawerMenuButton style={styles.backBtnHero} />
 
             <View style={styles.heroHeading}>
               <Text style={styles.heroEyebrow}>Espace joueur</Text>

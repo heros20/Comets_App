@@ -29,7 +29,7 @@ function OrientationGuard() {
         console.log("Orientation lock error:", e);
       }
     })();
-  }, [isGame]);
+  }, [isGame, LANDSCAPE_LOCK]);
 
   return null;
 }
