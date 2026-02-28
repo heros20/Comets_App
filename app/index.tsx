@@ -3,8 +3,9 @@
 import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import React, { startTransition, useCallback, useEffect, useMemo, useState } from "react";
+import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Animated,
   FlatList,
   InteractionManager,
   Linking,
@@ -15,7 +16,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 
 import { DrawerMenuButton } from "../components/navigation/AppDrawer";
@@ -141,6 +142,7 @@ function mix<T>(pools: Record<string, T[]>, pattern: string[]) {
 }
 
 export default function Accueil() {
+  const insets = useSafeAreaInsets();
   const { isAdmin, isMember } = useAdmin();
   const statusLabel = isAdmin ? "Admin" : isMember ? "Membre" : "Visiteur";
 
@@ -156,6 +158,11 @@ export default function Accueil() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [relativeNow, setRelativeNow] = useState(() => Date.now());
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const flatListRef = useRef<FlatList<FeedItem>>(null);
+  const showScrollTopRef = useRef(false);
+  const scrollTopAnim = useRef(new Animated.Value(0)).current;
+  const scrollTopPressAnim = useRef(new Animated.Value(0)).current;
 
   const loadFeed = useCallback(async (mode: "initial" | "refresh" = "initial") => {
     if (mode === "initial") setLoading(true);
@@ -204,7 +211,27 @@ export default function Accueil() {
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    Animated.timing(scrollTopAnim, {
+      toValue: showScrollTop ? 1 : 0,
+      duration: showScrollTop ? 180 : 120,
+      useNativeDriver: true,
+    }).start();
+  }, [scrollTopAnim, showScrollTop]);
+
   const lastSyncLabel = useMemo(() => formatRelativeSyncLabel(lastSyncAt, relativeNow), [lastSyncAt, relativeNow]);
+  const scrollTopAnimatedStyle = useMemo(() => {
+    const revealScale = scrollTopAnim.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] });
+    const pressScale = scrollTopPressAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0.94] });
+
+    return {
+      opacity: scrollTopAnim,
+      transform: [
+        { translateY: scrollTopAnim.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) },
+        { scale: Animated.multiply(revealScale, pressScale) },
+      ],
+    };
+  }, [scrollTopAnim, scrollTopPressAnim]);
 
   const upcomingMatches = useMemo(() => {
     const today = new Date();
@@ -284,6 +311,31 @@ export default function Accueil() {
   }, []);
 
   const keyExtractor = useCallback((item: FeedItem) => item.key, []);
+  const onScroll = useCallback((event: any) => {
+    const next = event.nativeEvent.contentOffset.y > 260;
+    if (showScrollTopRef.current === next) return;
+    showScrollTopRef.current = next;
+    setShowScrollTop(next);
+  }, []);
+  const scrollToTop = useCallback(() => {
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, []);
+  const onScrollTopPressIn = useCallback(() => {
+    Animated.spring(scrollTopPressAnim, {
+      toValue: 1,
+      speed: 28,
+      bounciness: 0,
+      useNativeDriver: true,
+    }).start();
+  }, [scrollTopPressAnim]);
+  const onScrollTopPressOut = useCallback(() => {
+    Animated.spring(scrollTopPressAnim, {
+      toValue: 0,
+      speed: 24,
+      bounciness: 0,
+      useNativeDriver: true,
+    }).start();
+  }, [scrollTopPressAnim]);
 
   const sectionShortcut =
     filter === "cometsRun"
@@ -291,11 +343,13 @@ export default function Accueil() {
       : { label: "Calendrier", route: "/matchs" };
   const statusPillTone = isAdmin ? styles.statusPillAdmin : isMember ? styles.statusPillMember : styles.statusPillVisitor;
   const statusDotTone = isAdmin ? styles.statusDotAdmin : isMember ? styles.statusDotMember : styles.statusDotVisitor;
+  const scrollTopBottom = Math.max(24, insets.bottom + 12);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <StatusBar barStyle="light-content" />
       <FlatList
+        ref={flatListRef}
         data={visibleFeed}
         keyExtractor={keyExtractor}
         showsVerticalScrollIndicator={false}
@@ -309,6 +363,8 @@ export default function Accueil() {
         windowSize={WINDOW_SIZE}
         updateCellsBatchingPeriod={45}
         removeClippedSubviews={Platform.OS === "android"}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
         ListHeaderComponent={
           <>
             <LinearGradient colors={["#18263B", "#101A2A", "#0B101A"]} style={styles.hero}>
@@ -458,6 +514,20 @@ export default function Accueil() {
           </>
         }
       />
+      <Animated.View
+        pointerEvents={showScrollTop ? "auto" : "none"}
+        style={[styles.scrollTopWrap, { bottom: scrollTopBottom }, scrollTopAnimatedStyle]}
+      >
+        <TouchableOpacity
+          style={styles.scrollTopBtn}
+          onPress={scrollToTop}
+          onPressIn={onScrollTopPressIn}
+          onPressOut={onScrollTopPressOut}
+          activeOpacity={0.94}
+        >
+          <Icon name="chevron-up" size={24} color="#FFB366" />
+        </TouchableOpacity>
+      </Animated.View>
     </SafeAreaView>
   );
 }
@@ -543,4 +613,6 @@ const styles = StyleSheet.create({
   moreText: { color: "#FFD5AF", fontSize: 13.5, fontWeight: "900" },
   footer: { marginTop: 22 },
   footerLink: { marginTop: 10, color: "#8D98AA", textAlign: "center", fontSize: 11.8, lineHeight: 17 },
+  scrollTopWrap: { position: "absolute", right: 18 },
+  scrollTopBtn: { width: 46, height: 46, borderRadius: 23, alignItems: "center", justifyContent: "center", backgroundColor: "#101827EE", borderWidth: 1.5, borderColor: "#FF9E3A", shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 4 },
 });
