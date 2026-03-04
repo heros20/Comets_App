@@ -13,6 +13,7 @@ export type Admin = {
   id: string;
   email: string;
   role: Role;
+  session_token?: string;
   participations?: number;
   first_name?: string;
   last_name?: string;
@@ -27,6 +28,8 @@ type AdminContextType = {
   setAdmin: React.Dispatch<React.SetStateAction<Admin | null>>;
   login: (email: string, password: string) => Promise<boolean>;
   register: (email: string, password: string) => Promise<boolean>;
+  requestPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
+  resetPassword: (token: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   logout: () => Promise<void>;
   checkSession: () => Promise<void>;
 };
@@ -39,6 +42,8 @@ const AdminContext = createContext<AdminContextType>({
   setAdmin: () => {},
   login: async () => false,
   register: async () => false,
+  requestPasswordReset: async () => ({ ok: false }),
+  resetPassword: async () => ({ ok: false }),
   logout: async () => {},
   checkSession: async () => {},
 });
@@ -104,6 +109,7 @@ function parseStoredSession(raw: string | null): Admin | null {
     id,
     email,
     role: parsed.role,
+    session_token: typeof parsed?.session_token === "string" ? parsed.session_token : undefined,
     participations:
       typeof parsed?.participations === "number" && Number.isFinite(parsed.participations)
         ? parsed.participations
@@ -197,6 +203,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
               prev.id === hydrated.id &&
               prev.email === hydrated.email &&
               prev.role === hydrated.role &&
+              (prev.session_token ?? "") === (hydrated.session_token ?? "") &&
               (prev.participations ?? 0) === (hydrated.participations ?? 0) &&
               (prev.first_name ?? "") === (hydrated.first_name ?? "") &&
               (prev.last_name ?? "") === (hydrated.last_name ?? "")
@@ -266,6 +273,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         email: emailNormalized,
         id,
         role: data.role,
+        session_token: typeof data?.session_token === "string" ? data.session_token : undefined,
         participations:
           typeof data?.participations === "number" && Number.isFinite(data.participations)
             ? data.participations
@@ -298,6 +306,75 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const requestPasswordReset = async (email: string) => {
+    try {
+      const normalizedEmail = email.trim().toLowerCase();
+      const res = await fetchWithTimeout(`${API_BASE}/api/forgot-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: normalizedEmail, channel: "app" }),
+      });
+
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+
+      if (!res.ok) {
+        return {
+          ok: false,
+          error:
+            typeof data?.error === "string" && data.error.trim()
+              ? data.error.trim()
+              : "Impossible d'envoyer l'e-mail de réinitialisation.",
+        };
+      }
+
+      return { ok: true };
+    } catch {
+      return {
+        ok: false,
+        error: "Erreur réseau. Réessaie plus tard.",
+      };
+    }
+  };
+
+  const resetPassword = async (token: string, password: string) => {
+    try {
+      const res = await fetchWithTimeout(`${API_BASE}/api/reset-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, password }),
+      });
+
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+
+      if (!res.ok) {
+        return {
+          ok: false,
+          error:
+            typeof data?.error === "string" && data.error.trim()
+              ? data.error.trim()
+              : "Impossible de reinitialiser le mot de passe.",
+        };
+      }
+
+      return { ok: true };
+    } catch {
+      return {
+        ok: false,
+        error: "Erreur reseau. Reessaie plus tard.",
+      };
+    }
+  };
+
   const logout = async () => {
     try {
       const sessionStr = await SecureStore.getItemAsync(SESSION_KEY);
@@ -325,6 +402,8 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         setAdmin,
         login,
         register,
+        requestPasswordReset,
+        resetPassword,
         logout,
         checkSession,
       }}

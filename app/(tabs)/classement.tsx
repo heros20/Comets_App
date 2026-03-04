@@ -18,7 +18,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 
 import { DrawerMenuButton } from "../../components/navigation/AppDrawer";
-import LogoutButton from "../../components/LogoutButton";
 import { supabase } from "../../supabase";
 
 const logoComets = require("../../assets/images/iconComets.png");
@@ -372,7 +371,6 @@ export default function ClassementScreen() {
               <Text style={styles.heroSub}>{currentTabLabel}</Text>
             </View>
 
-            <LogoutButton />
           </View>
 
           <View style={styles.heroMetaRow}>
@@ -385,7 +383,7 @@ export default function ClassementScreen() {
             />
             <View style={styles.heroMetaContent}>
               <Text style={styles.heroSeason}>{seasonLabel}</Text>
-              <Text style={styles.heroMetaText}>{currentRows.length} equipes classees</Text>
+              <Text style={styles.heroMetaText}>{currentRows.length} équipes classées</Text>
             </View>
             <View style={styles.heroPill}>
               <Icon name="trophy-outline" size={13} color="#FFDDBA" />
@@ -439,7 +437,7 @@ export default function ClassementScreen() {
               </View>
             </View>
           }
-          ListEmptyComponent={<Text style={styles.emptyText}>Aucune equipe dans cette poule.</Text>}
+          ListEmptyComponent={<Text style={styles.emptyText}>Aucune équipe dans cette poule.</Text>}
           initialNumToRender={12}
           maxToRenderPerBatch={12}
           windowSize={8}

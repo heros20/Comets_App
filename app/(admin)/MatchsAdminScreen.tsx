@@ -211,7 +211,7 @@ export default function MatchsAdminScreen() {
   const Header = () => (
     <AdminHero
       title="Matchs participations"
-      subtitle="Suivi des inscrits par categorie"
+      subtitle="Suivi des inscrits par catégorie"
       onBack={() =>
         // @ts-ignore
         (navigation as any).canGoBack()

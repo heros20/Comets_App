@@ -113,7 +113,7 @@ function catMetaOf(value: CatValue) {
 }
 
 function catLabel(value: CategoryFilter) {
-  if (value === "ALL") return "Toutes categories";
+  if (value === "ALL") return "Toutes catégories";
   return catMetaOf(value).label;
 }
 
@@ -205,7 +205,7 @@ const ArticleCard = React.memo(function ArticleCard({ article, index, onOpen }: 
         <Text style={styles.cardExcerpt}>{excerpt(article.content, 180)}</Text>
 
         <View style={styles.readRow}>
-          <Text style={styles.readBtnTxt}>Lire l article</Text>
+          <Text style={styles.readBtnTxt}>Lire l'article</Text>
           <Icon name="chevron-forward" size={18} color="#111827" />
         </View>
       </View>
@@ -262,7 +262,7 @@ export default function ActusScreen() {
       } catch (e: any) {
         if (!mounted || e?.name === "AbortError") return;
         setArticles([]);
-        setErrorMsg("Impossible de charger les actualites.");
+        setErrorMsg("Impossible de charger les actualités.");
       } finally {
         if (mounted) setLoading(false);
       }
@@ -426,7 +426,7 @@ export default function ActusScreen() {
             <DrawerMenuButton style={styles.backBtn} />
 
             <View style={styles.heroTitleWrap}>
-              <Text style={styles.heroTitle}>Actualites Comets</Text>
+              <Text style={styles.heroTitle}>Actualités Comets</Text>
               <Text style={styles.heroSub}>
                 {selectedSeason === "ALL" ? "Toutes saisons" : `Saison ${selectedSeason}`}
               </Text>
@@ -493,7 +493,7 @@ export default function ActusScreen() {
 
       {filtered.length === 0 ? (
         <View style={styles.loaderBox}>
-          <Text style={styles.emptyTxt}>Aucun article a afficher pour ces filtres.</Text>
+          <Text style={styles.emptyTxt}>Aucun article à afficher pour ces filtres.</Text>
           {!!errorMsg && <Text style={styles.errorTxt}>{errorMsg}</Text>}
         </View>
       ) : (

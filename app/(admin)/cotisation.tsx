@@ -166,7 +166,7 @@ export default function CotisationAdminScreen() {
       <StatusBar barStyle="light-content" />
       <AdminHero
         title="Cotisations"
-        subtitle="Paiements recus - Filtre par categorie"
+        subtitle="Paiements reçus - Filtre par catégorie"
         onBack={() => (router.canGoBack() ? router.back() : router.replace("/"))}
       />
 

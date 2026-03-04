@@ -449,8 +449,8 @@ export default function AdminMatchsScreen({ navigation }: any) {
     <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
       <StatusBar barStyle="light-content" />
       <AdminHero
-        title="Matchs a venir admin"
-        subtitle="Planifie date, adversaire, lieu, categorie et note"
+        title="Matchs à venir admin"
+        subtitle="Planifie date, adversaire, lieu, catégorie et note"
         onBack={() => (router.canGoBack() ? router.back() : navigation?.goBack?.())}
       />
 

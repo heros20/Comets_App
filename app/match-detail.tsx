@@ -29,6 +29,37 @@ const TEAM_NAMES: Record<string, string> = {
   CHE: "Cherbourg",
   WAL: "Louviers",
   AND: "Les Andelys",
+  STL: "Saint-Lô",
+};
+
+const TEAM_ALIASES: Record<string, string> = {
+  hon: "Honfleur",
+  honfleur: "Honfleur",
+  lha: "Le Havre",
+  havre: "Le Havre",
+  "le havre": "Le Havre",
+  sailors: "Le Havre",
+  rou: "Rouen",
+  rouen: "Rouen",
+  dragons: "Rouen",
+  cae: "Caen",
+  caen: "Caen",
+  phenix: "Caen",
+  che: "Cherbourg",
+  cherbourg: "Cherbourg",
+  seagulls: "Cherbourg",
+  wal: "Louviers",
+  louviers: "Louviers",
+  wallabies: "Louviers",
+  and: "Les Andelys",
+  andelys: "Les Andelys",
+  "les andelys": "Les Andelys",
+  stl: "Saint-Lô",
+  "saint lo": "Saint-Lô",
+  "saint-lo": "Saint-Lô",
+  "saint lô": "Saint-Lô",
+  "saint-lô": "Saint-Lô",
+  jimmers: "Saint-Lô",
 };
 
 const LOGO_MAP: Record<string, any> = {
@@ -40,7 +71,7 @@ const LOGO_MAP: Record<string, any> = {
   "Le Havre": require("../assets/images/Le_Havre.png"),
   Rouen: require("../assets/images/Rouen.jpg"),
   Honfleur: require("../assets/images/Honfleur.png"),
-  "Saint-LÃ´": require("../assets/images/Saint-Lo.jpg"),
+  "Saint-Lô": require("../assets/images/Saint-Lo.jpg"),
   "Saint-Lo": require("../assets/images/Saint-Lo.jpg"),
 };
 
@@ -76,12 +107,89 @@ type AdminRow = {
   email?: string | null;
 };
 type Participant = { id: string; name: string };
+type VenueInfo = { label: string; address: string };
+
+const VENUE_MAP: Record<string, VenueInfo> = {
+  Honfleur: {
+    label: "Stade d'Honfleur",
+    address: "Avenue de la brigade Piron, 14600 Honfleur",
+  },
+  Rouen: {
+    label: "Stade de Rouen",
+    address: "37 rue Verdi, 76000 Rouen",
+  },
+  Caen: {
+    label: "Stade de Caen",
+    address: "26 rue Henri de Montherlant, 14123 Ifs",
+  },
+  Louviers: {
+    label: "Stade de Louviers",
+    address: "Mairie de Louviers CS 10621 2, 27406 Louviers Cedex",
+  },
+  "Le Havre": {
+    label: "Stade du Havre",
+    address: "19 rue Hélène Boucher, 76600 Le Havre",
+  },
+  "Les Andelys": {
+    label: "Stade des Andelys",
+    address: "Allée du Roi de Rome, 27700 Les Andelys",
+  },
+  "Saint-Lo": {
+    label: "Stade de Saint-Lô",
+    address: "Rue des Ronchettes, 50000 Saint-Lô",
+  },
+  Cherbourg: {
+    label: "Stade de Cherbourg",
+    address: "Place de la République, 50100 Cherbourg",
+  },
+};
 
 function normalizeName(name: string) {
   return name.replace(/^Les\s+/i, "").trim();
 }
+
+function normalizeTeamKey(name: string) {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function resolveTeamName(name?: string | null) {
+  if (!name) return null;
+
+  const raw = String(name).trim();
+  if (!raw) return null;
+
+  const byAbbr = TEAM_NAMES[raw.toUpperCase()];
+  if (byAbbr) return byAbbr;
+
+  const normalized = normalizeTeamKey(raw);
+  const exactAlias = TEAM_ALIASES[normalized];
+  if (exactAlias) return exactAlias;
+
+  const partialAlias = Object.entries(TEAM_ALIASES).find(
+    ([alias]) => alias.length > 3 && normalized.includes(alias),
+  );
+  if (partialAlias) return partialAlias[1];
+
+  return raw;
+}
+
 function getTeamLogo(name: string) {
-  return LOGO_MAP[name] || LOGO_MAP[normalizeName(name)] || null;
+  const resolvedName = resolveTeamName(name) ?? name;
+  return LOGO_MAP[resolvedName] || LOGO_MAP[normalizeName(resolvedName)] || null;
+}
+function getVenueInfo(name?: string | null) {
+  const resolvedName = resolveTeamName(name);
+  if (!resolvedName) return null;
+  if (resolvedName === "Saint-Lô") return VENUE_MAP["Saint-Lo"] || null;
+  return VENUE_MAP[resolvedName] || null;
+}
+function getGoogleMapsUrl(address: string) {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 }
 function parseDateValue(dateValue: string): Date | null {
   if (!dateValue) return null;
@@ -116,10 +224,10 @@ function formatDateLong(dateValue?: string | null) {
   });
 }
 function formatResultLabel(result?: string | null) {
-  if (!result) return "Resultat non renseigne";
+  if (!result) return "Résultat non renseigné";
   if (result === "W") return "Victoire";
-  if (result === "L") return "Defaite";
-  if (result === "T") return "Egalite";
+  if (result === "L") return "Défaite";
+  if (result === "T") return "Égalité";
   return String(result);
 }
 
@@ -150,7 +258,7 @@ export default function MatchDetailScreen() {
 
   useEffect(() => {
     if (!matchId) {
-      setErrorMsg("Aucun match selectionne.");
+      setErrorMsg("Aucun match sélectionné.");
       setLoading(false);
       return;
     }
@@ -239,7 +347,7 @@ export default function MatchDetailScreen() {
             .select("*")
             .eq("id", mid)
             .maybeSingle();
-          if (error || !data) throw new Error("Match joue introuvable");
+          if (error || !data) throw new Error("Match joué introuvable");
           if (!mounted) return;
           setPlayed(data as PlayedGame);
         } else {
@@ -248,7 +356,7 @@ export default function MatchDetailScreen() {
             .select("*")
             .eq("id", mid)
             .maybeSingle();
-          if (error || !data) throw new Error("Match a venir introuvable");
+          if (error || !data) throw new Error("Match à venir introuvable");
           if (!mounted) return;
           setUpcoming(data as PlannedGame);
         }
@@ -271,23 +379,22 @@ export default function MatchDetailScreen() {
   const isUpcoming = kind === "upcoming";
 
   const opponentName = useMemo(() => {
-    if (isUpcoming) return upcoming?.opponent || "Adversaire";
-    const abbr = played?.opponent_abbr || "";
-    return TEAM_NAMES[abbr] || abbr || "Adversaire";
+    const rawOpponent = isUpcoming ? upcoming?.opponent : played?.opponent_abbr;
+    return resolveTeamName(rawOpponent) || rawOpponent || "Adversaire";
   }, [isUpcoming, played?.opponent_abbr, upcoming?.opponent]);
 
   const homeName = useMemo(() => {
     if (isUpcoming) return upcoming?.is_home ? "Honfleur" : opponentName;
     const teamAbbr = played?.team_abbr || "HON";
     const homeAbbr = played?.is_home ? teamAbbr : played?.opponent_abbr || "";
-    return TEAM_NAMES[homeAbbr] || homeAbbr || "Domicile";
+    return resolveTeamName(homeAbbr) || homeAbbr || "Domicile";
   }, [isUpcoming, opponentName, played?.is_home, played?.opponent_abbr, played?.team_abbr, upcoming?.is_home]);
 
   const awayName = useMemo(() => {
     if (isUpcoming) return upcoming?.is_home ? opponentName : "Honfleur";
     const teamAbbr = played?.team_abbr || "HON";
     const awayAbbr = played?.is_home ? played?.opponent_abbr || "" : teamAbbr;
-    return TEAM_NAMES[awayAbbr] || awayAbbr || "Exterieur";
+    return resolveTeamName(awayAbbr) || awayAbbr || "Extérieur";
   }, [isUpcoming, opponentName, played?.is_home, played?.opponent_abbr, played?.team_abbr, upcoming?.is_home]);
 
   const homeScore = !isUpcoming
@@ -318,16 +425,25 @@ export default function MatchDetailScreen() {
       : isUpcoming && awayName === opponentName && opponentRemoteLogo
         ? opponentRemoteLogo
         : getTeamLogo(awayName);
+  const venueTeam = isUpcoming
+    ? upcoming?.is_home
+      ? "Honfleur"
+      : opponentName
+    : played?.is_home
+      ? "Honfleur"
+      : opponentName;
+  const venueInfo = getVenueInfo(venueTeam);
+  const venueMapsUrl = venueInfo ? getGoogleMapsUrl(venueInfo.address) : null;
 
   const dateValue = isUpcoming ? upcoming?.date : played?.date;
   const venueLabel = isUpcoming
     ? upcoming?.is_home
-      ? "A domicile"
-      : "Exterieur"
+      ? "À domicile"
+      : "Extérieur"
     : played?.is_home
-      ? "A domicile"
-      : "Exterieur";
-  const category = isUpcoming ? upcoming?.categorie || "Non precisee" : "Match joue";
+      ? "À domicile"
+      : "Extérieur";
+  const category = isUpcoming ? upcoming?.categorie || "Non précisée" : "Match joué";
   const note = isUpcoming ? upcoming?.note || "" : played?.note || "";
   const resultLabel = !isUpcoming ? formatResultLabel(played?.result) : null;
   const resultBadgeColor =
@@ -338,7 +454,7 @@ export default function MatchDetailScreen() {
   const shareText = `${shareTitle}
 ${formatDateLong(dateValue || "")}
 ${venueLabel}
-Categorie: ${category}
+Catégorie : ${category}
 Participants: ${participantCount}`;
 
   const shareTargets = useMemo(
@@ -461,8 +577,8 @@ Participants: ${participantCount}`;
             </TouchableOpacity>
 
             <View style={styles.heroTitleWrap}>
-              <Text style={styles.heroTitle}>Detail du match</Text>
-              <Text style={styles.heroSub}>{isUpcoming ? "A venir" : "Joue"}</Text>
+              <Text style={styles.heroTitle}>Détail du match</Text>
+              <Text style={styles.heroSub}>{isUpcoming ? "À venir" : "Joué"}</Text>
             </View>
 
             {!isUpcoming && resultLabel ? (
@@ -508,10 +624,21 @@ Participants: ${participantCount}`;
           </View>
 
           {!!note && (
-            <View style={styles.noteBox}>
-              <Icon name="information-circle-outline" size={16} color="#F59E0B" />
-              <Text style={styles.noteTxt}>{note}</Text>
-            </View>
+            venueMapsUrl ? (
+              <TouchableOpacity style={styles.noteBox} activeOpacity={0.9} onPress={() => openUrl(venueMapsUrl)}>
+                <Icon name="information-circle-outline" size={16} color="#F59E0B" />
+                <View style={styles.noteContent}>
+                  <Text style={styles.noteTxt}>{note}</Text>
+                  <Text style={styles.noteLinkTxt}>Ouvrir le lieu dans Google Maps</Text>
+                </View>
+                <Icon name="open-outline" size={16} color="#F59E0B" />
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.noteBox}>
+                <Icon name="information-circle-outline" size={16} color="#F59E0B" />
+                <Text style={styles.noteTxt}>{note}</Text>
+              </View>
+            )
           )}
 
           {!!played?.boxscore_link && (
@@ -538,7 +665,7 @@ Participants: ${participantCount}`;
           </View>
 
           {participants.length === 0 ? (
-            <Text style={styles.emptyParticipants}>Aucun participant renseigne pour le moment.</Text>
+            <Text style={styles.emptyParticipants}>Aucun participant renseigné pour le moment.</Text>
           ) : (
             <View style={styles.participantsList}>
               {participants.map((p) => (
@@ -554,7 +681,7 @@ Participants: ${participantCount}`;
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Partager ce match</Text>
           <Text style={styles.shareSub}>
-            Diffuse le rendez-vous a ton equipe et sur les reseaux du club.
+            Diffuse le rendez-vous à ton équipe et sur les réseaux du club.
           </Text>
 
           <TouchableOpacity style={styles.sharePrimary} activeOpacity={0.9} onPress={openNativeShare}>
@@ -669,7 +796,9 @@ const styles = StyleSheet.create({
     borderColor: "rgba(245,158,11,0.4)",
     backgroundColor: "rgba(245,158,11,0.1)",
   },
+  noteContent: { flex: 1 },
   noteTxt: { color: "#E5E7EB", fontSize: 13.5, fontWeight: "600", flex: 1 },
+  noteLinkTxt: { color: "#FDBA74", fontSize: 12, fontWeight: "800", marginTop: 6 },
   boxscoreBtn: {
     marginTop: 12,
     borderRadius: 10,
@@ -746,4 +875,3 @@ const styles = StyleSheet.create({
   },
   shareBtnTxt: { color: "#e5e7eb", fontWeight: "800", fontSize: 12.5 },
 });
-

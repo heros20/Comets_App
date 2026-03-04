@@ -36,6 +36,11 @@ type Row = {
   best_score: number;
   total_runs: number;
   last_run_at: string | null;
+  equipped_title: string | null;
+  equipped_trail: string | null;
+  equipped_theme: string | null;
+  public_near_misses: number;
+  public_missions_done: number;
   admins: AdminInfo | null;
 };
 
@@ -51,8 +56,20 @@ type RawRunRow = {
 
 type RawProfileIdentityRow = {
   admin_id: string;
+  equipped_title?: string | null;
+  equipped_trail?: string | null;
+  equipped_theme?: string | null;
+  public_near_misses?: number | null;
+  public_missions_done?: number | null;
   admins: AdminInfo | AdminInfo[] | null;
 };
+
+function formatEquipLabel(value: string | null | undefined) {
+  if (!value) return null;
+  return value
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
 
 function normalizeAdmin(admins: AdminInfo | AdminInfo[] | null): AdminInfo | null {
   if (Array.isArray(admins)) return admins[0] ?? null;
@@ -83,7 +100,7 @@ export default function CometsLeaderboardScreen() {
   const fetchAllTime = useCallback(async () => {
     const { data, error } = await supabase
       .from("game_profiles")
-      .select("admin_id, best_score, total_runs, last_run_at, admins(first_name,last_name,email)")
+      .select("admin_id, best_score, total_runs, last_run_at, equipped_title, equipped_trail, equipped_theme, public_near_misses, public_missions_done, admins(first_name,last_name,email)")
       .order("best_score", { ascending: false })
       .limit(50);
 
@@ -98,6 +115,11 @@ export default function CometsLeaderboardScreen() {
       best_score: Math.max(0, Math.floor(Number(row.best_score ?? 0))),
       total_runs: Math.max(0, Math.floor(Number(row.total_runs ?? 0))),
       last_run_at: row.last_run_at ?? null,
+      equipped_title: typeof row.equipped_title === "string" ? row.equipped_title : null,
+      equipped_trail: typeof row.equipped_trail === "string" ? row.equipped_trail : null,
+      equipped_theme: typeof row.equipped_theme === "string" ? row.equipped_theme : null,
+      public_near_misses: Math.max(0, Math.floor(Number(row.public_near_misses ?? 0))),
+      public_missions_done: Math.max(0, Math.floor(Number(row.public_missions_done ?? 0))),
       admins: normalizeAdmin(row.admins),
     }));
     setRows(normalizedRows);
@@ -135,6 +157,11 @@ export default function CometsLeaderboardScreen() {
           best_score: score,
           total_runs: 1,
           last_run_at: runDate,
+          equipped_title: null,
+          equipped_trail: null,
+          equipped_theme: null,
+          public_near_misses: 0,
+          public_missions_done: 0,
           admins: null,
         });
         continue;
@@ -151,7 +178,7 @@ export default function CometsLeaderboardScreen() {
     if (ids.length > 0) {
       const { data: profileData, error: profileError } = await supabase
         .from("game_profiles")
-        .select("admin_id, admins(first_name,last_name,email)")
+        .select("admin_id, equipped_title, equipped_trail, equipped_theme, public_near_misses, public_missions_done, admins(first_name,last_name,email)")
         .in("admin_id", ids);
 
       if (profileError) {
@@ -161,6 +188,11 @@ export default function CometsLeaderboardScreen() {
           const target = byAdmin.get(profile.admin_id);
           if (!target) continue;
           target.admins = normalizeAdmin(profile.admins);
+          target.equipped_title = typeof profile.equipped_title === "string" ? profile.equipped_title : null;
+          target.equipped_trail = typeof profile.equipped_trail === "string" ? profile.equipped_trail : null;
+          target.equipped_theme = typeof profile.equipped_theme === "string" ? profile.equipped_theme : null;
+          target.public_near_misses = Math.max(0, Math.floor(Number(profile.public_near_misses ?? 0)));
+          target.public_missions_done = Math.max(0, Math.floor(Number(profile.public_missions_done ?? 0)));
         }
       }
     }
@@ -197,6 +229,25 @@ export default function CometsLeaderboardScreen() {
     scope === "weekly"
       ? `Top 50 des ${WEEK_WINDOW_DAYS} derniers jours.`
       : "Top 50 meilleurs scores du jeu.";
+
+  const mySummary = useMemo(() => {
+    const myId = admin?.id ?? null;
+    if (!myId || rows.length === 0) return null;
+    const myIndex = rows.findIndex((row) => row.admin_id === myId);
+    if (myIndex < 0) return null;
+    const myRow = rows[myIndex];
+    const above = myIndex > 0 ? rows[myIndex - 1] : null;
+    const podium = rows.length >= 3 ? rows[2] : null;
+    const podiumGap = podium && myIndex > 2 ? Math.max(1, podium.best_score - myRow.best_score) : null;
+    const rivalGap = above ? Math.max(1, above.best_score - myRow.best_score) : null;
+    return {
+      rank: myIndex + 1,
+      score: myRow.best_score,
+      rivalName: above ? makeDisplayName(above) : null,
+      rivalGap,
+      podiumGap,
+    };
+  }, [admin?.id, makeDisplayName, rows]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#0f1014" }}>
@@ -249,6 +300,24 @@ export default function CometsLeaderboardScreen() {
             </Text>
           </Pressable>
         </View>
+
+        {mySummary && (
+          <View style={styles.mySummaryCard}>
+            <Text style={styles.mySummaryTitle}>Votre position</Text>
+            <Text style={styles.mySummaryRank}>#{mySummary.rank} · {mySummary.score} pts</Text>
+            {!!mySummary.rivalGap && !!mySummary.rivalName && (
+              <Text style={styles.mySummaryText}>
+                Encore {mySummary.rivalGap} pts pour passer {mySummary.rivalName}
+              </Text>
+            )}
+            {!mySummary.rivalGap && (
+              <Text style={styles.mySummaryText}>Vous tenez la tête. Défendez votre place.</Text>
+            )}
+            {!!mySummary.podiumGap && (
+              <Text style={styles.mySummarySub}>Podium à {mySummary.podiumGap} pts</Text>
+            )}
+          </View>
+        )}
       </View>
 
       <FlatList
@@ -260,6 +329,9 @@ export default function CometsLeaderboardScreen() {
           const isMe = admin?.id === item.admin_id;
           const rank = index + 1;
           const name = makeDisplayName(item);
+          const titleLabel = formatEquipLabel(item.equipped_title);
+          const trailLabel = formatEquipLabel(item.equipped_trail);
+          const themeLabel = formatEquipLabel(item.equipped_theme);
 
           return (
             <View
@@ -278,12 +350,26 @@ export default function CometsLeaderboardScreen() {
                 </Text>
                 <View style={{ flex: 1 }}>
                   <Text style={{ color: "#e5e7eb", fontWeight: "800" }}>{name}</Text>
+                  {(titleLabel || trailLabel || themeLabel) && (
+                    <View style={styles.cosmeticRow}>
+                      {titleLabel ? <Text style={[styles.cosmeticTag, styles.cosmeticTagTitle]}>{titleLabel}</Text> : null}
+                      {trailLabel ? <Text style={styles.cosmeticTag}>{trailLabel}</Text> : null}
+                      {themeLabel ? <Text style={styles.cosmeticTag}>{themeLabel}</Text> : null}
+                    </View>
+                  )}
                   {isAdmin && item.admins?.email ? (
                     <Text style={{ color: "#9ca3af", fontSize: 12 }}>{item.admins.email}</Text>
                   ) : null}
                 </View>
                 <Text style={{ color: "#22d3ee", fontWeight: "900" }}>{item.best_score}</Text>
               </View>
+
+              {!isAdmin ? (
+                <View style={styles.publicStatsRow}>
+                  <Text style={styles.publicStatText}>Near-miss: {item.public_near_misses}</Text>
+                  <Text style={styles.publicStatText}>Missions: {item.public_missions_done}</Text>
+                </View>
+              ) : null}
 
               {isAdmin ? (
                 <View style={{ marginTop: 6, flexDirection: "row", justifyContent: "space-between" }}>
@@ -364,6 +450,70 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     flexDirection: "row",
     gap: 8,
+  },
+  mySummaryCard: {
+    marginTop: 10,
+    marginHorizontal: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(103,232,249,0.25)",
+    backgroundColor: "rgba(9,36,51,0.42)",
+  },
+  mySummaryTitle: {
+    color: "#9bdcf2",
+    fontSize: 11.5,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  mySummaryRank: {
+    marginTop: 2,
+    color: "#ffffff",
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  mySummaryText: {
+    marginTop: 4,
+    color: "#dce7f6",
+    fontSize: 12.5,
+    fontWeight: "700",
+  },
+  mySummarySub: {
+    marginTop: 3,
+    color: "#fbd38d",
+    fontSize: 11.5,
+    fontWeight: "800",
+  },
+  cosmeticRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 4,
+  },
+  cosmeticTag: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    color: "#dce7f6",
+    fontSize: 10.5,
+    fontWeight: "800",
+  },
+  cosmeticTagTitle: {
+    backgroundColor: "rgba(255,130,0,0.18)",
+    color: "#ffd69e",
+  },
+  publicStatsRow: {
+    marginTop: 6,
+    flexDirection: "row",
+    gap: 12,
+  },
+  publicStatText: {
+    color: "#9ca3af",
+    fontSize: 11.5,
+    fontWeight: "700",
   },
   scopeBtn: {
     borderWidth: 1,

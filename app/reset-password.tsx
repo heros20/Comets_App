@@ -1,11 +1,10 @@
 "use client";
 
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Animated,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -19,84 +18,66 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 
-import { useAdmin } from "../../contexts/AdminContext";
+import { useAdmin } from "../contexts/AdminContext";
 
-export default function LoginScreen() {
+export default function ResetPasswordScreen() {
   const router = useRouter();
-  const { login, isAdmin, isMember } = useAdmin();
+  const params = useLocalSearchParams<{ token?: string | string[] }>();
+  const { resetPassword } = useAdmin();
+  const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [email, setEmail] = useState("");
+  const rawToken = Array.isArray(params.token) ? params.token[0] : params.token;
+  const token = typeof rawToken === "string" ? rawToken : "";
+
   const [password, setPassword] = useState("");
-  const [showPwd, setShowPwd] = useState(false);
+  const [confirm, setConfirm] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [debug, setDebug] = useState("");
-
-  const shakeAnim = useRef(new Animated.Value(0)).current;
-  const passwordRef = useRef<TextInput>(null);
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
-    if (isAdmin || isMember) {
-      setLoading(false);
-      router.replace("/");
+    return () => {
+      if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+    };
+  }, []);
+
+  const handleSubmit = useCallback(async () => {
+    setError("");
+    setNotice("");
+
+    if (!token) {
+      setError("Lien invalide ou manquant.");
+      return;
     }
-  }, [isAdmin, isMember, router]);
 
-  const canSubmit = useMemo(() => {
-    return !loading && email.trim().length > 4 && password.length > 2;
-  }, [email, loading, password]);
+    if (password.length < 6) {
+      setError("Le mot de passe doit contenir au moins 6 caracteres.");
+      return;
+    }
 
-  const shake = useCallback(() => {
-    Animated.sequence([
-      Animated.timing(shakeAnim, { toValue: 10, duration: 70, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -10, duration: 70, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 6, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -6, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 0, duration: 50, useNativeDriver: true }),
-    ]).start();
-  }, [shakeAnim]);
-
-  const handleLogin = useCallback(async () => {
-    const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail || !password) {
-      setError("Renseigne ton email et ton mot de passe.");
-      setDebug("");
-      shake();
+    if (password !== confirm) {
+      setError("Les mots de passe ne correspondent pas.");
       return;
     }
 
     setLoading(true);
-    setError("");
-    setDebug("");
-
     try {
-      const result = await Promise.race<
-        { ok: boolean; timeout: false } | { ok: false; timeout: true }
-      >([
-        login(cleanEmail, password).then((ok) => ({ ok, timeout: false as const })),
-        new Promise<{ ok: false; timeout: true }>((resolve) =>
-          setTimeout(() => resolve({ ok: false, timeout: true }), 12000),
-        ),
-      ]);
-
+      const result = await resetPassword(token, password);
       if (!result.ok) {
-        setError(
-          result.timeout
-            ? "Connexion trop longue. Verifie le reseau puis reessaie."
-            : "Identifiants invalides. Reessaie.",
-        );
-        shake();
+        setError(result.error || "Impossible de reinitialiser le mot de passe.");
         return;
       }
-      router.replace("/");
-    } catch (e: any) {
-      setError("Erreur reseau. Reessaie plus tard.");
-      setDebug(`Detail: ${e?.message || "inconnu"}`);
-      shake();
+
+      setNotice("Mot de passe mis a jour. Redirection vers la connexion...");
+      redirectTimerRef.current = setTimeout(() => {
+        router.replace("/login");
+      }, 1200);
     } finally {
       setLoading(false);
     }
-  }, [email, login, password, router, shake]);
+  }, [confirm, password, resetPassword, router, token]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -123,7 +104,7 @@ export default function LoginScreen() {
 
           <View style={styles.heroTopRow}>
             <TouchableOpacity
-              onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))}
+              onPress={() => (router.canGoBack() ? router.back() : router.replace("/login"))}
               style={styles.backBtn}
               activeOpacity={0.9}
             >
@@ -131,26 +112,19 @@ export default function LoginScreen() {
             </TouchableOpacity>
 
             <View style={styles.heroTitleWrap}>
-              <Text style={styles.heroTitle}>Connexion Comets</Text>
-              <Text style={styles.heroSub}>Acces membre securise</Text>
+              <Text style={styles.heroTitle}>Nouveau mot de passe</Text>
+              <Text style={styles.heroSub}>Lien de reinitialisation</Text>
             </View>
 
             <View style={styles.heroPill}>
-              <Icon name="shield-checkmark-outline" size={14} color="#FFDDBA" />
+              <Icon name="key-outline" size={14} color="#FFDDBA" />
               <Text style={styles.heroPillText}>Secure</Text>
             </View>
           </View>
 
-          <View style={styles.metaRow}>
-            <View style={styles.metaPill}>
-              <Icon name="person-outline" size={14} color="#FFB366" />
-              <Text style={styles.metaText}>Espace membre</Text>
-            </View>
-            <View style={styles.metaPill}>
-              <Icon name="flash-outline" size={14} color="#FFB366" />
-              <Text style={styles.metaText}>Connexion rapide</Text>
-            </View>
-          </View>
+          <Text style={styles.heroInfo}>
+            Choisis un nouveau mot de passe pour terminer la reinitialisation depuis l'application.
+          </Text>
         </LinearGradient>
       </View>
 
@@ -165,73 +139,64 @@ export default function LoginScreen() {
           showsVerticalScrollIndicator={false}
           keyboardDismissMode="on-drag"
         >
-          <Animated.View style={[styles.card, { transform: [{ translateX: shakeAnim }] }]}>
-            <Text style={styles.cardTitle}>Se connecter</Text>
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Reinitialiser</Text>
             <Text style={styles.cardSub}>
-              Utilise tes identifiants pour acceder a ton espace et aux outils du club.
+              Le lien doit etre utilise dans les 15 minutes apres reception de l'e-mail.
             </Text>
 
             <View style={styles.fieldWrap}>
-              <Text style={styles.inputLabel}>Adresse email</Text>
-              <View style={styles.inputShell}>
-                <Icon name="mail-outline" size={18} color="#9FB0C8" />
-                <TextInput
-                  placeholder="email@requis.fr"
-                  value={email}
-                  onChangeText={setEmail}
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                  autoCorrect={false}
-                  placeholderTextColor="#8EA0BB"
-                  style={styles.input}
-                  returnKeyType="next"
-                  editable={!loading}
-                  onSubmitEditing={() => passwordRef.current?.focus()}
-                />
-              </View>
-            </View>
-
-            <View style={styles.fieldWrap}>
-              <Text style={styles.inputLabel}>Mot de passe</Text>
+              <Text style={styles.inputLabel}>Nouveau mot de passe</Text>
               <View style={styles.inputShell}>
                 <Icon name="lock-closed-outline" size={18} color="#9FB0C8" />
                 <TextInput
-                  ref={passwordRef}
-                  placeholder="********"
+                  placeholder="Minimum 6 caracteres"
                   value={password}
                   onChangeText={setPassword}
-                  secureTextEntry={!showPwd}
+                  secureTextEntry={!showPassword}
                   autoCapitalize="none"
                   autoCorrect={false}
                   placeholderTextColor="#8EA0BB"
                   style={styles.input}
-                  returnKeyType="done"
                   editable={!loading}
-                  onSubmitEditing={handleLogin}
                 />
                 <TouchableOpacity
                   style={styles.eyeBtn}
-                  onPress={() => setShowPwd((v) => !v)}
+                  onPress={() => setShowPassword((value) => !value)}
                   activeOpacity={0.8}
                   disabled={loading}
                 >
-                  <Icon name={showPwd ? "eye-off-outline" : "eye-outline"} size={19} color="#FF9E3A" />
+                  <Icon name={showPassword ? "eye-off-outline" : "eye-outline"} size={19} color="#FF9E3A" />
                 </TouchableOpacity>
               </View>
             </View>
 
-            <TouchableOpacity
-              onPress={() =>
-                router.push({
-                  pathname: "/forgot-password",
-                  params: email.trim() ? { email: email.trim().toLowerCase() } : undefined,
-                })
-              }
-              activeOpacity={0.85}
-              style={styles.forgotBtn}
-            >
-              <Text style={styles.forgotBtnText}>Mot de passe oublié ?</Text>
-            </TouchableOpacity>
+            <View style={styles.fieldWrap}>
+              <Text style={styles.inputLabel}>Confirmer le mot de passe</Text>
+              <View style={styles.inputShell}>
+                <Icon name="shield-checkmark-outline" size={18} color="#9FB0C8" />
+                <TextInput
+                  placeholder="Confirme le mot de passe"
+                  value={confirm}
+                  onChangeText={setConfirm}
+                  secureTextEntry={!showConfirm}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholderTextColor="#8EA0BB"
+                  style={styles.input}
+                  editable={!loading}
+                  onSubmitEditing={handleSubmit}
+                />
+                <TouchableOpacity
+                  style={styles.eyeBtn}
+                  onPress={() => setShowConfirm((value) => !value)}
+                  activeOpacity={0.8}
+                  disabled={loading}
+                >
+                  <Icon name={showConfirm ? "eye-off-outline" : "eye-outline"} size={19} color="#FF9E3A" />
+                </TouchableOpacity>
+              </View>
+            </View>
 
             {!!error && (
               <View style={styles.errorCard}>
@@ -240,33 +205,29 @@ export default function LoginScreen() {
               </View>
             )}
 
-            {!!debug && __DEV__ && <Text style={styles.debugText}>{debug}</Text>}
+            {!!notice && (
+              <View style={styles.noticeCard}>
+                <Icon name="checkmark-circle-outline" size={16} color="#86EFAC" />
+                <Text style={styles.noticeText}>{notice}</Text>
+              </View>
+            )}
 
             <TouchableOpacity
-              style={[styles.primaryBtn, !canSubmit && styles.primaryBtnDisabled]}
-              disabled={!canSubmit}
-              onPress={handleLogin}
+              style={[styles.primaryBtn, loading && styles.primaryBtnDisabled]}
+              disabled={loading}
+              onPress={handleSubmit}
               activeOpacity={0.9}
             >
               {loading ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
                 <>
-                  <Icon name="log-in-outline" size={18} color="#111827" />
-                  <Text style={styles.primaryBtnTxt}>Se connecter</Text>
+                  <Icon name="save-outline" size={18} color="#111827" />
+                  <Text style={styles.primaryBtnTxt}>Mettre a jour</Text>
                 </>
               )}
             </TouchableOpacity>
-          </Animated.View>
-
-          <TouchableOpacity
-            onPress={() => router.push("/(tabs)/Register")}
-            activeOpacity={0.85}
-            style={styles.helpBox}
-          >
-            <Icon name="person-add-outline" size={16} color="#FF9E3A" />
-            <Text style={styles.helpText}>Pas de compte ? Creer un compte membre</Text>
-          </TouchableOpacity>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -281,7 +242,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#0B0F17",
   },
-
   heroWrap: {
     marginHorizontal: 10,
     marginTop: 8,
@@ -293,12 +253,12 @@ const styles = StyleSheet.create({
   },
   heroGradient: {
     paddingHorizontal: 12,
-    paddingBottom: 10,
+    paddingBottom: 12,
   },
   heroShine: {
     ...StyleSheet.absoluteFillObject,
     top: 0,
-    bottom: "58%",
+    bottom: "56%",
   },
   heroTopRow: {
     flexDirection: "row",
@@ -345,30 +305,12 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     fontSize: 11,
   },
-  metaRow: {
-    marginTop: 8,
-    flexDirection: "row",
-    gap: 8,
-  },
-  metaPill: {
-    flex: 1,
-    minHeight: 34,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.2)",
-    backgroundColor: "rgba(0,0,0,0.3)",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    paddingHorizontal: 8,
-  },
-  metaText: {
+  heroInfo: {
+    marginTop: 10,
     color: "#E5E7EB",
-    fontSize: 11.5,
-    fontWeight: "700",
+    fontSize: 12.5,
+    lineHeight: 18,
   },
-
   content: {
     paddingHorizontal: 12,
     paddingTop: 14,
@@ -403,7 +345,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   fieldWrap: {
-    marginBottom: 11,
+    marginBottom: 12,
   },
   inputLabel: {
     color: "#C7CEDA",
@@ -437,23 +379,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "rgba(255,158,58,0.12)",
   },
-  forgotBtn: {
-    alignSelf: "flex-end",
-    marginTop: -2,
-    marginBottom: 10,
-    minHeight: 28,
-    justifyContent: "center",
-    paddingHorizontal: 2,
-  },
-  forgotBtnText: {
-    color: "#FFB366",
-    fontSize: 12.5,
-    fontWeight: "700",
-  },
-
   errorCard: {
-    marginTop: 2,
-    marginBottom: 7,
+    marginBottom: 8,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: "rgba(248,113,113,0.45)",
@@ -470,22 +397,28 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     fontWeight: "700",
   },
-  debugText: {
+  noticeCard: {
     marginBottom: 8,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: "rgba(245,158,11,0.45)",
-    backgroundColor: "rgba(245,158,11,0.12)",
-    color: "#FDE68A",
-    fontSize: 12,
+    borderColor: "rgba(134,239,172,0.35)",
+    backgroundColor: "rgba(34,197,94,0.12)",
     paddingHorizontal: 10,
-    paddingVertical: 7,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
   },
-
+  noticeText: {
+    flex: 1,
+    color: "#BBF7D0",
+    fontSize: 12.5,
+    fontWeight: "700",
+  },
   primaryBtn: {
     alignSelf: "center",
     minHeight: 44,
-    minWidth: 180,
+    minWidth: 190,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: "#FFBD80",
@@ -504,25 +437,5 @@ const styles = StyleSheet.create({
     color: "#111827",
     fontSize: 14,
     fontWeight: "800",
-  },
-
-  helpBox: {
-    marginTop: 12,
-    alignSelf: "center",
-    borderRadius: 11,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.2)",
-    backgroundColor: "rgba(0,0,0,0.22)",
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-  },
-  helpText: {
-    color: "#FFB366",
-    fontSize: 12.5,
-    fontWeight: "700",
-    textAlign: "center",
   },
 });

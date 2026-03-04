@@ -2,7 +2,7 @@
   "expo": {
     "name": "Comets Honfleur",
     "slug": "les-comets-app",
-    "version": "2.1.0",
+    "version": "2.1.1",
 
     "orientation": "default",
 
@@ -24,7 +24,7 @@
 
     "android": {
       "package": "com.lescomets.app",
-      "versionCode": 38,
+      "versionCode": 39,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/iconComets.png",
@@ -34,15 +34,15 @@
     },
 
     "androidStatusBar": {
-      "translucent": false,
-      "backgroundColor": "#FFFFFF",
-      "barStyle": "dark-content"
+      "translucent": true,
+      "backgroundColor": "#00000000",
+      "barStyle": "light-content"
     },
 
     "androidNavigationBar": {
-      "visible": "immersive",
-      "backgroundColor": "#FFFFFF",
-      "barStyle": "dark-content"
+      "backgroundColor": "#00000000",
+      "barStyle": "light-content",
+      "enforceContrast": false
     },
 
     "web": {
@@ -55,7 +55,8 @@
       "expo-router",
       "expo-secure-store",
       "expo-notifications",
-      "expo-audio"
+      "expo-audio",
+      "expo-navigation-bar"
     ],
 
     "experiments": {

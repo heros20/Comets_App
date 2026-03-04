@@ -75,6 +75,53 @@ function normalizeName(str?: string | null) {
 
 type TabKey = "overview" | "edit" | "security";
 
+type FamilyMember = {
+  id: string;
+  relation: "self" | "child";
+  first_name: string;
+  last_name: string;
+  categorie?: "Seniors" | "15U" | "12U" | null;
+  date_naissance?: string | null;
+  young_player_id?: string | null;
+};
+
+type YoungPlayer = {
+  id: string;
+  first_name: string;
+  last_name: string;
+  categorie?: "15U" | "12U" | "Seniors" | "Senior" | null;
+  date_naissance?: string | null;
+};
+
+const CATEGORY_SORT_ORDER: Record<string, number> = {
+  "12U": 0,
+  "15U": 1,
+  Seniors: 2,
+  Senior: 2,
+};
+
+function getCategorySortValue(categorie?: string | null) {
+  const key = String(categorie ?? "").trim();
+  if (!key) return 99;
+  return CATEGORY_SORT_ORDER[key] ?? 99;
+}
+
+function compareByCategoryThenName(
+  a: { categorie?: string | null; first_name?: string; last_name?: string },
+  b: { categorie?: string | null; first_name?: string; last_name?: string }
+) {
+  const categoryDelta = getCategorySortValue(a.categorie) - getCategorySortValue(b.categorie);
+  if (categoryDelta !== 0) return categoryDelta;
+
+  const lastNameDelta = String(a.last_name ?? "").localeCompare(String(b.last_name ?? ""), "fr");
+  if (lastNameDelta !== 0) return lastNameDelta;
+
+  return String(a.first_name ?? "").localeCompare(String(b.first_name ?? ""), "fr");
+}
+
+const YOUTH_TABS = ["12U", "15U"] as const;
+type YouthTab = (typeof YOUTH_TABS)[number];
+
 // ===== Helpers date (FR <-> ISO) =====
 function maskBirthdateFR(raw: string) {
   const digits = (raw || "").replace(/[^\d]/g, "").slice(0, 8);
@@ -150,7 +197,14 @@ export default function ProfilPlayerScreen() {
   const [profile, setProfile] = useState<any>(null);
   const [players, setPlayers] = useState<any[]>([]);
   const [cotisations, setCotisations] = useState<any[]>([]);
-  const [youngPlayers, setYoungPlayers] = useState<any[]>([]);
+  const [youngPlayers, setYoungPlayers] = useState<YoungPlayer[]>([]);
+  const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>([]);
+  const [selectedYoungPlayerId, setSelectedYoungPlayerId] = useState("");
+  const [activeYouthTab, setActiveYouthTab] = useState<YouthTab>("12U");
+  const [linkingChild, setLinkingChild] = useState(false);
+  const [unlinkingChildId, setUnlinkingChildId] = useState<string | null>(null);
+  const [familyStatus, setFamilyStatus] = useState<null | "success" | "error">(null);
+  const [familyMessage, setFamilyMessage] = useState("");
 
   const [form, setForm] = useState<any>({});
   const [saving, setSaving] = useState(false);
@@ -191,6 +245,26 @@ export default function ProfilPlayerScreen() {
     return session?.access_token || null;
   }, []);
 
+  const refreshFamilyMembers = useCallback(async () => {
+    try {
+      const token = await ensureSession();
+      const headers: Record<string, string> = token
+        ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+        : { "Content-Type": "application/json" };
+
+      const res = await fetch("https://les-comets-honfleur.vercel.app/api/family/members", {
+        headers,
+        credentials: "include",
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok && Array.isArray(json?.data)) {
+        setFamilyMembers(json.data as FamilyMember[]);
+        return;
+      }
+    } catch {}
+    setFamilyMembers([]);
+  }, [ensureSession]);
+
   const fetchAll = useCallback(async (initial = false) => {
     if (initial) setLoading(true);
     try {
@@ -203,11 +277,12 @@ export default function ProfilPlayerScreen() {
       const requestInit: RequestInit = { headers, credentials: "include" };
 
       // Ne pas remettre profile à null avant d'avoir tout reçu
-      const [userRes, playersRes, cotisRes, youngRes] = await Promise.all([
+      const [userRes, playersRes, cotisRes, youngRes, familyRes] = await Promise.all([
         fetch("https://les-comets-honfleur.vercel.app/api/me", requestInit),
         fetch("https://les-comets-honfleur.vercel.app/api/players", requestInit),
         fetch("https://les-comets-honfleur.vercel.app/api/cotisations", requestInit),
-        fetch("https://les-comets-honfleur.vercel.app/api/young_players", requestInit),
+        fetch("https://les-comets-honfleur.vercel.app/api/young_players?onlyKids=true", requestInit),
+        fetch("https://les-comets-honfleur.vercel.app/api/family/members", requestInit),
       ]);
 
       const safeJson = async (r: Response) => {
@@ -218,11 +293,12 @@ export default function ProfilPlayerScreen() {
         }
       };
 
-      const [userJson, playersJson, cotisJson, youngJson] = await Promise.all([
+      const [userJson, playersJson, cotisJson, youngJson, familyJson] = await Promise.all([
         safeJson(userRes),
         safeJson(playersRes),
         safeJson(cotisRes),
         safeJson(youngRes),
+        safeJson(familyRes),
       ]);
 
       if (userRes.ok && userJson?.user) {
@@ -261,6 +337,7 @@ export default function ProfilPlayerScreen() {
       if (playersRes.ok) setPlayers(playersJson || []);
       if (cotisRes.ok) setCotisations(cotisJson || []);
       if (youngRes.ok) setYoungPlayers(Array.isArray(youngJson?.data) ? youngJson.data : []);
+      if (familyRes.ok) setFamilyMembers(Array.isArray(familyJson?.data) ? familyJson.data : []);
 
       lastFetchRef.current = Date.now();
     } catch {
@@ -318,6 +395,56 @@ export default function ProfilPlayerScreen() {
     if (ageComputed == null) return null;
     return ageToCategorie(ageComputed);
   }, [ageComputed]);
+  const childMembers = useMemo(
+    () => familyMembers.filter((m) => m.relation === "child"),
+    [familyMembers]
+  );
+  const sortedChildMembers = useMemo(
+    () => [...childMembers].sort(compareByCategoryThenName),
+    [childMembers]
+  );
+  const childCountsByTab = useMemo(
+    () => ({
+      "12U": childMembers.filter((member) => member.categorie === "12U").length,
+      "15U": childMembers.filter((member) => member.categorie === "15U").length,
+    }),
+    [childMembers]
+  );
+  const linkedYoungIds = useMemo(() => {
+    const out = new Set<string>();
+    childMembers.forEach((member) => {
+      const id = String(member.young_player_id ?? "").trim();
+      if (id) out.add(id);
+    });
+    return out;
+  }, [childMembers]);
+  const youthPlayersOnly = useMemo(
+    () => youngPlayers.filter((p) => p.categorie === "12U" || p.categorie === "15U"),
+    [youngPlayers]
+  );
+  const availableYoungPlayers = useMemo(
+    () => youthPlayersOnly.filter((p) => !linkedYoungIds.has(String(p.id))),
+    [youthPlayersOnly, linkedYoungIds]
+  );
+  const sortedAvailableYoungPlayers = useMemo(
+    () => [...availableYoungPlayers].sort(compareByCategoryThenName),
+    [availableYoungPlayers]
+  );
+  const availableCountsByTab = useMemo(
+    () => ({
+      "12U": sortedAvailableYoungPlayers.filter((player) => player.categorie === "12U").length,
+      "15U": sortedAvailableYoungPlayers.filter((player) => player.categorie === "15U").length,
+    }),
+    [sortedAvailableYoungPlayers]
+  );
+  const visibleChildMembers = useMemo(
+    () => sortedChildMembers.filter((member) => member.categorie === activeYouthTab),
+    [sortedChildMembers, activeYouthTab]
+  );
+  const visibleAvailableYoungPlayers = useMemo(
+    () => sortedAvailableYoungPlayers.filter((player) => player.categorie === activeYouthTab),
+    [sortedAvailableYoungPlayers, activeYouthTab]
+  );
 
   // === Gamification derived data
   const badge = useMemo(() => computeBadgeFromCount(participations), [participations]);
@@ -326,9 +453,115 @@ export default function ProfilPlayerScreen() {
     [participations]
   );
 
+  useEffect(() => {
+    if (!selectedYoungPlayerId) return;
+    if (visibleAvailableYoungPlayers.some((p) => String(p.id) === selectedYoungPlayerId)) return;
+    setSelectedYoungPlayerId("");
+  }, [visibleAvailableYoungPlayers, selectedYoungPlayerId]);
+
+  useEffect(() => {
+    const activeTotal = childCountsByTab[activeYouthTab] + availableCountsByTab[activeYouthTab];
+    if (activeTotal > 0) return;
+
+    const fallback = YOUTH_TABS.find(
+      (tab) => childCountsByTab[tab] + availableCountsByTab[tab] > 0
+    );
+    if (fallback && fallback !== activeYouthTab) {
+      setActiveYouthTab(fallback);
+    }
+  }, [activeYouthTab, childCountsByTab, availableCountsByTab]);
+
   // === Helpers UI
   const handleChange = (field: string, value: any) => {
     setForm((prev: any) => ({ ...prev, [field]: value }));
+  };
+
+  const handleLinkChild = async () => {
+    if (!selectedYoungPlayerId) return;
+    setLinkingChild(true);
+    setFamilyStatus(null);
+    setFamilyMessage("");
+
+    try {
+      const token = await ensureSession();
+      const headers: Record<string, string> = token
+        ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+        : { "Content-Type": "application/json" };
+
+      const res = await fetch("https://les-comets-honfleur.vercel.app/api/family/members", {
+        method: "POST",
+        headers,
+        credentials: "include",
+        body: JSON.stringify({ young_player_id: selectedYoungPlayerId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(String(json?.error ?? "Impossible de lier cet enfant."));
+      }
+
+      if (Array.isArray(json?.members)) {
+        setFamilyMembers(json.members as FamilyMember[]);
+      } else {
+        await refreshFamilyMembers();
+      }
+      setSelectedYoungPlayerId("");
+      setFamilyStatus("success");
+      setFamilyMessage("Enfant lié avec succès.");
+    } catch (e: any) {
+      setFamilyStatus("error");
+      setFamilyMessage(String(e?.message ?? "Impossible de lier cet enfant."));
+    } finally {
+      setLinkingChild(false);
+    }
+  };
+
+  const performUnlinkChild = useCallback(
+    async (member: FamilyMember) => {
+      setUnlinkingChildId(member.id);
+      setFamilyStatus(null);
+      setFamilyMessage("");
+      try {
+        const token = await ensureSession();
+        const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+        const res = await fetch(
+          `https://les-comets-honfleur.vercel.app/api/family/members/${encodeURIComponent(member.id)}`,
+          {
+            method: "DELETE",
+            headers,
+            credentials: "include",
+          }
+        );
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(String(json?.error ?? "Impossible de retirer cet enfant."));
+        }
+        await refreshFamilyMembers();
+        setFamilyStatus("success");
+        setFamilyMessage("Enfant retiré du compte.");
+      } catch (e: any) {
+        setFamilyStatus("error");
+        setFamilyMessage(String(e?.message ?? "Impossible de retirer cet enfant."));
+      } finally {
+        setUnlinkingChildId(null);
+      }
+    },
+    [ensureSession, refreshFamilyMembers]
+  );
+
+  const handleUnlinkChild = (member: FamilyMember) => {
+    if (member.relation !== "child") return;
+    const fullName = [member.first_name, member.last_name].filter(Boolean).join(" ").trim();
+    Alert.alert("Retirer l'enfant", `Retirer ${fullName || "cet enfant"} de votre compte ?`, [
+      { text: "Annuler", style: "cancel" },
+      {
+        text: "Retirer",
+        style: "destructive",
+        onPress: () => {
+          performUnlinkChild(member);
+        },
+      },
+    ]);
   };
 
   // === Sauvegarde du profil (infos publiques, SANS mot de passe)
@@ -483,7 +716,7 @@ export default function ProfilPlayerScreen() {
   const handleDelete = async () => {
     Alert.alert(
       "Supprimer le compte",
-      "⚠️ Es-tu sûr de vouloir supprimer ton compte ? Cette action est irréversible !",
+      "Es-tu sûr de vouloir supprimer ton compte ? Cette action est irréversible !",
       [
         { text: "Annuler", style: "cancel" },
         {
@@ -619,7 +852,7 @@ const handleDownloadMajeur = () =>
       {source ? (
         <Image source={source} resizeMode="cover" style={{ width: "100%", height: "100%" }} />
       ) : (
-        <Text style={{ fontSize: size * 0.42 }}>🏅</Text>
+        <Text style={{ fontSize: size * 0.42 }}></Text>
       )}
     </View>
   );
@@ -694,7 +927,7 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
           <View style={styles.heroChips}>
             {(categorieFromAge || profile?.categorie) ? (
               <View style={[styles.chip, { backgroundColor: "rgba(255,130,0,0.25)", borderColor: "rgba(255,195,130,0.65)" }]}>
-                <Text style={[styles.chipTxt, { color: "#FFE2C2" }]}>Categorie {(categorieFromAge || profile?.categorie) as string}</Text>
+                <Text style={[styles.chipTxt, { color: "#FFE2C2" }]}>Catégorie {(categorieFromAge || profile?.categorie) as string}</Text>
               </View>
             ) : null}
 
@@ -761,15 +994,15 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
                     </View>
                     <Text style={styles.progressHelp}>
                       {badge.nextAt === null
-                        ? "Palier max atteint 🎉"
-                        : `Prochain titre à ${badge.nextAt} participations`}
+                        ? "Palier max atteint"
+                        : `Prochain titre ? ${badge.nextAt} participations`}
                     </Text>
                   </View>
 
                   <View style={styles.statRow}>
                     <View style={styles.statPill}>
                       <Text style={styles.statPillTxt}>
-                        🔥 {participations} participation{participations > 1 ? "s" : ""}
+                         {participations} participation{participations > 1 ? "s" : ""}
                       </Text>
                     </View>
                     {ffbsLink ? (
@@ -778,7 +1011,7 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
                         onPress={() => Linking.openURL(ffbsLink!)}
                         activeOpacity={0.9}
                       >
-                        <Text style={styles.statLinkTxt}>Voir mes stats FFBS ↗</Text>
+                        <Text style={styles.statLinkTxt}>Voir mes stats FFBS ?</Text>
                       </TouchableOpacity>
                     ) : null}
                   </View>
@@ -815,12 +1048,12 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
             <View style={styles.card}>
               {hasCotisation() ? (
                 <View style={styles.cotisationOk}>
-                  <Text style={styles.cotisationText}>✅ Cotisation payée</Text>
+                  <Text style={styles.cotisationText}>Cotisation payee</Text>
                 </View>
               ) : (
                 <>
                   <View style={styles.cotisationKo}>
-                    <Text style={styles.cotisationText}>❌ Cotisation non payée</Text>
+                    <Text style={styles.cotisationText}>Cotisation non payee</Text>
                   </View>
                   <TouchableOpacity
                     style={styles.payBtn}
@@ -855,16 +1088,137 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
                     }}
                   >
                     <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 17 }}>
-                      Payer ma cotisation - 120 €
+                      Payer ma cotisation - 120 EUR
                     </Text>
                   </TouchableOpacity>
                 </>
               )}
             </View>
 
+            {/* Comptes enfants lies */}
+            <View style={styles.card}>
+              <View style={styles.familyHeaderRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sectionTitle}>Comptes enfants lies</Text>
+                  <Text style={styles.familySubtitle}>
+                    Liez vos enfants depuis la base jeunes joueurs pour gerer matchs et cotisations.
+                  </Text>
+                </View>
+                <View style={styles.familyCountBadge}>
+                  <Text style={styles.familyCountText}>{childMembers.length} lie(s)</Text>
+                </View>
+              </View>
+
+              <View style={styles.familyTabsWrap}>
+                {YOUTH_TABS.map((tab) => {
+                  const active = activeYouthTab === tab;
+                  const tabStyle =
+                    tab === "12U" ? styles.familyTabBtn12UActive : styles.familyTabBtn15UActive;
+                  return (
+                    <TouchableOpacity
+                      key={tab}
+                      style={[styles.familyTabBtn, active && tabStyle]}
+                      onPress={() => setActiveYouthTab(tab)}
+                      activeOpacity={0.9}
+                    >
+                      <Text style={[styles.familyTabTitle, active && styles.familyTabTitleActive]}>
+                        {tab}
+                      </Text>
+                      <Text style={[styles.familyTabMeta, active && styles.familyTabMetaActive]}>
+                        {childCountsByTab[tab]} lie(s) - {availableCountsByTab[tab]} a lier
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <View style={[styles.field, { marginTop: 12, marginBottom: 0 }]}>
+                <Text style={styles.label}>Ajouter un enfant ({activeYouthTab})</Text>
+                <View style={styles.fieldRow}>
+                  <Icon name="person-add-outline" size={18} style={styles.iconLeft} />
+                  <Picker
+                    selectedValue={selectedYoungPlayerId}
+                    style={styles.familyPicker}
+                    dropdownIconColor="#FF8200"
+                    onValueChange={(value) => setSelectedYoungPlayerId(String(value || ""))}
+                  >
+                    <Picker.Item label={`- Selectionner un enfant ${activeYouthTab} -`} value="" />
+                    {visibleAvailableYoungPlayers.map((player) => {
+                      const name = [player.first_name, player.last_name].filter(Boolean).join(" ").trim();
+                      return <Picker.Item key={player.id} label={name || String(player.id)} value={String(player.id)} />;
+                    })}
+                  </Picker>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={[
+                  styles.familyLinkBtn,
+                  (linkingChild || !selectedYoungPlayerId || visibleAvailableYoungPlayers.length === 0) &&
+                    styles.familyLinkBtnDisabled,
+                ]}
+                onPress={handleLinkChild}
+                activeOpacity={0.9}
+                disabled={linkingChild || !selectedYoungPlayerId || visibleAvailableYoungPlayers.length === 0}
+              >
+                <Text style={styles.familyLinkBtnText}>
+                  {linkingChild ? "Liaison..." : "Lier cet enfant"}
+                </Text>
+              </TouchableOpacity>
+
+              {youngPlayers.length > 0 && availableYoungPlayers.length === 0 && (
+                <Text style={styles.familyHint}>
+                  Tous les jeunes joueurs disponibles sont deja lies a ce compte.
+                </Text>
+              )}
+              {availableYoungPlayers.length > 0 && visibleAvailableYoungPlayers.length === 0 && (
+                <Text style={styles.familyHint}>Aucun joueur disponible dans l onglet {activeYouthTab}.</Text>
+              )}
+              {familyStatus === "success" && <Text style={styles.familyStatusSuccess}>{familyMessage}</Text>}
+              {familyStatus === "error" && <Text style={styles.familyStatusError}>{familyMessage}</Text>}
+
+              <View style={{ marginTop: 12, gap: 8 }}>
+                {childMembers.length === 0 ? (
+                  <Text style={styles.familyEmptyText}>Aucun enfant lie pour le moment.</Text>
+                ) : visibleChildMembers.length === 0 ? (
+                  <Text style={styles.familyEmptyText}>
+                    Aucun enfant lie dans l onglet {activeYouthTab}.
+                  </Text>
+                ) : (
+                  visibleChildMembers.map((member) => {
+                    const name = [member.first_name, member.last_name].filter(Boolean).join(" ").trim();
+                    return (
+                      <View key={member.id} style={styles.familyMemberRow}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.familyMemberName}>{name || member.id}</Text>
+                          <Text style={styles.familyMemberMeta}>
+                            {member.categorie || "-"}
+                            {member.date_naissance ? `  ${isoToFR(member.date_naissance)}` : ""}
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          style={[
+                            styles.familyUnlinkBtn,
+                            unlinkingChildId === member.id && styles.familyUnlinkBtnDisabled,
+                          ]}
+                          onPress={() => handleUnlinkChild(member)}
+                          disabled={unlinkingChildId === member.id}
+                          activeOpacity={0.9}
+                        >
+                          <Text style={styles.familyUnlinkBtnText}>
+                            {unlinkingChildId === member.id ? "..." : "Retirer"}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })
+                )}
+              </View>
+            </View>
+
             {/* Documents d’adhésion */}
            <View style={styles.card}>
-              <Text style={styles.sectionTitle}>📎 Documents d’adhésion</Text>
+              <Text style={styles.sectionTitle}>Documents d’adhésion</Text>
               <Text style={{ color: "#98a0ae", fontSize: 13, fontStyle: "italic", marginBottom: 10, textAlign: "center" }}>
                 Choisis et télécharge ton dossier d’inscription selon ton âge.
               </Text>
@@ -953,7 +1307,7 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
                     const iso = frToISO(form.date_naissance_fr || "");
                     const age = computeAgeFromISO(iso);
                     const cat = age != null ? ageToCategorie(age) : null;
-                    return `Âge estimé: ${age ?? "?"} • Catégorie: ${cat ?? "?"}`;
+                    return `Age estime: ${age ?? "?"} • Categorie: ${cat ?? "?"}`;
                   })()}
                 </Text>
               ) : (
@@ -1434,6 +1788,154 @@ const styles = StyleSheet.create({
 
   // Texte
   sectionTitle: { color: "#FF8200", fontWeight: "900", fontSize: 16, marginBottom: 8 },
+  familyHeaderRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  familySubtitle: {
+    color: "#B8C1CF",
+    fontSize: 12.5,
+    lineHeight: 18,
+  },
+  familyCountBadge: {
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.32)",
+    backgroundColor: "rgba(255,130,0,0.14)",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    alignSelf: "flex-start",
+  },
+  familyCountText: {
+    color: "#FFD8B0",
+    fontSize: 11.5,
+    fontWeight: "800",
+  },
+  familyTabsWrap: {
+    marginTop: 8,
+    gap: 8,
+  },
+  familyTabBtn: {
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  familyTabBtn12UActive: {
+    borderColor: "rgba(52,211,153,0.7)",
+    backgroundColor: "rgba(16,185,129,0.22)",
+  },
+  familyTabBtn15UActive: {
+    borderColor: "rgba(125,211,252,0.7)",
+    backgroundColor: "rgba(14,116,144,0.26)",
+  },
+  familyTabTitle: {
+    color: "#E5E7EB",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  familyTabTitleActive: {
+    color: "#FFFFFF",
+  },
+  familyTabMeta: {
+    marginTop: 2,
+    color: "#AEB8C8",
+    fontSize: 11.5,
+    fontWeight: "700",
+  },
+  familyTabMetaActive: {
+    color: "#F4F8FF",
+  },
+  familyPicker: {
+    flex: 1,
+    color: "#fff",
+    backgroundColor: "transparent",
+  },
+  familyLinkBtn: {
+    marginTop: 12,
+    backgroundColor: "#FF8200",
+    borderRadius: 12,
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#FF8200",
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  familyLinkBtnDisabled: {
+    opacity: 0.5,
+  },
+  familyLinkBtnText: {
+    color: "#FFFFFF",
+    fontSize: 14.5,
+    fontWeight: "900",
+  },
+  familyHint: {
+    marginTop: 8,
+    color: "#B9C3D1",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  familyStatusSuccess: {
+    marginTop: 8,
+    color: "#86EFAC",
+    fontSize: 12.5,
+    fontWeight: "800",
+  },
+  familyStatusError: {
+    marginTop: 8,
+    color: "#FCA5A5",
+    fontSize: 12.5,
+    fontWeight: "800",
+  },
+  familyMemberRow: {
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.26)",
+    backgroundColor: "rgba(15,23,42,0.58)",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  familyMemberName: {
+    color: "#FFFFFF",
+    fontSize: 14.5,
+    fontWeight: "800",
+  },
+  familyMemberMeta: {
+    marginTop: 2,
+    color: "#CBD5E1",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  familyUnlinkBtn: {
+    borderWidth: 1,
+    borderColor: "rgba(251,146,60,0.7)",
+    backgroundColor: "rgba(249,115,22,0.2)",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  familyUnlinkBtnDisabled: {
+    opacity: 0.55,
+  },
+  familyUnlinkBtnText: {
+    color: "#FFD9B1",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  familyEmptyText: {
+    color: "#CBD5E1",
+    fontSize: 12.5,
+    fontWeight: "600",
+  },
 
   // Moderne (Editer + Securite)
   cardModern: {
@@ -1546,7 +2048,6 @@ const styles = StyleSheet.create({
   },
   btnDangerOutlineText: { color: "#ff6b6b", fontWeight: "900" },
 });
-
 
 
 

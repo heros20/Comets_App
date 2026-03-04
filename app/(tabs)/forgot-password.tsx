@@ -1,11 +1,10 @@
 "use client";
 
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Animated,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -21,82 +20,51 @@ import Icon from "react-native-vector-icons/Ionicons";
 
 import { useAdmin } from "../../contexts/AdminContext";
 
-export default function LoginScreen() {
+export default function ForgotPasswordScreen() {
   const router = useRouter();
-  const { login, isAdmin, isMember } = useAdmin();
+  const params = useLocalSearchParams<{ email?: string | string[] }>();
+  const { requestPasswordReset } = useAdmin();
+  const seededRef = useRef(false);
 
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [debug, setDebug] = useState("");
-
-  const shakeAnim = useRef(new Animated.Value(0)).current;
-  const passwordRef = useRef<TextInput>(null);
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
-    if (isAdmin || isMember) {
-      setLoading(false);
-      router.replace("/");
+    if (seededRef.current) return;
+
+    const rawEmail = Array.isArray(params.email) ? params.email[0] : params.email;
+    if (typeof rawEmail === "string" && rawEmail.trim()) {
+      setEmail(rawEmail.trim().toLowerCase());
     }
-  }, [isAdmin, isMember, router]);
+    seededRef.current = true;
+  }, [params.email]);
 
-  const canSubmit = useMemo(() => {
-    return !loading && email.trim().length > 4 && password.length > 2;
-  }, [email, loading, password]);
-
-  const shake = useCallback(() => {
-    Animated.sequence([
-      Animated.timing(shakeAnim, { toValue: 10, duration: 70, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -10, duration: 70, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 6, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -6, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 0, duration: 50, useNativeDriver: true }),
-    ]).start();
-  }, [shakeAnim]);
-
-  const handleLogin = useCallback(async () => {
+  const handleSubmit = useCallback(async () => {
     const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail || !password) {
-      setError("Renseigne ton email et ton mot de passe.");
-      setDebug("");
-      shake();
+
+    setError("");
+    setNotice("");
+
+    if (!cleanEmail) {
+      setError("Renseigne ton adresse email.");
       return;
     }
 
     setLoading(true);
-    setError("");
-    setDebug("");
-
     try {
-      const result = await Promise.race<
-        { ok: boolean; timeout: false } | { ok: false; timeout: true }
-      >([
-        login(cleanEmail, password).then((ok) => ({ ok, timeout: false as const })),
-        new Promise<{ ok: false; timeout: true }>((resolve) =>
-          setTimeout(() => resolve({ ok: false, timeout: true }), 12000),
-        ),
-      ]);
-
+      const result = await requestPasswordReset(cleanEmail);
       if (!result.ok) {
-        setError(
-          result.timeout
-            ? "Connexion trop longue. Verifie le reseau puis reessaie."
-            : "Identifiants invalides. Reessaie.",
-        );
-        shake();
+        setError(result.error || "Impossible d'envoyer l'e-mail de réinitialisation.");
         return;
       }
-      router.replace("/");
-    } catch (e: any) {
-      setError("Erreur reseau. Reessaie plus tard.");
-      setDebug(`Detail: ${e?.message || "inconnu"}`);
-      shake();
+
+      setNotice("Un e-mail de réinitialisation vient d'être envoyé.");
     } finally {
       setLoading(false);
     }
-  }, [email, login, password, router, shake]);
+  }, [email, requestPasswordReset]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -123,7 +91,7 @@ export default function LoginScreen() {
 
           <View style={styles.heroTopRow}>
             <TouchableOpacity
-              onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))}
+              onPress={() => (router.canGoBack() ? router.back() : router.replace("/login"))}
               style={styles.backBtn}
               activeOpacity={0.9}
             >
@@ -131,26 +99,19 @@ export default function LoginScreen() {
             </TouchableOpacity>
 
             <View style={styles.heroTitleWrap}>
-              <Text style={styles.heroTitle}>Connexion Comets</Text>
-              <Text style={styles.heroSub}>Acces membre securise</Text>
+              <Text style={styles.heroTitle}>Mot de passe oublié</Text>
+              <Text style={styles.heroSub}>Réinitialisation sécurisée</Text>
             </View>
 
             <View style={styles.heroPill}>
-              <Icon name="shield-checkmark-outline" size={14} color="#FFDDBA" />
-              <Text style={styles.heroPillText}>Secure</Text>
+              <Icon name="mail-unread-outline" size={14} color="#FFDDBA" />
+              <Text style={styles.heroPillText}>Email</Text>
             </View>
           </View>
 
-          <View style={styles.metaRow}>
-            <View style={styles.metaPill}>
-              <Icon name="person-outline" size={14} color="#FFB366" />
-              <Text style={styles.metaText}>Espace membre</Text>
-            </View>
-            <View style={styles.metaPill}>
-              <Icon name="flash-outline" size={14} color="#FFB366" />
-              <Text style={styles.metaText}>Connexion rapide</Text>
-            </View>
-          </View>
+          <Text style={styles.heroInfo}>
+            Saisis ton adresse email pour recevoir un lien de réinitialisation.
+          </Text>
         </LinearGradient>
       </View>
 
@@ -165,10 +126,10 @@ export default function LoginScreen() {
           showsVerticalScrollIndicator={false}
           keyboardDismissMode="on-drag"
         >
-          <Animated.View style={[styles.card, { transform: [{ translateX: shakeAnim }] }]}>
-            <Text style={styles.cardTitle}>Se connecter</Text>
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Recevoir le lien</Text>
             <Text style={styles.cardSub}>
-              Utilise tes identifiants pour acceder a ton espace et aux outils du club.
+              Le lien envoyé est temporaire. Ouvre ensuite l'e-mail sur ton téléphone ou sur le site.
             </Text>
 
             <View style={styles.fieldWrap}>
@@ -184,54 +145,12 @@ export default function LoginScreen() {
                   autoCorrect={false}
                   placeholderTextColor="#8EA0BB"
                   style={styles.input}
-                  returnKeyType="next"
+                  returnKeyType="send"
                   editable={!loading}
-                  onSubmitEditing={() => passwordRef.current?.focus()}
+                  onSubmitEditing={handleSubmit}
                 />
               </View>
             </View>
-
-            <View style={styles.fieldWrap}>
-              <Text style={styles.inputLabel}>Mot de passe</Text>
-              <View style={styles.inputShell}>
-                <Icon name="lock-closed-outline" size={18} color="#9FB0C8" />
-                <TextInput
-                  ref={passwordRef}
-                  placeholder="********"
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry={!showPwd}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  placeholderTextColor="#8EA0BB"
-                  style={styles.input}
-                  returnKeyType="done"
-                  editable={!loading}
-                  onSubmitEditing={handleLogin}
-                />
-                <TouchableOpacity
-                  style={styles.eyeBtn}
-                  onPress={() => setShowPwd((v) => !v)}
-                  activeOpacity={0.8}
-                  disabled={loading}
-                >
-                  <Icon name={showPwd ? "eye-off-outline" : "eye-outline"} size={19} color="#FF9E3A" />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            <TouchableOpacity
-              onPress={() =>
-                router.push({
-                  pathname: "/forgot-password",
-                  params: email.trim() ? { email: email.trim().toLowerCase() } : undefined,
-                })
-              }
-              activeOpacity={0.85}
-              style={styles.forgotBtn}
-            >
-              <Text style={styles.forgotBtnText}>Mot de passe oublié ?</Text>
-            </TouchableOpacity>
 
             {!!error && (
               <View style={styles.errorCard}>
@@ -240,33 +159,38 @@ export default function LoginScreen() {
               </View>
             )}
 
-            {!!debug && __DEV__ && <Text style={styles.debugText}>{debug}</Text>}
+            {!!notice && (
+              <View style={styles.noticeCard}>
+                <Icon name="mail-open-outline" size={16} color="#86EFAC" />
+                <Text style={styles.noticeText}>{notice}</Text>
+              </View>
+            )}
 
             <TouchableOpacity
-              style={[styles.primaryBtn, !canSubmit && styles.primaryBtnDisabled]}
-              disabled={!canSubmit}
-              onPress={handleLogin}
+              style={[styles.primaryBtn, loading && styles.primaryBtnDisabled]}
+              disabled={loading}
+              onPress={handleSubmit}
               activeOpacity={0.9}
             >
               {loading ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
                 <>
-                  <Icon name="log-in-outline" size={18} color="#111827" />
-                  <Text style={styles.primaryBtnTxt}>Se connecter</Text>
+                  <Icon name="paper-plane-outline" size={18} color="#111827" />
+                  <Text style={styles.primaryBtnTxt}>Envoyer le lien</Text>
                 </>
               )}
             </TouchableOpacity>
-          </Animated.View>
 
-          <TouchableOpacity
-            onPress={() => router.push("/(tabs)/Register")}
-            activeOpacity={0.85}
-            style={styles.helpBox}
-          >
-            <Icon name="person-add-outline" size={16} color="#FF9E3A" />
-            <Text style={styles.helpText}>Pas de compte ? Creer un compte membre</Text>
-          </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => router.replace("/login")}
+              activeOpacity={0.85}
+              style={styles.secondaryBtn}
+            >
+              <Icon name="log-in-outline" size={16} color="#FFB366" />
+              <Text style={styles.secondaryBtnText}>Retour à la connexion</Text>
+            </TouchableOpacity>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -293,12 +217,12 @@ const styles = StyleSheet.create({
   },
   heroGradient: {
     paddingHorizontal: 12,
-    paddingBottom: 10,
+    paddingBottom: 12,
   },
   heroShine: {
     ...StyleSheet.absoluteFillObject,
     top: 0,
-    bottom: "58%",
+    bottom: "56%",
   },
   heroTopRow: {
     flexDirection: "row",
@@ -345,28 +269,11 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     fontSize: 11,
   },
-  metaRow: {
-    marginTop: 8,
-    flexDirection: "row",
-    gap: 8,
-  },
-  metaPill: {
-    flex: 1,
-    minHeight: 34,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.2)",
-    backgroundColor: "rgba(0,0,0,0.3)",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    paddingHorizontal: 8,
-  },
-  metaText: {
+  heroInfo: {
+    marginTop: 10,
     color: "#E5E7EB",
-    fontSize: 11.5,
-    fontWeight: "700",
+    fontSize: 12.5,
+    lineHeight: 18,
   },
 
   content: {
@@ -403,7 +310,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   fieldWrap: {
-    marginBottom: 11,
+    marginBottom: 12,
   },
   inputLabel: {
     color: "#C7CEDA",
@@ -429,31 +336,8 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     paddingVertical: 10,
   },
-  eyeBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(255,158,58,0.12)",
-  },
-  forgotBtn: {
-    alignSelf: "flex-end",
-    marginTop: -2,
-    marginBottom: 10,
-    minHeight: 28,
-    justifyContent: "center",
-    paddingHorizontal: 2,
-  },
-  forgotBtnText: {
-    color: "#FFB366",
-    fontSize: 12.5,
-    fontWeight: "700",
-  },
-
   errorCard: {
-    marginTop: 2,
-    marginBottom: 7,
+    marginBottom: 8,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: "rgba(248,113,113,0.45)",
@@ -470,22 +354,28 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     fontWeight: "700",
   },
-  debugText: {
+  noticeCard: {
     marginBottom: 8,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: "rgba(245,158,11,0.45)",
-    backgroundColor: "rgba(245,158,11,0.12)",
-    color: "#FDE68A",
-    fontSize: 12,
+    borderColor: "rgba(134,239,172,0.35)",
+    backgroundColor: "rgba(34,197,94,0.12)",
     paddingHorizontal: 10,
-    paddingVertical: 7,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
   },
-
+  noticeText: {
+    flex: 1,
+    color: "#BBF7D0",
+    fontSize: 12.5,
+    fontWeight: "700",
+  },
   primaryBtn: {
     alignSelf: "center",
     minHeight: 44,
-    minWidth: 180,
+    minWidth: 190,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: "#FFBD80",
@@ -505,8 +395,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "800",
   },
-
-  helpBox: {
+  secondaryBtn: {
     marginTop: 12,
     alignSelf: "center",
     borderRadius: 11,
@@ -519,7 +408,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 7,
   },
-  helpText: {
+  secondaryBtnText: {
     color: "#FFB366",
     fontSize: 12.5,
     fontWeight: "700",

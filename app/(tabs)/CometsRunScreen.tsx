@@ -39,7 +39,10 @@ const PRIMARY_API =
   (__DEV__ ? "http://10.0.2.2:3000" : "https://les-comets-honfleur.vercel.app");
 const FALLBACK_API = "https://les-comets-honfleur.vercel.app";
 const COMETS_RUN_OVERTAKE_PATH = "/api/notifications/comets-run-overtake";
+const COMETS_RUN_PLAYER_STATE_PATH = "/api/comets-run/player-state";
 const PUSH_COMETS_RUN_SECRET = process.env.EXPO_PUBLIC_PUSH_COMETS_RUN_SECRET || "";
+const unavailableLocalApiBases = new Set<string>();
+const loggedLocalApiFallbackBases = new Set<string>();
 
 const HOME_UI = {
   bg: "#0B0F17",
@@ -89,7 +92,7 @@ const OBSTACLE_MAX_GAP_BASE = 820;
 const OBSTACLE_MIN_W = 26;
 const OBSTACLE_MAX_W = 50;
 const OBSTACLE_BASE_H = 58;
-const OBSTACLE_PATTERN_MIN_SCORE = 1800;
+const OBSTACLE_PATTERN_MIN_SCORE = 900;
 
 const PLATFORM_H = 16;
 const PLATFORM_MIN_W = 150;
@@ -111,6 +114,12 @@ const BG_SPEED = 0.1;
 const MULT_MIN = 1.0;
 const MULT_MAX = 3.0;
 const MULT_SCALE = 260;
+const RUN_RENDER_INTERVAL_MS = Platform.OS === "android" ? 34 : 28;
+const RUN_RENDER_INTERVAL_HIGH_LOAD_MS = Platform.OS === "android" ? 46 : 36;
+const RENDER_LOAD_ENTITY_THRESHOLD = 22;
+const MAX_VISIBLE_POPUPS = 6;
+const TRAIL_DOT_COUNT = 3;
+const LETTER_RING_COLOR = "#FFD27A";
 
 // Storage keys
 const KEY_BEST = "COMETS_RUNNER_BEST";
@@ -119,6 +128,8 @@ const KEY_ACH = "COMETS_RUNNER_ACHIEVEMENTS";
 const KEY_COMETS_PROGRESS = "COMETS_RUNNER_COMETS_PROGRESS"; // persistance C-O-M-E-T-S
 const KEY_PAUSE_SNAPSHOT = "COMETS_RUNNER_PAUSE_SNAPSHOT";
 const KEY_DAILY_MISSIONS = "COMETS_RUNNER_DAILY_MISSIONS";
+const KEY_META_STATS = "COMETS_RUNNER_META_STATS";
+const KEY_LOADOUT = "COMETS_RUNNER_LOADOUT";
 
 
 const DOUBLEJUMP_DURATION = 10_000;
@@ -133,7 +144,7 @@ const R_X2 = 18;
 const R_LETTER = 24;
 
 // Durée multiplicateur (purple coin)
-const SCORE_MULT_DURATION = 10_000;
+const SCORE_MULT_DURATION = 6_500;
 
 // --- HUD anti-spam (toasts)
 const TOAST_MIN_INTERVAL_MS = 900;
@@ -145,15 +156,23 @@ const SUPER_SHIELD_GROUND_COINS = 5;
 const SUPER_SHIELD_COIN_SCALE = 1.6; // pièces plus grosses
 
 // Purple combo
-const PURPLE_CHAIN_GOAL = 10;
-const PURPLE_CHAIN_AIR_COINS = 10;
+const PURPLE_CHAIN_GOAL = 12;
+const PURPLE_CHAIN_AIR_COINS = 8;
+const PURPLE_SCORE_BASE = 90;
+const PURPLE_MAX_MULT = 6;
+const DOUBLEJUMP_X2_SPAWN_CHANCE = 0.42;
+
+const NEAR_MISS_X_WINDOW = 52;
+const NEAR_MISS_Y_WINDOW = 28;
+const NEAR_MISS_BASE_SCORE = 150;
 
 // COMETS (ordre strict)
 const LETTERS = ["C","O","M","E","T","S"] as const;
 type CometsLetter = typeof LETTERS[number];
 
-// PALMIERS SCORE (une lettre tous les 10k entre 10k et 60k)
-const LETTER_THRESHOLDS = [10_000, 20_000, 30_000, 40_000, 50_000, 60_000] as const;
+// COMETS arrive plus vite pour creer un moment fort sur une run classique
+const LETTER_THRESHOLDS = [4_000, 8_500, 14_000, 20_000, 27_500, 36_000] as const;
+const LETTER_SPAWN_SCORE_BUFFER = 4_500;
 
 // Assets
 const logoComets = require("../../assets/images/iconComets.png");
@@ -177,14 +196,58 @@ const mapMarsBG = require("../../assets/game/maps/mars.png");
 const mapSystemeSolaireBG = require("../../assets/game/maps/systeme_solaire.png");
 
 // Types
-type Obstacle = { id: number; x: number; w: number; h: number; y: number; variant: 0 | 1 };
+type Obstacle = { id: number; x: number; w: number; h: number; y: number; variant: 0 | 1; grazed?: boolean };
 type Collectible = { id: number; x: number; y: number; r: number };
 type PlatformBlock = { id: number; x: number; y: number; w: number; h: number };
 type PowerUpKind = "shield" | "doublejump" | "x2" | "letter";
 type PowerUp = { id: number; x: number; y: number; r: number; kind: PowerUpKind; letter?: CometsLetter };
 type GameState = "ready" | "running" | "paused" | "gameover";
 type Settings = { mute: boolean; haptics: boolean; highContrast: boolean; };
-type SpawnPattern = "platform_gate" | "double_trouble" | "risk_lane";
+type SpawnPattern = "platform_gate" | "double_trouble" | "risk_lane" | "stairway" | "rapid_triple" | "split_route" | "purple_gauntlet";
+
+type TrailId = "classic" | "plasma" | "solar";
+type ThemeId = "club" | "nebula" | "red_clay";
+type TitleId = "rookie" | "risk_taker" | "all_star" | "captain";
+type PerkId = "none" | "starter_shield" | "air_mastery" | "purple_open";
+
+type Loadout = {
+  trail: TrailId;
+  theme: ThemeId;
+  title: TitleId;
+  perk: PerkId;
+};
+
+type MetaStats = {
+  totalRuns: number;
+  totalNearMisses: number;
+  totalMissionCompletions: number;
+  bestScoreEver: number;
+};
+
+type RunMeta = {
+  beatBest: boolean;
+  previousBest: number;
+  previousWeeklyRank: number | null;
+  currentWeeklyRank: number | null;
+  weeklyRankGain: number;
+  enteredWeeklyBoard: boolean;
+};
+
+type PlayerStateUnlockedItems = {
+  trails: TrailId[];
+  themes: ThemeId[];
+  titles: TitleId[];
+  perks: PerkId[];
+};
+
+type CloudPlayerStateRow = {
+  admin_id: string;
+  loadout: unknown;
+  meta_stats: unknown;
+  achievements: unknown;
+  unlocked_items: unknown;
+  updated_at?: string | null;
+};
 
 type LBRow = {
   admin_id: string;
@@ -210,9 +273,80 @@ const DAILY_MISSIONS: readonly {
   tint: string;
 }[] = [
   { id: "runs", label: "3 parties", target: 3, tint: "#60A5FA" },
-  { id: "coins", label: "40 pieces", target: 40, tint: "#F59E0B" },
+  { id: "coins", label: "40 pièces", target: 40, tint: "#F59E0B" },
   { id: "score", label: "Score 2500", target: 2500, tint: "#A78BFA" },
 ];
+
+const DEFAULT_META_STATS: MetaStats = {
+  totalRuns: 0,
+  totalNearMisses: 0,
+  totalMissionCompletions: 0,
+  bestScoreEver: 0,
+};
+
+const DEFAULT_LOADOUT: Loadout = {
+  trail: "classic",
+  theme: "club",
+  title: "rookie",
+  perk: "none",
+};
+
+const TRAIL_OPTIONS: readonly {
+  id: TrailId;
+  label: string;
+  accent: string;
+  unlockLabel: string;
+  isUnlocked: (meta: MetaStats, achievements: Record<AchievementKey, boolean>, best: number) => boolean;
+}[] = [
+  { id: "classic", label: "Classic", accent: "#FF8200", unlockLabel: "De base", isUnlocked: () => true },
+  { id: "plasma", label: "Plasma", accent: "#67E8F9", unlockLabel: "Combo 10", isUnlocked: (_meta, achievements) => achievements.combo_10 },
+  { id: "solar", label: "Solar", accent: "#FBBF24", unlockLabel: "Best 10k", isUnlocked: (_meta, _achievements, best) => best >= 10_000 },
+];
+
+const THEME_OPTIONS: readonly {
+  id: ThemeId;
+  label: string;
+  accent: string;
+  unlockLabel: string;
+  isUnlocked: (meta: MetaStats, achievements: Record<AchievementKey, boolean>, best: number) => boolean;
+}[] = [
+  { id: "club", label: "Club", accent: "#FF8200", unlockLabel: "De base", isUnlocked: () => true },
+  { id: "nebula", label: "Nebula", accent: "#7C3AED", unlockLabel: "3 missions", isUnlocked: (meta) => meta.totalMissionCompletions >= 3 },
+  { id: "red_clay", label: "Red Clay", accent: "#FB7185", unlockLabel: "Best 15k", isUnlocked: (_meta, _achievements, best) => best >= 15_000 },
+];
+
+const TITLE_OPTIONS: readonly {
+  id: TitleId;
+  label: string;
+  accent: string;
+  unlockLabel: string;
+  isUnlocked: (meta: MetaStats, achievements: Record<AchievementKey, boolean>, best: number) => boolean;
+}[] = [
+  { id: "rookie", label: "Rookie", accent: "#D1D5DB", unlockLabel: "De base", isUnlocked: () => true },
+  { id: "risk_taker", label: "Risk Taker", accent: "#F97316", unlockLabel: "15 near-miss", isUnlocked: (meta) => meta.totalNearMisses >= 15 },
+  { id: "all_star", label: "All-Star", accent: "#22D3EE", unlockLabel: "Best 10k", isUnlocked: (_meta, _achievements, best) => best >= 10_000 },
+  { id: "captain", label: "Captain", accent: "#FACC15", unlockLabel: "6 missions", isUnlocked: (meta) => meta.totalMissionCompletions >= 6 },
+];
+
+const PERK_OPTIONS: readonly {
+  id: PerkId;
+  label: string;
+  accent: string;
+  description: string;
+  unlockLabel: string;
+  isUnlocked: (meta: MetaStats, achievements: Record<AchievementKey, boolean>, best: number) => boolean;
+}[] = [
+  { id: "none", label: "Aucun", accent: "#9CA3AF", description: "Run pure", unlockLabel: "De base", isUnlocked: () => true },
+  { id: "starter_shield", label: "Shield", accent: "#22C55E", description: "Bouclier de départ", unlockLabel: "3 runs", isUnlocked: (meta) => meta.totalRuns >= 3 },
+  { id: "air_mastery", label: "Air", accent: "#60A5FA", description: "Double saut au départ", unlockLabel: "Score 2000", isUnlocked: (_meta, achievements) => achievements.score_2000 },
+  { id: "purple_open", label: "Purple", accent: "#C084FC", description: "x2 au lancement", unlockLabel: "Premier x2", isUnlocked: (_meta, achievements) => achievements.first_x2 },
+];
+
+const THEME_PRESETS: Record<ThemeId, { ground: string; detail: string; fence: string; scoreBg: string }> = {
+  club: { ground: "#ff7a00", detail: "#402300", fence: "#1f2937", scoreBg: "rgba(11,15,23,0.72)" },
+  nebula: { ground: "#7C3AED", detail: "#312E81", fence: "#3B0764", scoreBg: "rgba(23,15,38,0.74)" },
+  red_clay: { ground: "#FB7185", detail: "#7F1D1D", fence: "#4B5563", scoreBg: "rgba(33,16,20,0.74)" },
+};
 
 // Helpers
 const randf = (min: number, max: number) => Math.random() * (max - min) + min;
@@ -230,6 +364,17 @@ function createDailyMissionState(dateKey = getDailyMissionDateKey()): DailyMissi
   return { dateKey, runs: 0, coins: 0, bestScore: 0 };
 }
 
+function normalizeMetaStats(raw: unknown): MetaStats {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_META_STATS };
+  const data = raw as Partial<MetaStats>;
+  return {
+    totalRuns: Number.isFinite(Number(data.totalRuns)) ? Math.max(0, Math.floor(Number(data.totalRuns))) : 0,
+    totalNearMisses: Number.isFinite(Number(data.totalNearMisses)) ? Math.max(0, Math.floor(Number(data.totalNearMisses))) : 0,
+    totalMissionCompletions: Number.isFinite(Number(data.totalMissionCompletions)) ? Math.max(0, Math.floor(Number(data.totalMissionCompletions))) : 0,
+    bestScoreEver: Number.isFinite(Number(data.bestScoreEver)) ? Math.max(0, Math.floor(Number(data.bestScoreEver))) : 0,
+  };
+}
+
 function normalizeDailyMissionState(raw: unknown, todayKey = getDailyMissionDateKey()): DailyMissionState {
   if (!raw || typeof raw !== "object") return createDailyMissionState(todayKey);
 
@@ -244,6 +389,17 @@ function normalizeDailyMissionState(raw: unknown, todayKey = getDailyMissionDate
     Number.isFinite(Number(data.bestScore)) ? Math.max(0, Math.floor(Number(data.bestScore))) : 0;
 
   return { dateKey: todayKey, runs, coins, bestScore };
+}
+
+function resolveUnlockedId<T extends { id: string }>(
+  preferred: string | undefined,
+  items: readonly T[],
+  isUnlocked: (item: T) => boolean,
+) {
+  const unlocked = items.filter(isUnlocked);
+  const fallback = unlocked[0] ?? items[0];
+  if (!preferred) return fallback.id;
+  return unlocked.some((item) => item.id === preferred) ? preferred : fallback.id;
 }
 
 function getDailyMissionValue(state: DailyMissionState, missionId: DailyMissionId) {
@@ -323,6 +479,13 @@ const MAP_SWITCH_AT = {
   jupiter_to_mars: 40_000,
   mars_to_solaire: 100_000,
 } as const;
+const MAP_MIN_DWELL_MS = 12_000;
+const MINI_EVENT_FIRST_DELAY_MS = 20_000;
+const MINI_EVENT_COOLDOWN_MIN_MS = 24_000;
+const MINI_EVENT_COOLDOWN_MAX_MS = 34_000;
+const MINI_EVENT_DURATION_MS = 5_200;
+const MINI_EVENT_BURST_MS = 950;
+const MARS_ASCENT_ARM_MS = 1_350;
 
 const MAP_NAMES: MapName[] = ["base", "terre", "jupiter", "mars", "systeme_solaire"];
 const POWERUP_KINDS: PowerUpKind[] = ["shield", "doublejump", "x2", "letter"];
@@ -336,6 +499,88 @@ function getDifficultyByMap(map: MapName) {
     case "systeme_solaire": return { speedGain: SPEED_GAIN_PER_SEC_BASE * 1.45, gapMul: 0.82, gravityMul: 1.05 };
   }
 }
+type MapEffect = {
+  label: string;
+  subtitle: string;
+  hudNote: string;
+  accent: string;
+  coinBonus: number;
+  x2Bonus: number;
+  obstacleScale: number;
+  lowGravityMul: number;
+  speedRush: number;
+  nearMissMul: number;
+  distanceScoreMul: number;
+};
+
+const MAP_EFFECTS: Record<MapName, MapEffect> = {
+  base: {
+    label: "Base Comets",
+    subtitle: "Cadence propre, terrain stable",
+    hudNote: "Équilibre",
+    accent: "#FF8200",
+    coinBonus: 0,
+    x2Bonus: 0,
+    obstacleScale: 1,
+    lowGravityMul: 1,
+    speedRush: 0,
+    nearMissMul: 1,
+    distanceScoreMul: 1,
+  },
+  terre: {
+    label: "Terre",
+    subtitle: "Lignes de pièces plus généreuses",
+    hudNote: "Butin +",
+    accent: "#67E8F9",
+    coinBonus: 0.12,
+    x2Bonus: 0.05,
+    obstacleScale: 0.96,
+    lowGravityMul: 1,
+    speedRush: 0,
+    nearMissMul: 1,
+    distanceScoreMul: 1.03,
+  },
+  jupiter: {
+    label: "Jupiter",
+    subtitle: "Obstacles plus lourds, close calls mieux payés",
+    hudNote: "Heavy mode",
+    accent: "#F59E0B",
+    coinBonus: 0.04,
+    x2Bonus: 0.02,
+    obstacleScale: 1.14,
+    lowGravityMul: 1.06,
+    speedRush: 0.03,
+    nearMissMul: 1.7,
+    distanceScoreMul: 1.07,
+  },
+  mars: {
+    label: "Mars",
+    subtitle: "Gravité plus légère, runs plus aériens",
+    hudNote: "Float",
+    accent: "#FB7185",
+    coinBonus: 0.08,
+    x2Bonus: 0.08,
+    obstacleScale: 0.98,
+    lowGravityMul: 0.84,
+    speedRush: 0.04,
+    nearMissMul: 1.15,
+    distanceScoreMul: 1.08,
+  },
+  systeme_solaire: {
+    label: "Système solaire",
+    subtitle: "Rush cosmique, score et bonus accélèrent",
+    hudNote: "Rush x",
+    accent: "#A78BFA",
+    coinBonus: 0.16,
+    x2Bonus: 0.12,
+    obstacleScale: 1.08,
+    lowGravityMul: 0.92,
+    speedRush: 0.08,
+    nearMissMul: 1.3,
+    distanceScoreMul: 1.14,
+  },
+};
+
 type PauseSnapshot = {
   ts: number;
   score: number;
@@ -348,6 +593,16 @@ type PauseSnapshot = {
   scoreMultLeftMs: number;
   purpleChain: number;
   persistentLetters: CometsLetter[]; // progression C-O-M-E-T-S
+  nextLetterSpawnScore: number;
+  currentMapIndex: number;
+  nextMapAdvanceLeftMs: number;
+  nextMiniEventLeftMs: number;
+  miniEvent?: {
+    name: MiniEventName;
+    map: MapName;
+    leftMs: number;
+    nextBurstLeftMs: number;
+  } | null;
   mapName: MapName;
   speed: number;
   world?: {
@@ -398,8 +653,212 @@ function activeMapForScore(score: number): MapName {
   return "base";
 }
 
+function mapIndexForScore(score: number) {
+  return MAP_NAMES.indexOf(activeMapForScore(score));
+}
+
+type MiniEventName = "terre_tresor" | "jupiter_crunch" | "mars_orbit" | "solaire_storm";
+type MiniEventState = {
+  name: MiniEventName;
+  map: MapName;
+  endsAt: number;
+  nextBurstAt: number;
+};
+type MarsAscentEventState = MiniEventState & { name: "mars_orbit"; map: "mars" };
+
+function isMarsAscentEvent(event: MiniEventState | null | undefined): event is MarsAscentEventState {
+  return !!event && event.name === "mars_orbit" && event.map === "mars";
+}
+
+function marsAscentArmsAt(event: MiniEventState) {
+  return event.endsAt - Math.max(0, MINI_EVENT_DURATION_MS - MARS_ASCENT_ARM_MS);
+}
+
+function miniEventForMap(map: MapName): MiniEventName | null {
+  switch (map) {
+    case "terre":
+      return "terre_tresor";
+    case "jupiter":
+      return "jupiter_crunch";
+    case "mars":
+      return "mars_orbit";
+    case "systeme_solaire":
+      return "solaire_storm";
+    default:
+      return null;
+  }
+}
+
+const MAP_PATTERN_WEIGHTS: Record<MapName, readonly { pattern: SpawnPattern; weight: number }[]> = {
+  base: [
+    { pattern: "platform_gate", weight: 18 },
+    { pattern: "double_trouble", weight: 18 },
+    { pattern: "stairway", weight: 16 },
+    { pattern: "rapid_triple", weight: 16 },
+    { pattern: "split_route", weight: 12 },
+    { pattern: "purple_gauntlet", weight: 8 },
+    { pattern: "risk_lane", weight: 12 },
+  ],
+  terre: [
+    { pattern: "platform_gate", weight: 22 },
+    { pattern: "double_trouble", weight: 12 },
+    { pattern: "stairway", weight: 18 },
+    { pattern: "rapid_triple", weight: 12 },
+    { pattern: "split_route", weight: 20 },
+    { pattern: "purple_gauntlet", weight: 6 },
+    { pattern: "risk_lane", weight: 10 },
+  ],
+  jupiter: [
+    { pattern: "platform_gate", weight: 10 },
+    { pattern: "double_trouble", weight: 24 },
+    { pattern: "stairway", weight: 10 },
+    { pattern: "rapid_triple", weight: 22 },
+    { pattern: "split_route", weight: 10 },
+    { pattern: "purple_gauntlet", weight: 8 },
+    { pattern: "risk_lane", weight: 16 },
+  ],
+  mars: [
+    { pattern: "platform_gate", weight: 24 },
+    { pattern: "double_trouble", weight: 8 },
+    { pattern: "stairway", weight: 28 },
+    { pattern: "rapid_triple", weight: 8 },
+    { pattern: "split_route", weight: 10 },
+    { pattern: "purple_gauntlet", weight: 6 },
+    { pattern: "risk_lane", weight: 16 },
+  ],
+  systeme_solaire: [
+    { pattern: "platform_gate", weight: 8 },
+    { pattern: "double_trouble", weight: 16 },
+    { pattern: "stairway", weight: 8 },
+    { pattern: "rapid_triple", weight: 24 },
+    { pattern: "split_route", weight: 12 },
+    { pattern: "purple_gauntlet", weight: 18 },
+    { pattern: "risk_lane", weight: 14 },
+  ],
+};
+
+function pickSpawnPatternForMap(map: MapName): SpawnPattern {
+  const weights = MAP_PATTERN_WEIGHTS[map];
+  const total = weights.reduce((sum, entry) => sum + Math.max(0, entry.weight), 0);
+  let roll = Math.random() * Math.max(1, total);
+  for (const entry of weights) {
+    roll -= Math.max(0, entry.weight);
+    if (roll <= 0) return entry.pattern;
+  }
+  return weights[weights.length - 1]?.pattern ?? "double_trouble";
+}
+
+function getUnlockProgressForId(
+  id: TrailId | ThemeId | TitleId | PerkId,
+  meta: MetaStats,
+  achievements: Record<AchievementKey, boolean>,
+  best: number,
+) {
+  switch (id) {
+    case "plasma":
+      return { text: achievements.combo_10 ? "Prêt" : "Faire un combo x10", ratio: achievements.combo_10 ? 1 : 0 };
+    case "solar":
+      return { text: `${Math.min(best, 10_000)}/10000`, ratio: clamp(best / 10_000, 0, 1) };
+    case "nebula":
+      return { text: `${Math.min(meta.totalMissionCompletions, 3)}/3 missions`, ratio: clamp(meta.totalMissionCompletions / 3, 0, 1) };
+    case "red_clay":
+      return { text: `${Math.min(best, 15_000)}/15000`, ratio: clamp(best / 15_000, 0, 1) };
+    case "risk_taker":
+      return { text: `${Math.min(meta.totalNearMisses, 15)}/15 near-miss`, ratio: clamp(meta.totalNearMisses / 15, 0, 1) };
+    case "all_star":
+      return { text: `${Math.min(best, 10_000)}/10000`, ratio: clamp(best / 10_000, 0, 1) };
+    case "captain":
+      return { text: `${Math.min(meta.totalMissionCompletions, 6)}/6 missions`, ratio: clamp(meta.totalMissionCompletions / 6, 0, 1) };
+    case "starter_shield":
+      return { text: `${Math.min(meta.totalRuns, 3)}/3 runs`, ratio: clamp(meta.totalRuns / 3, 0, 1) };
+    case "air_mastery":
+      return { text: achievements.score_2000 ? "Prêt" : "Atteindre 2 000", ratio: achievements.score_2000 ? 1 : 0 };
+    case "purple_open":
+      return { text: achievements.first_x2 ? "Prêt" : "Prendre un x2", ratio: achievements.first_x2 ? 1 : 0 };
+    default:
+      return { text: "Débloqué", ratio: 1 };
+  }
+}
+
+function normalizeAchievements(raw: unknown): Record<AchievementKey, boolean> {
+  const data = raw && typeof raw === "object" ? (raw as Partial<Record<AchievementKey, unknown>>) : {};
+  return {
+    first_x2: !!data.first_x2,
+    score_2000: !!data.score_2000,
+    combo_10: !!data.combo_10,
+  };
+}
+
+function mergeAchievements(
+  local: Record<AchievementKey, boolean>,
+  cloud: Record<AchievementKey, boolean>,
+): Record<AchievementKey, boolean> {
+  return {
+    first_x2: !!local.first_x2 || !!cloud.first_x2,
+    score_2000: !!local.score_2000 || !!cloud.score_2000,
+    combo_10: !!local.combo_10 || !!cloud.combo_10,
+  };
+}
+
+function mergeMetaStats(local: MetaStats, cloud: MetaStats): MetaStats {
+  return {
+    totalRuns: Math.max(local.totalRuns, cloud.totalRuns),
+    totalNearMisses: Math.max(local.totalNearMisses, cloud.totalNearMisses),
+    totalMissionCompletions: Math.max(local.totalMissionCompletions, cloud.totalMissionCompletions),
+    bestScoreEver: Math.max(local.bestScoreEver, cloud.bestScoreEver),
+  };
+}
+
+function normalizeUnlockedItems(raw: unknown): PlayerStateUnlockedItems {
+  const data = raw && typeof raw === "object" ? (raw as Partial<Record<keyof PlayerStateUnlockedItems, unknown>>) : {};
+  const arr = <T extends string>(value: unknown, allowed: readonly T[]) =>
+    Array.isArray(value) ? value.filter((item): item is T => allowed.includes(item as T)) : [];
+  return {
+    trails: arr(data.trails, TRAIL_OPTIONS.map((item) => item.id)),
+    themes: arr(data.themes, THEME_OPTIONS.map((item) => item.id)),
+    titles: arr(data.titles, TITLE_OPTIONS.map((item) => item.id)),
+    perks: arr(data.perks, PERK_OPTIONS.map((item) => item.id)),
+  };
+}
+
 function joinUrl(base: string, path: string) {
   return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+function isLocalApiBase(base: string) {
+  try {
+    const host = new URL(base).hostname;
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "10.0.2.2" ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function apiCandidates(path: string) {
+  return Array.from(
+    new Set(
+      [PRIMARY_API, FALLBACK_API]
+        .map((base) => String(base ?? "").trim())
+        .filter(Boolean)
+        .filter((base) => !(isLocalApiBase(base) && unavailableLocalApiBases.has(base))),
+    ),
+  ).map((base) => ({ base, url: joinUrl(base, path) }));
+}
+
+function noteLocalApiUnavailable(base: string) {
+  if (!isLocalApiBase(base)) return;
+  unavailableLocalApiBases.add(base);
+  if (!loggedLocalApiFallbackBases.has(base)) {
+    loggedLocalApiFallbackBases.add(base);
+    console.log("[CometsRun api] local API unreachable, fallback to deployed API:", base);
+  }
 }
 
 async function notifyCometsRunOvertake(payload: {
@@ -407,16 +866,8 @@ async function notifyCometsRunOvertake(payload: {
   previousBest: number;
   newBest: number;
 }) {
-  const urls = Array.from(
-    new Set(
-      [PRIMARY_API, FALLBACK_API]
-        .map((base) => String(base ?? "").trim())
-        .filter(Boolean)
-        .map((base) => joinUrl(base, COMETS_RUN_OVERTAKE_PATH)),
-    ),
-  );
-
-  for (const url of urls) {
+  const candidates = apiCandidates(COMETS_RUN_OVERTAKE_PATH);
+  for (const { base, url } of candidates) {
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -433,6 +884,10 @@ async function notifyCometsRunOvertake(payload: {
       const text = await res.text().catch(() => "");
       console.log("[CometsRun notify] non-ok:", url, res.status, text.slice(0, 200));
     } catch (e) {
+      if (isLocalApiBase(base)) {
+        noteLocalApiUnavailable(base);
+        continue;
+      }
       console.log("[CometsRun notify] network error:", url, (e as any)?.message ?? e);
     }
   }
@@ -440,8 +895,97 @@ async function notifyCometsRunOvertake(payload: {
   return false;
 }
 
+async function fetchCometsRunPlayerStateApi(sessionToken?: string | null) {
+  let missingRoute = false;
+  const candidates = apiCandidates(COMETS_RUN_PLAYER_STATE_PATH);
+  for (const { base, url } of candidates) {
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+        headers: {
+          ...(sessionToken ? { "x-admin-session": sessionToken } : {}),
+        },
+      });
+
+      if (res.status === 401) return { unauthorized: true as const, state: null };
+      if (res.status === 404) {
+        missingRoute = true;
+        continue;
+      }
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        console.log("[CometsRun player-state GET] non-ok:", url, res.status, text.slice(0, 200));
+        continue;
+      }
+
+      const json = await res.json().catch(() => null);
+      return { unauthorized: false as const, state: (json?.state ?? null) as CloudPlayerStateRow | null };
+    } catch (e) {
+      if (isLocalApiBase(base)) {
+        noteLocalApiUnavailable(base);
+        continue;
+      }
+      console.log("[CometsRun player-state GET] network error:", url, (e as any)?.message ?? e);
+    }
+  }
+
+  return { unauthorized: false as const, state: null, unavailable: missingRoute as boolean };
+}
+
+async function pushCometsRunPlayerStateApi(
+  sessionToken: string | null | undefined,
+  payload: {
+    loadout: Loadout;
+    meta_stats: MetaStats;
+    achievements: Record<AchievementKey, boolean>;
+    unlocked_items: PlayerStateUnlockedItems;
+  },
+) {
+  let missingRoute = false;
+  const candidates = apiCandidates(COMETS_RUN_PLAYER_STATE_PATH);
+  for (const { base, url } of candidates) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(sessionToken ? { "x-admin-session": sessionToken } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.status === 401) return { ok: false as const, unauthorized: true as const };
+      if (res.status === 404) {
+        missingRoute = true;
+        continue;
+      }
+      if (res.ok) return { ok: true as const, unauthorized: false as const };
+
+      const text = await res.text().catch(() => "");
+      console.log("[CometsRun player-state POST] non-ok:", url, res.status, text.slice(0, 200));
+    } catch (e) {
+      if (isLocalApiBase(base)) {
+        noteLocalApiUnavailable(base);
+        continue;
+      }
+      console.log("[CometsRun player-state POST] network error:", url, (e as any)?.message ?? e);
+    }
+  }
+
+  return { ok: false as const, unauthorized: false as const, unavailable: missingRoute as boolean };
+}
+
 // ================= Component =================
 export default function CometsRunnerScreen() {
+  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
+  const isReadyCompact = viewportHeight < 470;
+  const isReadyTight = viewportHeight < 420;
+  const isReadyShort = viewportHeight < 560;
+  const isReadyViewportScroll = viewportHeight < 540;
+  const isReadyDense = viewportHeight < 520 || viewportWidth < 1180;
+
   // Lock paysage + nav bar
   useEffect(() => {
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
@@ -530,9 +1074,16 @@ export default function CometsRunnerScreen() {
   const [dailyMissions, setDailyMissions] = useState<DailyMissionState>(() => createDailyMissionState());
   const dailyMissionsRef = useRef<DailyMissionState>(createDailyMissionState());
   const runCoinsCollectedRef = useRef(0);
+  const runNearMissesRef = useRef(0);
 
   // 🎉 Ultra visuel 20k — overlay éphémère (déclenché plus tard)
   const [bigEventUntil, setBigEventUntil] = useState<number>(0);
+  const [runBanner, setRunBanner] = useState<{ label: string; subtitle?: string; accent: string; until: number } | null>(null);
+  const [hudFlash, setHudFlash] = useState<{ accent: string; until: number } | null>(null);
+  const [lastRunMeta, setLastRunMeta] = useState<RunMeta | null>(null);
+  const [metaStats, setMetaStats] = useState<MetaStats>(DEFAULT_META_STATS);
+  const metaStatsRef = useRef<MetaStats>(DEFAULT_META_STATS);
+  const [loadout, setLoadout] = useState<Loadout>(DEFAULT_LOADOUT);
 
   // restart lockout
   const restartAllowedAtRef = useRef<number>(0);
@@ -555,6 +1106,9 @@ export default function CometsRunnerScreen() {
   const [achievements, setAchievements] = useState<Record<AchievementKey, boolean>>({
     first_x2: false, score_2000: false, combo_10: false
   });
+  const cloudPlayerStateReadyRef = useRef(false);
+  const cloudPlayerStateUnavailableRef = useRef(false);
+  const lastCloudPlayerStateHashRef = useRef("");
 
   const scoreRef = useRef(score);
   const bestRef = useRef(best);
@@ -567,6 +1121,79 @@ export default function CometsRunnerScreen() {
   const purpleChainRef = useRef(0);
   const achievementsRef = useRef(achievements);
 
+  const unlockedTrails = useMemo(
+    () => TRAIL_OPTIONS.filter((item) => item.isUnlocked(metaStats, achievements, best)),
+    [achievements, best, metaStats],
+  );
+  const unlockedThemes = useMemo(
+    () => THEME_OPTIONS.filter((item) => item.isUnlocked(metaStats, achievements, best)),
+    [achievements, best, metaStats],
+  );
+  const unlockedTitles = useMemo(
+    () => TITLE_OPTIONS.filter((item) => item.isUnlocked(metaStats, achievements, best)),
+    [achievements, best, metaStats],
+  );
+  const unlockedPerks = useMemo(
+    () => PERK_OPTIONS.filter((item) => item.isUnlocked(metaStats, achievements, best)),
+    [achievements, best, metaStats],
+  );
+
+  const persistMetaStats = useCallback((next: MetaStats) => {
+    metaStatsRef.current = next;
+    setMetaStats(next);
+    AsyncStorage.setItem(KEY_META_STATS, JSON.stringify(next)).catch(() => {});
+  }, []);
+
+  const updateMetaStats = useCallback((updater: (prev: MetaStats) => MetaStats) => {
+    const next = updater(metaStatsRef.current);
+    persistMetaStats(next);
+  }, [persistMetaStats]);
+
+  const persistAchievements = useCallback((next: Record<AchievementKey, boolean>) => {
+    achievementsRef.current = next;
+    setAchievements(next);
+    AsyncStorage.setItem(KEY_ACH, JSON.stringify(next)).catch(() => {});
+  }, []);
+
+  const normalizeLoadout = useCallback((raw: unknown): Loadout => {
+    const data = raw && typeof raw === "object" ? (raw as Partial<Loadout>) : {};
+    return {
+      trail: resolveUnlockedId(data.trail, TRAIL_OPTIONS, (item) => item.isUnlocked(metaStatsRef.current, achievementsRef.current, bestRef.current)) as TrailId,
+      theme: resolveUnlockedId(data.theme, THEME_OPTIONS, (item) => item.isUnlocked(metaStatsRef.current, achievementsRef.current, bestRef.current)) as ThemeId,
+      title: resolveUnlockedId(data.title, TITLE_OPTIONS, (item) => item.isUnlocked(metaStatsRef.current, achievementsRef.current, bestRef.current)) as TitleId,
+      perk: resolveUnlockedId(data.perk, PERK_OPTIONS, (item) => item.isUnlocked(metaStatsRef.current, achievementsRef.current, bestRef.current)) as PerkId,
+    };
+  }, []);
+
+  const persistLoadout = useCallback((next: Loadout) => {
+    setLoadout(next);
+    AsyncStorage.setItem(KEY_LOADOUT, JSON.stringify(next)).catch(() => {});
+  }, []);
+
+  const buildUnlockedItems = useCallback(
+    (meta: MetaStats, ach: Record<AchievementKey, boolean>, bestScore: number): PlayerStateUnlockedItems => ({
+      trails: TRAIL_OPTIONS.filter((item) => item.isUnlocked(meta, ach, bestScore)).map((item) => item.id),
+      themes: THEME_OPTIONS.filter((item) => item.isUnlocked(meta, ach, bestScore)).map((item) => item.id),
+      titles: TITLE_OPTIONS.filter((item) => item.isUnlocked(meta, ach, bestScore)).map((item) => item.id),
+      perks: PERK_OPTIONS.filter((item) => item.isUnlocked(meta, ach, bestScore)).map((item) => item.id),
+    }),
+    [],
+  );
+
+  const cycleLoadout = useCallback((key: keyof Loadout) => {
+    const pools = {
+      trail: unlockedTrails.map((item) => item.id),
+      theme: unlockedThemes.map((item) => item.id),
+      title: unlockedTitles.map((item) => item.id),
+      perk: unlockedPerks.map((item) => item.id),
+    } as const;
+    const pool = pools[key];
+    if (!pool.length) return;
+    const currentIdx = Math.max(0, pool.indexOf(loadout[key] as never));
+    const next = { ...loadout, [key]: pool[(currentIdx + 1) % pool.length] } as Loadout;
+    persistLoadout(next);
+  }, [loadout, persistLoadout, unlockedPerks, unlockedThemes, unlockedTitles, unlockedTrails]);
+
   const [toast, setToast] = useState<string | null>(null);
   const lastToastAtRef = useRef(0);
   const showToast = useCallback((msg: string) => {
@@ -577,15 +1204,21 @@ export default function CometsRunnerScreen() {
     setTimeout(() => setToast((t) => (t === msg ? null : t)), 1200);
   }, []);
 
+  const flashHud = useCallback((accent: string, duration = 360) => {
+    setHudFlash({ accent, until: Date.now() + duration });
+  }, []);
+
+  const triggerRunBanner = useCallback((label: string, accent: string, subtitle?: string, duration = 1000) => {
+    setRunBanner({ label, subtitle, accent, until: Date.now() + duration });
+    flashHud(accent, Math.min(duration, 520));
+  }, [flashHud]);
+
   const unlock = useCallback((key: AchievementKey) => {
-    setAchievements((prev) => {
-      if (prev[key]) return prev;
-      const next = { ...prev, ...{ [key]: true } };
-      AsyncStorage.setItem(KEY_ACH, JSON.stringify(next)).catch(() => {});
-      showToast(`🏅 ${ACH_LABEL[key]}`);
-      return next;
-    });
-  }, [showToast]);
+    if (achievementsRef.current[key]) return;
+    const next = { ...achievementsRef.current, [key]: true };
+    persistAchievements(next);
+    showToast(`🏅 ${ACH_LABEL[key]}`);
+  }, [persistAchievements, showToast]);
 
   // Milestones
   const milestonesRef = useRef(new Set<number>());
@@ -637,10 +1270,16 @@ export default function CometsRunnerScreen() {
           getDailyMissionValue(next, mission.id) >= mission.target,
       );
       if (unlocked.length > 0) {
-        showToast(`Mission: ${unlocked[0].label}`);
+        updateMetaStats((current) => ({
+          ...current,
+          totalMissionCompletions: current.totalMissionCompletions + unlocked.length,
+        }));
+      }
+      if (unlocked.length > 0) {
+        showToast(`Mission : ${unlocked[0].label}`);
       }
     },
-    [persistDailyMissions, showToast],
+    [persistDailyMissions, showToast, updateMetaStats],
   );
 
   // Buffs
@@ -700,6 +1339,18 @@ export default function CometsRunnerScreen() {
   useEffect(() => { bestRef.current = best; }, [best]);
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
   useEffect(() => { achievementsRef.current = achievements; }, [achievements]);
+  useEffect(() => {
+    if (best > metaStatsRef.current.bestScoreEver) {
+      updateMetaStats((current) => ({ ...current, bestScoreEver: best }));
+    }
+  }, [best, updateMetaStats]);
+
+  useEffect(() => {
+    const normalized = normalizeLoadout(loadout);
+    if (JSON.stringify(normalized) !== JSON.stringify(loadout)) {
+      persistLoadout(normalized);
+    }
+  }, [achievements, best, loadout, metaStats, normalizeLoadout, persistLoadout]);
 
   // === COMETS persistant (ordre strict) ===
   const persistentLettersRef = useRef<Set<CometsLetter>>(new Set());
@@ -707,6 +1358,7 @@ export default function CometsRunnerScreen() {
 
   // indices 0..5 spawnés durant CE run
   const spawnedLetterIdxThisRunRef = useRef<Set<number>>(new Set());
+  const nextLetterSpawnScoreRef = useRef(0);
 
   const loadCometsProgress = useCallback(async () => {
     try {
@@ -772,14 +1424,19 @@ export default function CometsRunnerScreen() {
   const mapFadeRef = useRef(0);
   const mapAOffsetRef = useRef(0);
   const mapBOffsetRef = useRef(0);
+  const currentMapIndexRef = useRef(0);
+  const nextMapAdvanceAtRef = useRef(0);
+  const currentMiniEventRef = useRef<MiniEventState | null>(null);
+  const nextMiniEventAtRef = useRef(0);
   const MAP_FADE_SECS = 1.4;
 
   // Loop
-  const [, setFrameTick] = useState(0);
+  const [frameTick, setFrameTick] = useState(0);
   const distAccRef = useRef(0);
   const ROLL_VISUAL_MULT = 0.9;
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
+  const lastRenderCommitAtRef = useRef(0);
 
   // FX
   const shake = useRef(new Animated.Value(0)).current;
@@ -788,6 +1445,7 @@ export default function CometsRunnerScreen() {
   // Admin/Supabase
   const { admin } = useAdmin();
   const adminId = (admin?.id ?? null) as any as string | null;
+  const adminSessionToken = typeof admin?.session_token === "string" ? admin.session_token : null;
   const adminFirst = (admin as any)?.first_name ?? null;
   const adminLast = (admin as any)?.last_name ?? null;
   const adminEmail = admin?.email ?? null;
@@ -798,11 +1456,19 @@ export default function CometsRunnerScreen() {
   const ensureProfile = useCallback(async () => {
     if (!adminId) return;
     const { error } = await supabase.from("game_profiles").upsert(
-      [{ admin_id: adminId, display_name: adminName }],
+      [{
+        admin_id: adminId,
+        display_name: adminName,
+        equipped_title: loadout.title,
+        equipped_trail: loadout.trail,
+        equipped_theme: loadout.theme,
+        public_near_misses: metaStatsRef.current.totalNearMisses,
+        public_missions_done: metaStatsRef.current.totalMissionCompletions,
+      }],
       { onConflict: "admin_id", ignoreDuplicates: false }
     );
     if (error) console.log("ensureProfile error:", error.message);
-  }, [adminId, adminName]);
+  }, [adminId, adminName, loadout.theme, loadout.title, loadout.trail]);
 
   const loadBestFromCloud = useCallback(async () => {
     if (!adminId) return;
@@ -816,10 +1482,112 @@ export default function CometsRunnerScreen() {
       return;
     }
     if (data?.best_score != null && Number.isFinite(data.best_score)) {
+      bestRef.current = data.best_score;
       setBest(data.best_score);
       AsyncStorage.setItem(KEY_BEST, String(data.best_score)).catch(() => {});
     }
   }, [adminId]);
+
+  const loadPlayerStateFromCloud = useCallback(async () => {
+    if (!adminId) return;
+    const { state, unauthorized, unavailable } = await fetchCometsRunPlayerStateApi(adminSessionToken);
+    if (unauthorized) {
+      console.log("loadPlayerStateFromCloud error: session API unauthorized");
+      cloudPlayerStateReadyRef.current = true;
+      return;
+    }
+    if (unavailable) {
+      cloudPlayerStateUnavailableRef.current = true;
+      cloudPlayerStateReadyRef.current = true;
+      lastCloudPlayerStateHashRef.current = "";
+      console.log("loadPlayerStateFromCloud: player-state API unavailable, cloud sync disabled for this session");
+      return;
+    }
+
+    if (!state) {
+      cloudPlayerStateReadyRef.current = true;
+      lastCloudPlayerStateHashRef.current = "";
+      return;
+    }
+
+    const row = state as CloudPlayerStateRow;
+    const cloudMeta = normalizeMetaStats(row.meta_stats);
+    const mergedMeta = mergeMetaStats(metaStatsRef.current, cloudMeta);
+    persistMetaStats(mergedMeta);
+
+    const cloudAchievements = normalizeAchievements(row.achievements);
+    const mergedAchievements = mergeAchievements(achievementsRef.current, cloudAchievements);
+    persistAchievements(mergedAchievements);
+
+    const cloudLoadout = normalizeLoadout(row.loadout);
+    const mergedBest = Math.max(bestRef.current, mergedMeta.bestScoreEver);
+    const normalizedCloudLoadout = normalizeLoadout(cloudLoadout);
+    const unlockedItems = normalizeUnlockedItems(row.unlocked_items);
+    const hasCloudUnlocks =
+      unlockedItems.trails.length + unlockedItems.themes.length + unlockedItems.titles.length + unlockedItems.perks.length > 0;
+    const nextLoadout = hasCloudUnlocks
+      ? normalizeLoadout({
+          trail: unlockedItems.trails.includes(normalizedCloudLoadout.trail) ? normalizedCloudLoadout.trail : loadout.trail,
+          theme: unlockedItems.themes.includes(normalizedCloudLoadout.theme) ? normalizedCloudLoadout.theme : loadout.theme,
+          title: unlockedItems.titles.includes(normalizedCloudLoadout.title) ? normalizedCloudLoadout.title : loadout.title,
+          perk: unlockedItems.perks.includes(normalizedCloudLoadout.perk) ? normalizedCloudLoadout.perk : loadout.perk,
+        })
+      : normalizedCloudLoadout;
+
+    if (mergedBest > bestRef.current) {
+      bestRef.current = mergedBest;
+      setBest(mergedBest);
+      AsyncStorage.setItem(KEY_BEST, String(mergedBest)).catch(() => {});
+    }
+
+    persistLoadout(nextLoadout);
+
+    const syncedHash = JSON.stringify({
+      loadout: nextLoadout,
+      meta_stats: mergedMeta,
+      achievements: mergedAchievements,
+      unlocked_items: buildUnlockedItems(mergedMeta, mergedAchievements, Math.max(bestRef.current, mergedBest)),
+    });
+    lastCloudPlayerStateHashRef.current = syncedHash;
+    cloudPlayerStateReadyRef.current = true;
+  }, [adminId, adminSessionToken, buildUnlockedItems, loadout.perk, loadout.theme, loadout.title, loadout.trail, normalizeLoadout, persistAchievements, persistLoadout, persistMetaStats]);
+
+  const syncPlayerStateToCloud = useCallback(async () => {
+    if (!adminId || !cloudPlayerStateReadyRef.current || cloudPlayerStateUnavailableRef.current) return;
+
+    const syncedBest = Math.max(bestRef.current, metaStatsRef.current.bestScoreEver);
+    const payload = {
+      loadout,
+      meta_stats: metaStats,
+      achievements,
+      unlocked_items: buildUnlockedItems(metaStats, achievements, syncedBest),
+    };
+    const payloadHash = JSON.stringify({
+      loadout: payload.loadout,
+      meta_stats: payload.meta_stats,
+      achievements: payload.achievements,
+      unlocked_items: payload.unlocked_items,
+    });
+    if (payloadHash === lastCloudPlayerStateHashRef.current) return;
+
+    const previousHash = lastCloudPlayerStateHashRef.current;
+    lastCloudPlayerStateHashRef.current = payloadHash;
+
+    const result = await pushCometsRunPlayerStateApi(adminSessionToken, payload);
+    if (!result.ok) {
+      lastCloudPlayerStateHashRef.current = previousHash;
+      if (result.unavailable) {
+        cloudPlayerStateUnavailableRef.current = true;
+        console.log("syncPlayerStateToCloud: player-state API unavailable, cloud sync disabled for this session");
+        return;
+      }
+      console.log(
+        "syncPlayerStateToCloud state error:",
+        result.unauthorized ? "session API unauthorized" : "request failed",
+      );
+      return;
+    }
+  }, [achievements, adminId, adminSessionToken, buildUnlockedItems, loadout, metaStats]);
 
   const [top5, setTop5] = useState<LBRow[] | null>(null);
   const loadTop5 = useCallback(async () => {
@@ -908,8 +1676,74 @@ export default function CometsRunnerScreen() {
     }
   }, []);
 
-  const saveRunToCloud = useCallback(async (finalScore: number) => {
-    if (!adminId) return;
+  const loadWeeklyRankContext = useCallback(async (candidateScore: number) => {
+    if (!adminId) return null;
+    const since = new Date();
+    since.setDate(since.getDate() - 7);
+
+    const { data, error } = await supabase
+      .from("game_runs")
+      .select("admin_id, score, created_at")
+      .gte("created_at", since.toISOString())
+      .order("created_at", { ascending: false })
+      .limit(4000);
+
+    if (error) {
+      console.log("weekly rank context error:", error.message);
+      return null;
+    }
+
+    const byAdmin = new Map<string, { admin_id: string; best_score: number; last_run_at: string | null }>();
+    const toTs = (input: string | null) => {
+      const t = input ? Date.parse(input) : 0;
+      return Number.isFinite(t) ? t : 0;
+    };
+
+    for (const raw of (data ?? []) as LBWeeklyRunRow[]) {
+      const key = String(raw.admin_id ?? "").trim();
+      if (!key) continue;
+      const score = Math.max(0, Math.floor(Number(raw.score ?? 0)));
+      const createdAt = typeof raw.created_at === "string" ? raw.created_at : null;
+      const existing = byAdmin.get(key);
+      if (!existing) {
+        byAdmin.set(key, { admin_id: key, best_score: score, last_run_at: createdAt });
+        continue;
+      }
+      existing.best_score = Math.max(existing.best_score, score);
+      if (toTs(createdAt) > toTs(existing.last_run_at)) existing.last_run_at = createdAt;
+    }
+
+    const previousWeeklyBest = byAdmin.get(adminId)?.best_score ?? 0;
+    const rankForScore = (score: number) => {
+      const injected = new Map(byAdmin);
+      injected.set(adminId, {
+        admin_id: adminId,
+        best_score: score,
+        last_run_at: new Date().toISOString(),
+      });
+      const ranked = Array.from(injected.values()).sort((a, b) => {
+        if (b.best_score !== a.best_score) return b.best_score - a.best_score;
+        return toTs(b.last_run_at) - toTs(a.last_run_at);
+      });
+      const index = ranked.findIndex((item) => item.admin_id === adminId);
+      return index >= 0 ? index + 1 : null;
+    };
+
+    const previousRank = previousWeeklyBest > 0 ? rankForScore(previousWeeklyBest) : null;
+    const currentRank = rankForScore(Math.max(previousWeeklyBest, candidateScore));
+    return {
+      previousWeeklyBest,
+      previousWeeklyRank: previousRank,
+      currentWeeklyRank: currentRank,
+      weeklyRankGain:
+        previousRank != null && currentRank != null ? Math.max(0, previousRank - currentRank) : 0,
+      enteredWeeklyBoard: previousRank == null && currentRank != null,
+    };
+  }, [adminId]);
+
+  const saveRunToCloud = useCallback(async (finalScore: number): Promise<RunMeta | null> => {
+    if (!adminId) return null;
+    const weeklyRankContext = await loadWeeklyRankContext(finalScore);
     const { error: errRun } = await supabase.from("game_runs").insert({
       admin_id: adminId,
       score: finalScore,
@@ -932,6 +1766,11 @@ export default function CometsRunnerScreen() {
       display_name: adminName,
       best_score: newBest,
       total_runs: (current?.total_runs ?? 0) + 1,
+      equipped_title: loadout.title,
+      equipped_trail: loadout.trail,
+      equipped_theme: loadout.theme,
+      public_near_misses: metaStatsRef.current.totalNearMisses,
+      public_missions_done: metaStatsRef.current.totalMissionCompletions,
       last_run_at: new Date().toISOString(),
     });
     if (errUp) console.log("upsert profile error:", errUp.message);
@@ -947,11 +1786,20 @@ export default function CometsRunnerScreen() {
     }
 
     if (newBest > (best || 0)) {
+      bestRef.current = newBest;
       setBest(newBest);
       AsyncStorage.setItem(KEY_BEST, String(newBest)).catch(() => {});
     }
     await loadTop5();
-  }, [adminId, adminName, best, loadTop5]);
+    return {
+      beatBest: newBest > previousBest,
+      previousBest,
+      previousWeeklyRank: weeklyRankContext?.previousWeeklyRank ?? null,
+      currentWeeklyRank: weeklyRankContext?.currentWeeklyRank ?? null,
+      weeklyRankGain: weeklyRankContext?.weeklyRankGain ?? 0,
+      enteredWeeklyBoard: weeklyRankContext?.enteredWeeklyBoard ?? false,
+    };
+  }, [adminId, adminName, best, loadTop5, loadWeeklyRankContext, loadout.theme, loadout.title, loadout.trail]);
 
   // 🔊 Refs & helpers audio
   const musicRef = useRef<AudioPlayer | null>(null);
@@ -1064,6 +1912,7 @@ useEffect(() => {
 }, [gameState, playMusic, pauseMusic, stopMusic]);
 
   const buildPauseSnapshot = useCallback((now: number): PauseSnapshot => {
+    const miniEvent = currentMiniEventRef.current;
     return {
       ts: now,
       score: scoreRef.current,
@@ -1076,6 +1925,18 @@ useEffect(() => {
       scoreMultLeftMs: Math.max(0, scoreMultUntilRef.current - now),
       purpleChain: purpleChainRef.current,
       persistentLetters: Array.from(persistentLettersRef.current),
+      nextLetterSpawnScore: nextLetterSpawnScoreRef.current,
+      currentMapIndex: currentMapIndexRef.current,
+      nextMapAdvanceLeftMs: Math.max(0, nextMapAdvanceAtRef.current - now),
+      nextMiniEventLeftMs: Math.max(0, nextMiniEventAtRef.current - now),
+      miniEvent: miniEvent
+        ? {
+            name: miniEvent.name,
+            map: miniEvent.map,
+            leftMs: Math.max(0, miniEvent.endsAt - now),
+            nextBurstLeftMs: Math.max(0, miniEvent.nextBurstAt - now),
+          }
+        : null,
       mapName: mapARef.current,
       speed: speedRef.current,
       world: {
@@ -1152,23 +2013,48 @@ useEffect(() => {
           .forEach(a => { try { Image.prefetch(Image.resolveAssetSource(a).uri); } catch {} });
       } catch {}
       try { const rawS = await AsyncStorage.getItem(KEY_SETTINGS); if (rawS) setSettings(s => ({ ...s, ...JSON.parse(rawS) })); } catch {}
-      try { const rawA = await AsyncStorage.getItem(KEY_ACH); if (rawA) setAchievements(prev => ({ ...prev, ...JSON.parse(rawA) })); } catch {}
+      try {
+        const rawA = await AsyncStorage.getItem(KEY_ACH);
+        if (rawA) persistAchievements(mergeAchievements(achievementsRef.current, normalizeAchievements(JSON.parse(rawA))));
+      } catch {}
       try { const raw = await AsyncStorage.getItem(KEY_BEST); if (raw) setBest(parseInt(raw, 10) || 0); } catch {}
+      try {
+        const rawMeta = await AsyncStorage.getItem(KEY_META_STATS);
+        if (rawMeta) persistMetaStats(normalizeMetaStats(JSON.parse(rawMeta)));
+      } catch {}
+      try {
+        const rawLoadout = await AsyncStorage.getItem(KEY_LOADOUT);
+        if (rawLoadout) setLoadout(normalizeLoadout(JSON.parse(rawLoadout)));
+      } catch {}
       await loadDailyMissions();
       // précharge le pool coin pour éliminer le "vide" initial
       try { await ensureCoinPool(); } catch {}
       // progression COMETS chargée ailleurs
     })();
-  }, [ensureCoinPool, loadDailyMissions]);
+  }, [ensureCoinPool, loadDailyMissions, normalizeLoadout, persistAchievements, persistMetaStats]);
 
   useEffect(() => {
     (async () => {
-      if (!adminId) { await loadTop5(); return; }
+      cloudPlayerStateReadyRef.current = false;
+      cloudPlayerStateUnavailableRef.current = false;
+      if (!adminId) {
+        lastCloudPlayerStateHashRef.current = "";
+        await loadTop5();
+        return;
+      }
       await ensureProfile();
       await loadBestFromCloud();
+      await loadPlayerStateFromCloud();
       await loadTop5();
     })();
-  }, [adminId, ensureProfile, loadBestFromCloud, loadTop5]);
+  }, [adminId, ensureProfile, loadBestFromCloud, loadPlayerStateFromCloud, loadTop5]);
+
+  useEffect(() => {
+    if (!adminId || !cloudPlayerStateReadyRef.current) return;
+    syncPlayerStateToCloud().catch((e) => {
+      console.log("syncPlayerStateToCloud catch:", (e as any)?.message ?? e);
+    });
+  }, [adminId, achievements, loadout, metaStats, syncPlayerStateToCloud]);
 
   useEffect(() => {
     (async () => {
@@ -1236,6 +2122,9 @@ useEffect(() => {
     popupsRef.current = [];
     patternCooldownDistRef.current = 0;
     lastIdRef.current = 1;
+    setRunBanner(null);
+    setHudFlash(null);
+    setLastRunMeta(null);
 
     const assist = 1 - Math.min(0.12, failStreakRef.current * 0.04);
     targetSpeedRef.current = Math.max(START_SPEED * 0.82, START_SPEED * assist);
@@ -1244,6 +2133,7 @@ useEffect(() => {
     scoreRef.current = 0;
     setScore(0);
     runCoinsCollectedRef.current = 0;
+    runNearMissesRef.current = 0;
     milestonesRef.current.clear();
     comboRef.current = 0;
 
@@ -1260,6 +2150,7 @@ useEffect(() => {
 
     // reset des lettres spawnées pour CE run
     spawnedLetterIdxThisRunRef.current.clear();
+    nextLetterSpawnScoreRef.current = 0;
 
     distAccRef.current = 0;
     velYRef.current = 0;
@@ -1278,6 +2169,10 @@ useEffect(() => {
     mapARef.current = activeMapForScore(0);
     mapBRef.current = mapARef.current;
     mapFadeRef.current = 0;
+    currentMapIndexRef.current = 0;
+    nextMapAdvanceAtRef.current = Date.now() + MAP_MIN_DWELL_MS;
+    currentMiniEventRef.current = null;
+    nextMiniEventAtRef.current = Date.now() + MINI_EVENT_FIRST_DELAY_MS;
 
     setFrameTick(t => t + 1);
 
@@ -1293,12 +2188,25 @@ useEffect(() => {
       const yStar = clampYCenter(yForHeight(hStar), R_COLLECTIBLE);
       collectiblesRef.current.push({ id: ++lastIdRef.current, x: firstX + 180, y: yStar, r: R_COLLECTIBLE });
     }
+
+    if (loadout.perk === "starter_shield") {
+      setHasShieldSync(true);
+    } else if (loadout.perk === "air_mastery") {
+      setDoubleJumpUntilSync(Date.now() + 8_000);
+      airJumpsLeftRef.current = 1;
+    } else if (loadout.perk === "purple_open") {
+      scoreMultLevelRef.current = 2;
+      scoreMultUntilRef.current = Date.now() + 6_000;
+      setPurpleChainSync(1);
+      purpleChainExpiresAtRef.current = scoreMultUntilRef.current;
+    }
   }, [
     GROUND_Y,
     H_STAR_MIN,
     H_STAR_MAX,
     clampYCenter,
     yForHeight,
+    loadout.perk,
     setHasShieldSync,
     setShieldStacksSync,
     setSuperShieldUntilSync,
@@ -1312,9 +2220,15 @@ useEffect(() => {
     resetWorld();
     setPendingSnapshot(null);
     clearPauseSnapshot().catch(() => {});
+    if (loadout.perk !== "none") {
+      const perkInfo = PERK_OPTIONS.find((item) => item.id === loadout.perk);
+      if (perkInfo) {
+        triggerRunBanner(perkInfo.label, perkInfo.accent, perkInfo.description, 950);
+      }
+    }
     setGameState("running");
     setPlayingStatusBar(true);
-  }, [resetWorld, setPlayingStatusBar]);
+  }, [loadout.perk, resetWorld, setPlayingStatusBar, triggerRunBanner]);
 
   const resumeFromSnapshot = useCallback(async () => {
     if (!pendingSnapshot) return;
@@ -1336,6 +2250,7 @@ useEffect(() => {
     setPurpleChainSync(Math.max(0, Math.floor(snap.purpleChain || 0)));
     purpleChainExpiresAtRef.current = scoreMultUntilRef.current;
     persistentLettersRef.current = new Set(snap.persistentLetters ?? []);
+    nextLetterSpawnScoreRef.current = Math.max(0, Number(snap.nextLetterSpawnScore ?? 0));
     setLettersTick((t) => t + 1);
 
     const resumedSpeed = Math.max(START_SPEED * 0.82, Math.floor(snap.speed || START_SPEED));
@@ -1357,6 +2272,23 @@ useEffect(() => {
       mapARef.current = mapA;
       mapBRef.current = mapB;
       mapFadeRef.current = clamp(toNum(world.mapFade, 0), 0, 1);
+      const fallbackMapIndex = Math.max(0, MAP_NAMES.indexOf(mapFadeRef.current > 0 ? mapB : mapA));
+      currentMapIndexRef.current = clamp(
+        Math.floor(toNum(snap.currentMapIndex, fallbackMapIndex)),
+        0,
+        MAP_NAMES.length - 1,
+      );
+      nextMapAdvanceAtRef.current = now + Math.max(0, toNum(snap.nextMapAdvanceLeftMs, 0));
+      nextMiniEventAtRef.current = now + Math.max(0, toNum(snap.nextMiniEventLeftMs, 0));
+      currentMiniEventRef.current =
+        snap.miniEvent && miniEventForMap(snap.miniEvent.map) === snap.miniEvent.name
+          ? {
+              name: snap.miniEvent.name,
+              map: snap.miniEvent.map,
+              endsAt: now + Math.max(0, toNum(snap.miniEvent.leftMs, 0)),
+              nextBurstAt: now + Math.max(0, toNum(snap.miniEvent.nextBurstLeftMs, 0)),
+            }
+          : null;
       mapAOffsetRef.current = toNum(world.mapAOffset, 0);
       mapBOffsetRef.current = toNum(world.mapBOffset, 0);
       groundOffsetRef.current = toNum(world.groundOffset, 0);
@@ -1388,6 +2320,7 @@ useEffect(() => {
             h: Math.max(6, h),
             y,
             variant: o?.variant === 1 ? 1 : 0,
+            grazed: !!o?.grazed,
           };
         })
         .filter((o): o is Obstacle => !!o);
@@ -1461,6 +2394,22 @@ useEffect(() => {
       mapARef.current = snap.mapName ?? activeMapForScore(scoreRef.current);
       mapBRef.current = mapARef.current;
       mapFadeRef.current = 0;
+      currentMapIndexRef.current = clamp(
+        Math.floor(Number(snap.currentMapIndex ?? MAP_NAMES.indexOf(mapARef.current))),
+        0,
+        MAP_NAMES.length - 1,
+      );
+      nextMapAdvanceAtRef.current = now + Math.max(0, Number(snap.nextMapAdvanceLeftMs ?? 0));
+      nextMiniEventAtRef.current = now + Math.max(0, Number(snap.nextMiniEventLeftMs ?? 0));
+      currentMiniEventRef.current =
+        snap.miniEvent && miniEventForMap(snap.miniEvent.map) === snap.miniEvent.name
+          ? {
+              name: snap.miniEvent.name,
+              map: snap.miniEvent.map,
+              endsAt: now + Math.max(0, Number(snap.miniEvent.leftMs ?? 0)),
+              nextBurstAt: now + Math.max(0, Number(snap.miniEvent.nextBurstLeftMs ?? 0)),
+            }
+          : null;
       platformsRef.current = [];
       patternCooldownDistRef.current = 0;
     }
@@ -1503,6 +2452,21 @@ useEffect(() => {
     if (gameStateRef.current === "gameover") return;
     gameStateRef.current = "gameover";
     const finalScore = scoreRef.current;
+    const previousBestLocal = bestRef.current;
+    setLastRunMeta({
+      beatBest: finalScore > previousBestLocal,
+      previousBest: previousBestLocal,
+      previousWeeklyRank: null,
+      currentWeeklyRank: null,
+      weeklyRankGain: 0,
+      enteredWeeklyBoard: false,
+    });
+    updateMetaStats((current) => ({
+      ...current,
+      totalRuns: current.totalRuns + 1,
+      totalNearMisses: current.totalNearMisses + runNearMissesRef.current,
+      bestScoreEver: Math.max(current.bestScoreEver, finalScore, previousBestLocal),
+    }));
     applyRunToDailyMissions(finalScore);
     setGameState("gameover");
     restartAllowedAtRef.current = Date.now() + 2000;
@@ -1515,19 +2479,21 @@ useEffect(() => {
 
     try {
       if (adminId) {
-        await saveRunToCloud(finalScore);
+        const cloudMeta = await saveRunToCloud(finalScore);
+        if (cloudMeta) setLastRunMeta(cloudMeta);
       } else if (finalScore > bestRef.current) {
         setBest(finalScore);
         bestRef.current = finalScore;
         await AsyncStorage.setItem(KEY_BEST, String(finalScore));
         await loadTop5();
+        setLastRunMeta((prev) => prev ? { ...prev, beatBest: true, previousBest: previousBestLocal } : prev);
       } else {
         await loadTop5();
       }
     } catch (e) {
       console.log("endGame error:", (e as any)?.message);
     }
-  }, [adminId, applyRunToDailyMissions, saveRunToCloud, loadTop5, resetPersistentLetters, setPlayingStatusBar]);
+  }, [adminId, applyRunToDailyMissions, saveRunToCloud, loadTop5, resetPersistentLetters, setPlayingStatusBar, updateMetaStats]);
 
   // helpers
   const doubleJumpActive = useCallback(
@@ -1575,6 +2541,18 @@ useEffect(() => {
     }
   }, [H_SINGLE, H_DOUBLE, H_STAR_MIN, clampYCenter, yForHeight]);
 
+  const spawnPurpleLine = useCallback((startX: number, count: number, y: number, gap = 46) => {
+    for (let i = 0; i < count; i++) {
+      powerUpsRef.current.push({
+        id: ++lastIdRef.current,
+        x: startX + i * gap,
+        y,
+        r: R_X2,
+        kind: "x2",
+      });
+    }
+  }, []);
+
   const spawnPlatformBlock = useCallback((x: number, y: number, w: number, h = PLATFORM_H) => {
     const platform: PlatformBlock = {
       id: ++lastIdRef.current,
@@ -1610,6 +2588,7 @@ useEffect(() => {
     if (scoreNow < OBSTACLE_PATTERN_MIN_SCORE) return false;
     if (patternCooldownDistRef.current > 0) return false;
 
+    const mapFx = MAP_EFFECTS[mapARef.current];
     const harden = clamp(0.2 * (scoreNow / 120000), 0, 0.2);
     const localGapMul = gapMul * (1 - harden);
     const baseLead = Math.max(minGap, Math.floor(SCREEN_W * 0.78));
@@ -1617,9 +2596,7 @@ useEffect(() => {
     const extraLead = Math.max(1, Math.floor(OBSTACLE_MAX_GAP_BASE * localGapMul));
     const anchorX = SCREEN_W + lead + randi(20, extraLead);
 
-    const roll = Math.random();
-    const pattern: SpawnPattern =
-      roll < 0.42 ? "platform_gate" : roll < 0.74 ? "double_trouble" : "risk_lane";
+    const pattern = pickSpawnPatternForMap(mapARef.current);
 
     if (pattern === "platform_gate") {
       const platformW = randi(PLATFORM_MIN_W, PLATFORM_MAX_W);
@@ -1701,6 +2678,198 @@ useEffect(() => {
       return true;
     }
 
+    if (pattern === "stairway") {
+      const entryW = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W);
+      const entryH = OBSTACLE_BASE_H + randi(-8, 8);
+      const entryX = anchorX + randi(0, 40);
+      obstaclesRef.current.push({
+        id: ++lastIdRef.current,
+        x: entryX,
+        w: entryW,
+        h: entryH,
+        y: GROUND_Y - entryH,
+        variant: Math.random() < 0.5 ? 0 : 1,
+      });
+
+      const firstPlatform = spawnPlatformBlock(
+        entryX + entryW + randi(84, 126),
+        GROUND_Y - randf(H_SINGLE * 0.56, H_SINGLE * 0.76) - PLATFORM_H,
+        randi(118, 170),
+      );
+      const secondPlatform = spawnPlatformBlock(
+        firstPlatform.x + firstPlatform.w + randi(72, 118),
+        GROUND_Y - randf(H_SINGLE * 0.9, Math.min(H_DOUBLE * 0.82, H_SINGLE * 1.02)) - PLATFORM_H,
+        randi(110, 156),
+      );
+
+      const trailCount = mapFx.coinBonus >= 0.12 ? 6 : 5;
+      for (let i = 0; i < trailCount; i++) {
+        const t = i / Math.max(1, trailCount - 1);
+        const fromX = firstPlatform.x + firstPlatform.w * 0.35;
+        const toX = secondPlatform.x + secondPlatform.w * 0.5;
+        const x = fromX + (toX - fromX) * t;
+        const y = clampYCenter(firstPlatform.y - 18 - (firstPlatform.y - secondPlatform.y) * t, R_COLLECTIBLE);
+        collectiblesRef.current.push({
+          id: ++lastIdRef.current,
+          x,
+          y,
+          r: R_COLLECTIBLE,
+        });
+      }
+
+      if (Math.random() < clamp(0.32 + mapFx.x2Bonus * 0.4, 0, 0.52)) {
+        powerUpsRef.current.push({
+          id: ++lastIdRef.current,
+          x: secondPlatform.x + secondPlatform.w * 0.55,
+          y: clampYCenter(secondPlatform.y - 24, R_X2),
+          r: R_X2,
+          kind: "x2",
+        });
+      }
+
+      if (Math.random() < 0.38) {
+        const exitW = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W);
+        const exitH = OBSTACLE_BASE_H + randi(-6, 8);
+        obstaclesRef.current.push({
+          id: ++lastIdRef.current,
+          x: secondPlatform.x + secondPlatform.w + randi(76, 118),
+          w: exitW,
+          h: exitH,
+          y: GROUND_Y - exitH,
+          variant: Math.random() < 0.5 ? 0 : 1,
+        });
+      }
+
+      patternCooldownDistRef.current = randi(PLATFORM_PATTERN_COOLDOWN_MIN, PLATFORM_PATTERN_COOLDOWN_MAX);
+      return true;
+    }
+
+    if (pattern === "rapid_triple") {
+      let cursorX = anchorX;
+      for (let step = 0; step < 3; step++) {
+        const w = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W);
+        const h = OBSTACLE_BASE_H + randi(-10, 10);
+        obstaclesRef.current.push({
+          id: ++lastIdRef.current,
+          x: cursorX,
+          w,
+          h,
+          y: GROUND_Y - h,
+          variant: Math.random() < 0.5 ? 0 : 1,
+        });
+        cursorX += w + randi(118, 170);
+      }
+
+      const rewardY = clampYCenter(yForHeight(randf(H_SINGLE * 0.6, H_SINGLE * 0.92)), R_COLLECTIBLE);
+      const rewardCount = mapFx.coinBonus >= 0.12 ? 6 : 4;
+      for (let i = 0; i < rewardCount; i++) {
+        collectiblesRef.current.push({
+          id: ++lastIdRef.current,
+          x: anchorX + 80 + i * 54,
+          y: rewardY - (i % 2 === 0 ? 0 : 12),
+          r: R_COLLECTIBLE,
+        });
+      }
+
+      if (Math.random() < 0.34) {
+        powerUpsRef.current.push({
+          id: ++lastIdRef.current,
+          x: cursorX - randi(42, 80),
+          y: clampYCenter(rewardY - 22, R_POWERUP),
+          r: R_POWERUP,
+          kind: "doublejump",
+        });
+      }
+
+      patternCooldownDistRef.current = randi(PLATFORM_PATTERN_COOLDOWN_MIN, PLATFORM_PATTERN_COOLDOWN_MAX);
+      return true;
+    }
+
+    if (pattern === "split_route") {
+      const groundW = randi(OBSTACLE_MIN_W + 4, OBSTACLE_MAX_W + 6);
+      const groundH = OBSTACLE_BASE_H + randi(-6, 8);
+      const groundX = anchorX + randi(0, 60);
+      obstaclesRef.current.push({
+        id: ++lastIdRef.current,
+        x: groundX,
+        w: groundW,
+        h: groundH,
+        y: GROUND_Y - groundH,
+        variant: Math.random() < 0.5 ? 0 : 1,
+      });
+
+      const safeCoinY = GROUND_Y - R_COLLECTIBLE - 4;
+      for (let i = 0; i < 3; i++) {
+        collectiblesRef.current.push({
+          id: ++lastIdRef.current,
+          x: groundX + groundW + 48 + i * 34,
+          y: safeCoinY,
+          r: R_COLLECTIBLE,
+        });
+      }
+
+      const riskPlatform = spawnPlatformBlock(
+        groundX + groundW + randi(92, 124),
+        GROUND_Y - randf(H_SINGLE * 0.76, Math.min(H_DOUBLE * 0.88, H_SINGLE * 1.06)) - PLATFORM_H,
+        randi(128, 178),
+      );
+      spawnPurpleLine(riskPlatform.x + 18, mapFx.x2Bonus >= 0.12 ? 3 : 2, clampYCenter(riskPlatform.y - 22, R_X2), 44);
+
+      if (Math.random() < 0.48) {
+        const exitW = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W);
+        const exitH = OBSTACLE_BASE_H + randi(-8, 8);
+        obstaclesRef.current.push({
+          id: ++lastIdRef.current,
+          x: riskPlatform.x + riskPlatform.w + randi(64, 108),
+          w: exitW,
+          h: exitH,
+          y: GROUND_Y - exitH,
+          variant: Math.random() < 0.5 ? 0 : 1,
+        });
+      }
+
+      patternCooldownDistRef.current = randi(PLATFORM_PATTERN_COOLDOWN_MIN, PLATFORM_PATTERN_COOLDOWN_MAX);
+      return true;
+    }
+
+    if (pattern === "purple_gauntlet") {
+      const w1 = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W);
+      const h1 = OBSTACLE_BASE_H + randi(-6, 8);
+      const x1 = anchorX + randi(0, 32);
+      obstaclesRef.current.push({
+        id: ++lastIdRef.current,
+        x: x1,
+        w: w1,
+        h: h1,
+        y: GROUND_Y - h1,
+        variant: Math.random() < 0.5 ? 0 : 1,
+      });
+
+      const x2 = x1 + w1 + randi(170, 220);
+      const w2 = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W);
+      const h2 = OBSTACLE_BASE_H + randi(-6, 10);
+      obstaclesRef.current.push({
+        id: ++lastIdRef.current,
+        x: x2,
+        w: w2,
+        h: h2,
+        y: GROUND_Y - h2,
+        variant: Math.random() < 0.5 ? 0 : 1,
+      });
+
+      const purpleY = clampYCenter(yForHeight(randf(H_SINGLE * 0.84, H_DOUBLE * 0.92)), R_X2);
+      spawnPurpleLine(x1 + w1 + 38, mapFx.x2Bonus >= 0.12 ? 3 : 2, purpleY, 48);
+      collectiblesRef.current.push({
+        id: ++lastIdRef.current,
+        x: x2 + w2 + 60,
+        y: clampYCenter(purpleY + 18, R_COLLECTIBLE),
+        r: R_COLLECTIBLE,
+      });
+
+      patternCooldownDistRef.current = randi(PLATFORM_PATTERN_COOLDOWN_MIN, PLATFORM_PATTERN_COOLDOWN_MAX);
+      return true;
+    }
+
     const primaryW = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W + 10);
     const primaryH = OBSTACLE_BASE_H + randi(-4, 10);
     const primaryX = anchorX + randi(0, 80);
@@ -1720,14 +2889,9 @@ useEffect(() => {
     const platform = spawnPlatformBlock(platformX, platformY, platformW);
 
     const rewardY = clampYCenter(platform.y - 24, R_X2);
-    if (Math.random() < 0.55) {
-      powerUpsRef.current.push({
-        id: ++lastIdRef.current,
-        x: platform.x + platform.w * 0.5,
-        y: rewardY,
-        r: R_X2,
-        kind: "x2",
-      });
+    if (Math.random() < clamp(0.24 + mapFx.x2Bonus * 0.5, 0, 0.42)) {
+      const purpleCount = mapFx.x2Bonus >= 0.1 ? 2 : 1;
+      spawnPurpleLine(platform.x + 18, purpleCount, rewardY, 42);
     } else {
       collectiblesRef.current.push({
         id: ++lastIdRef.current,
@@ -1744,6 +2908,7 @@ useEffect(() => {
     H_DOUBLE,
     H_SINGLE,
     clampYCenter,
+    spawnPurpleLine,
     spawnPlatformBlock,
     spawnPlatformGatedCoins,
     yForHeight,
@@ -1753,10 +2918,12 @@ useEffect(() => {
   const spawnLetterAtIndex = useCallback((idx: number) => {
     if (idx < 0 || idx >= LETTERS.length) return;
     if (spawnedLetterIdxThisRunRef.current.has(idx)) return; // déjà spawn pendant ce run
+    if (powerUpsRef.current.some((powerUp) => powerUp.kind === "letter")) return;
     const letter = LETTERS[idx];
     if (persistentLettersRef.current.has(letter)) return;     // déjà possédée
 
     spawnedLetterIdxThisRunRef.current.add(idx);
+    nextLetterSpawnScoreRef.current = Math.max(nextLetterSpawnScoreRef.current, scoreRef.current + LETTER_SPAWN_SCORE_BUFFER);
 
     const s = speedRef.current;
     const x = SCREEN_W + Math.max(420, Math.min(1200, s * 1.4));
@@ -1766,13 +2933,15 @@ useEffect(() => {
   }, [H_STAR_MIN, H_STAR_MAX, clampYCenter, yForHeight]);
 
   const spawnObstacle = useCallback((minGap: number, gapMul: number, scoreNow: number) => {
+    const mapFx = MAP_EFFECTS[mapARef.current];
     const harden = clamp(0.25 * (scoreNow / 120000), 0, 0.25);
     const localGapMul = gapMul * (1 - harden);
     const attempts = Math.max(1, Math.min(MAX_SPAWN_ATTEMPTS, Math.floor(speedRef.current / 60)));
+    const obstacleScale = mapFx.obstacleScale;
 
     for (let i = 0; i < attempts; i++) {
-      const w = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W);
-      const h = OBSTACLE_BASE_H + randi(-8, 8);
+      const w = Math.round(clamp(randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W) * obstacleScale, OBSTACLE_MIN_W, OBSTACLE_MAX_W * 1.35));
+      const h = Math.round(clamp((OBSTACLE_BASE_H + randi(-8, 8)) * (0.96 + (obstacleScale - 1) * 0.75), OBSTACLE_BASE_H - 12, OBSTACLE_BASE_H + 18));
       const baseLead = Math.max(minGap, Math.floor(SCREEN_W * 0.75));
       const lead = Math.floor(baseLead * localGapMul);
       const x = SCREEN_W + lead + randi(0, Math.floor(OBSTACLE_MAX_GAP_BASE * localGapMul));
@@ -1790,7 +2959,7 @@ useEffect(() => {
       });
 
       // pièces volantes
-      if (ENABLE_COLLECTIBLES && Math.random() < 0.45) {
+      if (ENABLE_COLLECTIBLES && Math.random() < clamp(0.45 + mapFx.coinBonus, 0, 0.8)) {
         const hStar = randf(H_STAR_MIN, H_STAR_MAX);
         const yStar = clampYCenter(yForHeight(hStar), R_COLLECTIBLE);
         collectiblesRef.current.push({ id: ++lastIdRef.current, x: x + Math.max(80, w + 40), y: yStar, r: R_COLLECTIBLE });
@@ -1807,12 +2976,17 @@ useEffect(() => {
         const yDJ = clampYCenter(yForHeight(hDJ), R_POWERUP);
         powerUpsRef.current.push({ id: ++lastIdRef.current, x: x + randi(180, 280), y: yDJ, r: R_POWERUP, kind: "doublejump" });
       }
+      if (Math.random() < mapFx.x2Bonus * 0.4) {
+        const hX2 = randf(H_STAR_MIN, H_STAR_MAX);
+        const yX2 = clampYCenter(yForHeight(hX2), R_X2);
+        powerUpsRef.current.push({ id: ++lastIdRef.current, x: x + randi(120, 240), y: yX2, r: R_X2, kind: "x2" });
+      }
       return;
     }
 
     // Fallback sécurité si aucune tentative n'a passé le filtre "tooClose"
-    const w = randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W);
-    const h = OBSTACLE_BASE_H + randi(-8, 8);
+    const w = Math.round(clamp(randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W) * obstacleScale, OBSTACLE_MIN_W, OBSTACLE_MAX_W * 1.35));
+    const h = Math.round(clamp((OBSTACLE_BASE_H + randi(-8, 8)) * (0.96 + (obstacleScale - 1) * 0.75), OBSTACLE_BASE_H - 12, OBSTACLE_BASE_H + 18));
     const baseLead = Math.max(minGap, Math.floor(SCREEN_W * 0.75));
     const lead = Math.floor(baseLead * localGapMul);
     const x = SCREEN_W + lead;
@@ -1827,6 +3001,7 @@ useEffect(() => {
   }, [GROUND_Y, H_STAR_MIN, H_STAR_MAX, clampYCenter, yForHeight]);
 
   const spawnX2BonusForDoubleJump = useCallback(() => {
+    if (Math.random() > DOUBLEJUMP_X2_SPAWN_CHANCE) return;
     const s = speedRef.current;
     const leadTime = randf(1.1, 1.6);
     const leadPx = Math.max(260, Math.min(980, s * leadTime));
@@ -1839,12 +3014,178 @@ useEffect(() => {
     powerUpsRef.current.push({ id: ++lastIdRef.current, x, y, r: R_X2, kind: "x2" });
   }, [H_DOUBLE, H_SINGLE, clampYCenter, yForHeight]);
 
+  const triggerMapArrival = useCallback((map: MapName) => {
+    const mapFx = MAP_EFFECTS[map];
+    triggerRunBanner(mapFx.label, mapFx.accent, mapFx.subtitle, 1450);
+
+    if (map === "terre") {
+      spawnCoinsAirLine(6);
+      return;
+    }
+    if (map === "jupiter") {
+      spawnCoinsGround(4, undefined, true);
+      return;
+    }
+    if (map === "mars") {
+      if (Math.random() < 0.45) spawnX2BonusForDoubleJump();
+      return;
+    }
+    if (map === "systeme_solaire") {
+      spawnCoinsAirLine(8);
+      if (Math.random() < 0.55) spawnX2BonusForDoubleJump();
+    }
+  }, [spawnCoinsAirLine, spawnCoinsGround, spawnX2BonusForDoubleJump, triggerRunBanner]);
+
+  const scheduleNextMiniEvent = useCallback((from = Date.now()) => {
+    nextMiniEventAtRef.current = from + randi(MINI_EVENT_COOLDOWN_MIN_MS, MINI_EVENT_COOLDOWN_MAX_MS);
+  }, []);
+
+  const spawnMiniEventBurst = useCallback((event: MiniEventState) => {
+    const lead = Math.max(260, Math.min(820, speedRef.current * 1.1));
+    const anchorX = SCREEN_W + lead + randi(0, 110);
+    const pushCoinLine = (startX: number, count: number, y: number, gap = 34) => {
+      for (let i = 0; i < count; i++) {
+        collectiblesRef.current.push({
+          id: ++lastIdRef.current,
+          x: startX + i * gap,
+          y,
+          r: R_COLLECTIBLE,
+        });
+      }
+    };
+    const pushObstacle = (x: number, w: number, h: number) => {
+      obstaclesRef.current.push({
+        id: ++lastIdRef.current,
+        x,
+        w,
+        h,
+        y: GROUND_Y - h,
+        variant: Math.random() < 0.5 ? 0 : 1,
+      });
+    };
+
+    if (event.name === "terre_tresor") {
+      spawnCoinsGround(6, anchorX);
+      const platform = spawnPlatformBlock(
+        anchorX + randi(70, 130),
+        GROUND_Y - randf(H_SINGLE * 0.68, H_SINGLE * 0.94) - PLATFORM_H,
+        randi(150, 210),
+      );
+      pushObstacle(platform.x - randi(92, 128), randi(OBSTACLE_MIN_W, OBSTACLE_MAX_W), OBSTACLE_BASE_H + randi(-4, 8));
+      spawnPurpleLine(platform.x + 18, 2, clampYCenter(platform.y - 22, R_X2), 42);
+      return;
+    }
+
+    if (event.name === "jupiter_crunch") {
+      const w1 = Math.round(randi(OBSTACLE_MIN_W + 4, OBSTACLE_MAX_W + 12) * 1.2);
+      const h1 = Math.round((OBSTACLE_BASE_H + randi(2, 14)) * 1.12);
+      const x1 = anchorX;
+      pushObstacle(x1, w1, h1);
+
+      const w2 = Math.round(randi(OBSTACLE_MIN_W + 6, OBSTACLE_MAX_W + 14) * 1.24);
+      const h2 = Math.round((OBSTACLE_BASE_H + randi(4, 16)) * 1.14);
+      const gap = randi(150, 188);
+      const x2 = x1 + w1 + gap;
+      pushObstacle(x2, w2, h2);
+
+      const rewardY = clampYCenter(yForHeight(randf(H_SINGLE * 0.72, H_SINGLE * 0.96)), R_COLLECTIBLE);
+      pushCoinLine(x1 + w1 + 26, 4, rewardY, 30);
+      if (Math.random() < 0.55) {
+        powerUpsRef.current.push({
+          id: ++lastIdRef.current,
+          x: x2 + w2 + randi(36, 64),
+          y: clampYCenter(rewardY - 22, R_X2),
+          r: R_X2,
+          kind: "x2",
+        });
+      }
+      return;
+    }
+
+    if (event.name === "mars_orbit") {
+      const ascentAnchorX = SCREEN_W + Math.max(150, Math.min(360, speedRef.current * 0.55));
+      const firstPlatform = spawnPlatformBlock(
+        ascentAnchorX + randi(0, 18),
+        GROUND_Y - randf(H_SINGLE * 0.34, H_SINGLE * 0.48) - PLATFORM_H,
+        randi(190, 236),
+      );
+      const secondPlatform = spawnPlatformBlock(
+        firstPlatform.x + firstPlatform.w + randi(42, 60),
+        firstPlatform.y - randi(34, 50),
+        randi(168, 214),
+      );
+      const thirdPlatform = spawnPlatformBlock(
+        secondPlatform.x + secondPlatform.w + randi(46, 68),
+        secondPlatform.y - randi(24, 40),
+        randi(150, 190),
+      );
+      for (let i = 0; i < 5; i++) {
+        const t = i / 4;
+        collectiblesRef.current.push({
+          id: ++lastIdRef.current,
+          x: firstPlatform.x + firstPlatform.w - 12 + t * (thirdPlatform.x - firstPlatform.x - firstPlatform.w + 28),
+          y: clampYCenter(firstPlatform.y - 14 - (firstPlatform.y - thirdPlatform.y) * t, R_COLLECTIBLE),
+          r: R_COLLECTIBLE,
+        });
+      }
+      if (Math.random() < 0.28) {
+        spawnPurpleLine(thirdPlatform.x + 20, 1, clampYCenter(thirdPlatform.y - 20, R_X2), 40);
+      }
+      return;
+    }
+
+    if (event.name === "solaire_storm") {
+      const stormY = clampYCenter(yForHeight(randf(H_SINGLE * 0.84, H_DOUBLE * 0.96)), R_X2);
+      spawnPurpleLine(anchorX, 3, stormY, 40);
+      pushCoinLine(anchorX + 10, 5, clampYCenter(stormY + 18, R_COLLECTIBLE), 38);
+      if (Math.random() < 0.32) {
+        spawnX2BonusForDoubleJump();
+      }
+    }
+  }, [
+    GROUND_Y,
+    H_DOUBLE,
+    H_SINGLE,
+    clampYCenter,
+    spawnCoinsGround,
+    spawnPlatformBlock,
+    spawnPurpleLine,
+    spawnX2BonusForDoubleJump,
+    yForHeight,
+  ]);
+
+  const triggerMiniEvent = useCallback((map: MapName) => {
+    const eventName = miniEventForMap(map);
+    if (!eventName) return;
+
+    const now = Date.now();
+    currentMiniEventRef.current = {
+      name: eventName,
+      map,
+      endsAt: now + MINI_EVENT_DURATION_MS,
+      nextBurstAt: now,
+    };
+    scheduleNextMiniEvent(now);
+
+    if (eventName === "terre_tresor") {
+      triggerRunBanner("Tresor terrestre", "#67E8F9", "Route riche, execution propre", 1150);
+    } else if (eventName === "jupiter_crunch") {
+      triggerRunBanner("Jupiter crunch", "#F59E0B", "Fenetre serree, gros payoff", 1150);
+    } else if (eventName === "mars_orbit") {
+      triggerRunBanner("Mars ascent", "#FB7185", "Plateformes obligatoires", 1150);
+    } else {
+      triggerRunBanner("Solar storm", "#A78BFA", "Burst cosmique", 1150);
+    }
+    flashHud(MAP_EFFECTS[map].accent, 420);
+  }, [flashHud, scheduleNextMiniEvent, triggerRunBanner]);
+
   // ====== Main loop ======
   useEffect(() => {
     if (gameState !== "running") {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
       lastTsRef.current = null;
+      lastRenderCommitAtRef.current = 0;
       return;
     }
 
@@ -1852,25 +3193,69 @@ useEffect(() => {
       if (lastTsRef.current == null) lastTsRef.current = ts;
       const dt = clamp((ts - lastTsRef.current) / 1000, 0, 0.05);
       lastTsRef.current = ts;
+      const nowMs = Date.now();
 
-      // Map & diff
-      const desiredMap = activeMapForScore(scoreRef.current);
-      if (desiredMap !== mapBRef.current) {
-        mapARef.current = mapFadeRef.current >= 0.99 ? mapBRef.current : mapARef.current;
-        mapBRef.current = desiredMap;
+      if (
+        currentMiniEventRef.current &&
+        (nowMs >= currentMiniEventRef.current.endsAt || currentMiniEventRef.current.map !== mapARef.current)
+      ) {
+        currentMiniEventRef.current = null;
+      }
+
+      // Map & diff: progression sequentielle avec temps minimum passe dans chaque monde.
+      const unlockedMapIndex = mapIndexForScore(scoreRef.current);
+      if (
+        !currentMiniEventRef.current &&
+        mapFadeRef.current <= 0 &&
+        unlockedMapIndex > currentMapIndexRef.current &&
+        nowMs >= nextMapAdvanceAtRef.current
+      ) {
+        const nextMapIndex = Math.min(currentMapIndexRef.current + 1, MAP_NAMES.length - 1);
+        const nextMap = MAP_NAMES[nextMapIndex];
+        mapARef.current = mapBRef.current;
+        mapBRef.current = nextMap;
         mapFadeRef.current = 0;
+        nextMapAdvanceAtRef.current = nowMs + MAP_MIN_DWELL_MS;
+        currentMiniEventRef.current = null;
+        nextMiniEventAtRef.current = nowMs + MINI_EVENT_FIRST_DELAY_MS;
+        triggerMapArrival(nextMap);
       }
       if (mapFadeRef.current < 1) {
         mapFadeRef.current = clamp(mapFadeRef.current + dt / MAP_FADE_SECS, 0, 1);
         if (mapFadeRef.current >= 1) {
           mapARef.current = mapBRef.current;
+          currentMapIndexRef.current = Math.max(0, MAP_NAMES.indexOf(mapARef.current));
           mapFadeRef.current = 0;
         }
       }
       const diff = getDifficultyByMap(mapARef.current);
+      const mapFx = MAP_EFFECTS[mapARef.current];
+
+      if (
+        !currentMiniEventRef.current &&
+        mapFadeRef.current <= 0 &&
+        miniEventForMap(mapARef.current) &&
+        nowMs >= nextMiniEventAtRef.current
+      ) {
+        triggerMiniEvent(mapARef.current);
+      }
+      if (currentMiniEventRef.current && nowMs >= currentMiniEventRef.current.nextBurstAt) {
+        spawnMiniEventBurst(currentMiniEventRef.current);
+        currentMiniEventRef.current.nextBurstAt = nowMs + MINI_EVENT_BURST_MS;
+      }
+      const isMiniEventActive = !!currentMiniEventRef.current;
+      const activeEntityCount =
+        obstaclesRef.current.length +
+        platformsRef.current.length +
+        collectiblesRef.current.length +
+        powerUpsRef.current.length;
+      const renderIntervalMs =
+        isMiniEventActive || activeEntityCount >= RENDER_LOAD_ENTITY_THRESHOLD
+          ? RUN_RENDER_INTERVAL_HIGH_LOAD_MS
+          : RUN_RENDER_INTERVAL_MS;
 
       // Vitesse
-      targetSpeedRef.current += diff.speedGain * dt;
+      targetSpeedRef.current += diff.speedGain * (1 + mapFx.speedRush) * dt;
       const alphaSmooth = 1 - Math.exp(-SPEED_SMOOTHING * dt);
       speedRef.current = speedRef.current + (targetSpeedRef.current - speedRef.current) * alphaSmooth;
       const s = speedRef.current;
@@ -1883,13 +3268,21 @@ useEffect(() => {
       patternCooldownDistRef.current = Math.max(0, patternCooldownDistRef.current - s * dt);
 
       // Gravité & saut
-      const gravityBase = GRAVITY_BASE * diff.gravityMul;
+      const gravityBase = GRAVITY_BASE * diff.gravityMul * mapFx.lowGravityMul;
       const gravityNow = (velYRef.current < 0 && holdingJumpRef.current) ? gravityBase * HOLD_GRAVITY_SCALE : gravityBase;
       velYRef.current += gravityNow * dt;
 
       let newY = yRef.current + velYRef.current * dt;
       const floorY = GROUND_Y - PLAYER_SIZE;
       let landingY = floorY;
+      const activeMiniEvent = currentMiniEventRef.current;
+      const marsAscentRouteReady =
+        isMarsAscentEvent(activeMiniEvent) &&
+        platformsRef.current.some((platform) => platform.x + platform.w > playerX + 8 && platform.y < floorY - 20);
+      const marsAscentArmed =
+        isMarsAscentEvent(activeMiniEvent) &&
+        marsAscentRouteReady &&
+        nowMs >= marsAscentArmsAt(activeMiniEvent);
 
       if (ENABLE_PLATFORMS && velYRef.current >= 0 && platformsRef.current.length > 0) {
         const prevBottom = yRef.current + PLAYER_SIZE;
@@ -1907,6 +3300,11 @@ useEffect(() => {
       }
 
       if (newY >= landingY) {
+        if (marsAscentArmed && landingY >= floorY) {
+          if (settings.haptics && Haptics) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+          endGame();
+          return;
+        }
         newY = landingY;
         if (!groundedRef.current) {
           groundedRef.current = true;
@@ -1939,7 +3337,7 @@ useEffect(() => {
       }
 
       // Monde actif
-      if (obstaclesRef.current.length === 0) {
+      if (!isMiniEventActive && obstaclesRef.current.length === 0) {
         if (!spawnPattern(OBSTACLE_MIN_GAP_BASE, diff.gapMul, scoreRef.current)) {
           spawnObstacle(OBSTACLE_MIN_GAP_BASE, diff.gapMul, scoreRef.current);
         }
@@ -1957,11 +3355,13 @@ useEffect(() => {
         if (o.x + o.w <= -40) obstaclesRef.current.splice(i, 1);
       }
 
-      const last = obstaclesRef.current[obstaclesRef.current.length - 1];
-      if (!last || last.x < SCREEN_W - randi(Math.floor(OBSTACLE_MIN_GAP_BASE * 0.7), OBSTACLE_MAX_GAP_BASE)) {
-        const nextMinGap = randi(OBSTACLE_MIN_GAP_BASE, OBSTACLE_MAX_GAP_BASE);
-        if (!spawnPattern(nextMinGap, diff.gapMul, scoreRef.current)) {
-          spawnObstacle(nextMinGap, diff.gapMul, scoreRef.current);
+      if (!isMiniEventActive) {
+        const last = obstaclesRef.current[obstaclesRef.current.length - 1];
+        if (!last || last.x < SCREEN_W - randi(Math.floor(OBSTACLE_MIN_GAP_BASE * 0.7), OBSTACLE_MAX_GAP_BASE)) {
+          const nextMinGap = randi(OBSTACLE_MIN_GAP_BASE, OBSTACLE_MAX_GAP_BASE);
+          if (!spawnPattern(nextMinGap, diff.gapMul, scoreRef.current)) {
+            spawnObstacle(nextMinGap, diff.gapMul, scoreRef.current);
+          }
         }
       }
 
@@ -1977,6 +3377,11 @@ useEffect(() => {
           runCoinsCollectedRef.current += 1;
           comboRef.current = Math.min(10, comboRef.current + 1);
           if (comboRef.current >= 10) unlock("combo_10");
+          if (comboRef.current === 5) {
+            triggerRunBanner("Combo x5", "#FBBF24", "La run chauffe", 820);
+          } else if (comboRef.current === 10) {
+            triggerRunBanner("Serie parfaite", "#F97316", "Tu tiens la cadence", 980);
+          }
 
           const base = Math.floor(100 * getSpeedMultiplier(s) * getComboMultiplier());
           const gained = applyScoreGain(base);
@@ -2054,8 +3459,8 @@ useEffect(() => {
             spawnX2BonusForDoubleJump();
 
           } else if (p.kind === "x2") {
-            // +200 points pour une purple coin
-            const plus = applyScoreGain(200);
+            // Bonus violet reduit pour garder la mecanique forte sans casser le score.
+            const plus = applyScoreGain(PURPLE_SCORE_BASE);
             setScore(prev => {
               const next = prev + plus;
               scoreRef.current = next;
@@ -2075,7 +3480,7 @@ useEffect(() => {
             purpleChainExpiresAtRef.current = now + SCORE_MULT_DURATION;
 
             if (now < scoreMultUntilRef.current) {
-              scoreMultLevelRef.current = clamp(scoreMultLevelRef.current + 1, 2, 10);
+              scoreMultLevelRef.current = clamp(scoreMultLevelRef.current + 1, 2, PURPLE_MAX_MULT);
               scoreMultUntilRef.current = now + SCORE_MULT_DURATION;
             } else {
               scoreMultLevelRef.current = 2;
@@ -2083,13 +3488,15 @@ useEffect(() => {
               if (!achievementsRef.current.first_x2) unlock("first_x2");
             }
 
-            if ([2,5,10].includes(scoreMultLevelRef.current)) {
+            if ([2,4,6].includes(scoreMultLevelRef.current)) {
               showToast(`💜 ×${scoreMultLevelRef.current}`);
+              triggerRunBanner(`Multiplicateur x${scoreMultLevelRef.current}`, "#C084FC", "Continue la chaine", 900);
             }
             if (nextPurpleChain >= PURPLE_CHAIN_GOAL) {
               spawnCoinsAirLine(PURPLE_CHAIN_AIR_COINS);
-              showToast("💜 Série ×10 !");
+              showToast(`💜 Série ×${PURPLE_CHAIN_GOAL} !`);
               playApplauseSfx();
+              triggerRunBanner("Purple chain", "#A78BFA", "Pluie de pièces", 1050);
               setPurpleChainSync(0);
               purpleChainExpiresAtRef.current = 0;
             }
@@ -2108,6 +3515,29 @@ useEffect(() => {
 
             // Supprime le mini “badge” / carré : (rendu ajusté en Partie 3)
             showToast(`🔤 ${p.letter}`);
+
+            const lettersOwned = persistentLettersRef.current.size;
+            if (lettersOwned === 2 || lettersOwned === 4) {
+              const chainBonus = applyScoreGain(lettersOwned === 2 ? 1500 : 2500);
+              setScore((prev) => {
+                const next = prev + chainBonus;
+                scoreRef.current = next;
+                checkMilestones(next);
+                return next;
+              });
+              popupsRef.current.push({
+                id: ++lastIdRef.current,
+                x: playerX + 40,
+                y: yRef.current,
+                born: Date.now(),
+                text: lettersOwned === 2 ? `COM +${chainBonus}` : `COME +${chainBonus}`,
+              });
+              spawnCoinsAirLine(lettersOwned === 2 ? 5 : 7);
+              if (lettersOwned === 4) {
+                spawnX2BonusForDoubleJump();
+              }
+              showToast(lettersOwned === 2 ? "COM active !" : "COME boost !");
+            }
 
             if (haveAllLetters()) {
               // Jackpot 20k + overlay ultra visuel
@@ -2164,6 +3594,51 @@ useEffect(() => {
         }
       }
 
+      for (const o of obstaclesRef.current) {
+        if (o.grazed) continue;
+
+        const obstacleRight = o.x + o.w;
+        if (obstacleRight > cx) continue;
+
+        o.grazed = true;
+
+        const horizontalGap = cx - obstacleRight;
+        const verticalGap = o.y - (yRef.current + PLAYER_SIZE);
+        const isNearMiss =
+          horizontalGap >= 0 &&
+          horizontalGap <= NEAR_MISS_X_WINDOW &&
+          verticalGap >= 0 &&
+          verticalGap <= NEAR_MISS_Y_WINDOW;
+
+        if (!isNearMiss) continue;
+
+        runNearMissesRef.current += 1;
+        const grazeScore = applyScoreGain(Math.floor(NEAR_MISS_BASE_SCORE * getSpeedMultiplier(s) * mapFx.nearMissMul));
+        setScore((prev) => {
+          const next = prev + grazeScore;
+          scoreRef.current = next;
+          checkMilestones(next);
+          return next;
+        });
+        popupsRef.current.push({
+          id: ++lastIdRef.current,
+          x: playerX + PLAYER_SIZE + 4,
+          y: yRef.current + 8,
+          born: Date.now(),
+          text: `Close +${grazeScore}`,
+        });
+        if (runNearMissesRef.current === 3 || runNearMissesRef.current === 6) {
+          triggerRunBanner(
+            runNearMissesRef.current === 3 ? "Dare streak" : "Risk addict",
+            "#F97316",
+            runNearMissesRef.current === 3 ? "Les close calls paient" : "Tu joues vraiment au bord",
+            950,
+          );
+        }
+        flashHud(mapFx.accent, 260);
+        if (settings.haptics && Haptics) Haptics.selectionAsync?.().catch(() => {});
+      }
+
       // ===== Score distance =====
       distAccRef.current += s * dt;
       if (distAccRef.current >= 10) {
@@ -2171,7 +3646,7 @@ useEffect(() => {
         distAccRef.current -= gainedUnits * 10;
 
         setScore((prev) => {
-          const base = Math.floor(gainedUnits * getSpeedMultiplier(s));
+          const base = Math.floor(gainedUnits * getSpeedMultiplier(s) * mapFx.distanceScoreMul);
           const added = applyScoreGain(base);
           const next = prev + added;
           scoreRef.current = next;
@@ -2179,11 +3654,18 @@ useEffect(() => {
           if (next >= 2000) unlock("score_2000");
           checkMilestones(next);
 
-          // Paliers de lettres
-          for (let i = 0; i < LETTER_THRESHOLDS.length; i++) {
-            const threshold = LETTER_THRESHOLDS[i];
-            if (next >= threshold && !spawnedLetterIdxThisRunRef.current.has(i) && !persistentLettersRef.current.has(LETTERS[i])) {
-              spawnLetterAtIndex(i);
+          // Paliers de lettres: une seule lettre a la fois, avec un vrai ecart de score entre deux apparitions.
+          if (
+            next >= nextLetterSpawnScoreRef.current &&
+            !powerUpsRef.current.some((powerUp) => powerUp.kind === "letter")
+          ) {
+            const nextLetterIdx = LETTER_THRESHOLDS.findIndex((threshold, idx) => (
+              next >= threshold &&
+              !spawnedLetterIdxThisRunRef.current.has(idx) &&
+              !persistentLettersRef.current.has(LETTERS[idx])
+            ));
+            if (nextLetterIdx >= 0) {
+              spawnLetterAtIndex(nextLetterIdx);
             }
           }
           return next;
@@ -2197,9 +3679,18 @@ useEffect(() => {
 
       // Popups (+pts)
       popupsRef.current = popupsRef.current.filter(p => Date.now() - p.born < 900);
+      if (popupsRef.current.length > MAX_VISIBLE_POPUPS) {
+        popupsRef.current = popupsRef.current.slice(popupsRef.current.length - MAX_VISIBLE_POPUPS);
+      }
 
       // Render tick
-      setFrameTick((t) => (t + 1) % 1_000_000);
+      if (
+        lastRenderCommitAtRef.current === 0 ||
+        nowMs - lastRenderCommitAtRef.current >= renderIntervalMs
+      ) {
+        lastRenderCommitAtRef.current = nowMs;
+        setFrameTick((t) => (t + 1) % 1_000_000);
+      }
       rafRef.current = requestAnimationFrame(tick);
     };
 
@@ -2210,6 +3701,7 @@ useEffect(() => {
     endGame,
     spawnObstacle,
     spawnPattern,
+    spawnMiniEventBurst,
     spawnX2BonusForDoubleJump,
     settings.haptics,
     GROUND_Y,
@@ -2236,6 +3728,10 @@ useEffect(() => {
     setPurpleChainSync,
     setShieldStacksSync,
     setSuperShieldUntilSync,
+    triggerMapArrival,
+    triggerMiniEvent,
+    triggerRunBanner,
+    flashHud,
   ]);
 
   // ===== Input =====
@@ -2263,8 +3759,6 @@ useEffect(() => {
 
   const handlePressIn = useCallback(() => {
     if (gameState === "ready") {
-      if (pendingSnapshot) return;
-      startGame();
       return;
     }
     if (gameState === "paused") { resumeGame(); return; }
@@ -2281,11 +3775,201 @@ useEffect(() => {
   const mapNow = mapARef.current;
   const mapAlpha = mapFadeRef.current;
   const showGround = mapNow !== "systeme_solaire";
-  const showHeroHeader = gameState !== "running";
+  const showHeroHeader = gameState !== "running" && gameState !== "ready";
+  const activeMapEffect = MAP_EFFECTS[mapNow];
+  const activeRunBanner = runBanner && Date.now() < runBanner.until ? runBanner : null;
+  const activeHudFlash = hudFlash && Date.now() < hudFlash.until ? hudFlash : null;
+  const activeTheme = THEME_PRESETS[loadout.theme];
+  const activeThemeOption = THEME_OPTIONS.find((item) => item.id === loadout.theme) ?? THEME_OPTIONS[0];
+  const activeTrail = TRAIL_OPTIONS.find((item) => item.id === loadout.trail) ?? TRAIL_OPTIONS[0];
+  const activeTitle = TITLE_OPTIONS.find((item) => item.id === loadout.title) ?? TITLE_OPTIONS[0];
+  const activePerk = PERK_OPTIONS.find((item) => item.id === loadout.perk) ?? PERK_OPTIONS[0];
+  const isReadyStacked = viewportWidth < 620 || isReadyShort;
+  const activeMiniEventState = currentMiniEventRef.current;
+  const marsAscentActive = gameState === "running" && isMarsAscentEvent(activeMiniEventState);
+  const marsAscentArmed =
+    isMarsAscentEvent(activeMiniEventState) &&
+    platformsRef.current.some((platform) => platform.x + platform.w > playerX + 8 && platform.y < GROUND_Y - PLAYER_SIZE - 20) &&
+    Date.now() >= marsAscentArmsAt(activeMiniEventState);
+  const liveEntityCount =
+    obstaclesRef.current.length +
+    platformsRef.current.length +
+    collectiblesRef.current.length +
+    powerUpsRef.current.length;
+  const highLoadVisuals =
+    gameState === "running" &&
+    (Boolean(activeMiniEventState) || liveEntityCount >= RENDER_LOAD_ENTITY_THRESHOLD);
+  const visibleTrailDots = highLoadVisuals ? 2 : TRAIL_DOT_COUNT;
 
   const speedMult = Math.min(MULT_MAX, MULT_MIN + Math.max(0, speedRef.current - START_SPEED) / MULT_SCALE).toFixed(1);
   const scoreBuff = getActiveScoreMult();
   const dailyMissionDoneCount = useMemo(() => getDailyMissionDoneCount(dailyMissions), [dailyMissions]);
+  const playerVisual = useMemo(() => {
+    const absVy = Math.abs(velYRef.current);
+    const stretch = clamp(absVy / 1200, 0, 0.14);
+    if (gameState !== "running") {
+      return { scaleX: 1, scaleY: 1, translateY: 0, trailBoost: 0.9 };
+    }
+    if (groundedRef.current) {
+      return { scaleX: 1.04, scaleY: 0.96, translateY: 1, trailBoost: 0.92 };
+    }
+    if (velYRef.current < -40) {
+      return { scaleX: 1 - stretch * 0.55, scaleY: 1 + stretch, translateY: -2, trailBoost: 1.18 };
+    }
+    return { scaleX: 1 + stretch * 0.42, scaleY: 1 - stretch * 0.3, translateY: 0, trailBoost: 1.04 };
+  }, [frameTick, gameState]);
+
+  const nextUnlockHints = useMemo(() => {
+    const groups = [
+      { group: "Trail", option: TRAIL_OPTIONS.find((item) => !item.isUnlocked(metaStats, achievements, best)) },
+      { group: "Theme", option: THEME_OPTIONS.find((item) => !item.isUnlocked(metaStats, achievements, best)) },
+      { group: "Titre", option: TITLE_OPTIONS.find((item) => !item.isUnlocked(metaStats, achievements, best)) },
+      { group: "Perk", option: PERK_OPTIONS.find((item) => !item.isUnlocked(metaStats, achievements, best)) },
+    ];
+    const hints: {
+      group: string;
+      label: string;
+      accent: string;
+      unlockLabel: string;
+      text: string;
+      ratio: number;
+    }[] = [];
+    for (const entry of groups) {
+      if (!entry.option) continue;
+      hints.push({
+        group: entry.group,
+        label: entry.option.label,
+        accent: entry.option.accent,
+        unlockLabel: entry.option.unlockLabel,
+        ...getUnlockProgressForId(entry.option.id, metaStats, achievements, best),
+      });
+    }
+    return hints.slice(0, 3);
+  }, [achievements, best, metaStats]);
+  const primaryUnlockHint = nextUnlockHints[0] ?? null;
+  const missionRatio = DAILY_MISSIONS.length > 0 ? dailyMissionDoneCount / DAILY_MISSIONS.length : 0;
+  const missionStatusText =
+    dailyMissionDoneCount >= DAILY_MISSIONS.length
+      ? "Briefing termine"
+      : `${Math.max(0, DAILY_MISSIONS.length - dailyMissionDoneCount)} mission${DAILY_MISSIONS.length - dailyMissionDoneCount > 1 ? "s" : ""} restante${DAILY_MISSIONS.length - dailyMissionDoneCount > 1 ? "s" : ""}`;
+  const routeStops = useMemo(
+    () => [
+      { key: "base", label: "Base", threshold: 0, accent: MAP_EFFECTS.base.accent },
+      { key: "terre", label: "Terre", threshold: MAP_SWITCH_AT.base_to_terre, accent: MAP_EFFECTS.terre.accent },
+      { key: "jupiter", label: "Jupiter", threshold: MAP_SWITCH_AT.terre_to_jupiter, accent: MAP_EFFECTS.jupiter.accent },
+      { key: "mars", label: "Mars", threshold: MAP_SWITCH_AT.jupiter_to_mars, accent: MAP_EFFECTS.mars.accent },
+      { key: "solaire", label: "Solaire", threshold: MAP_SWITCH_AT.mars_to_solaire, accent: MAP_EFFECTS.systeme_solaire.accent },
+    ],
+    []
+  );
+  const routeProgress = clamp(best / MAP_SWITCH_AT.mars_to_solaire, 0, 1);
+  const nextRouteStop = routeStops.find((stop) => best < stop.threshold) ?? routeStops[routeStops.length - 1];
+  const readyLoadoutCards = [
+    {
+      key: "perk",
+      label: "Bonus",
+      value: activePerk.label,
+      hint: activePerk.description,
+      accent: activePerk.accent,
+      icon: "sparkles-outline" as const,
+      onPress: () => cycleLoadout("perk"),
+    },
+    {
+      key: "title",
+      label: "Titre",
+      value: activeTitle.label,
+      hint: `Signature ${activeTitle.label.toLowerCase()}`,
+      accent: activeTitle.accent,
+      icon: "ribbon-outline" as const,
+      onPress: () => cycleLoadout("title"),
+    },
+    {
+      key: "trail",
+      label: "Trace",
+      value: activeTrail.label,
+      hint: `Sillage ${activeTrail.label.toLowerCase()}`,
+      accent: activeTrail.accent,
+      icon: "flash-outline" as const,
+      onPress: () => cycleLoadout("trail"),
+    },
+    {
+      key: "theme",
+      label: "Style",
+      value: activeThemeOption.label,
+      hint: `Palette ${activeThemeOption.label.toLowerCase()}`,
+      accent: activeThemeOption.accent,
+      icon: "color-palette-outline" as const,
+      onPress: () => cycleLoadout("theme"),
+    },
+  ];
+  const readyBriefingRows = [
+    { key: "coin", icon: "ellipse-outline" as const, title: "Ligne propre", body: "Les pièces et la route de vol doivent rester lisibles au premier coup d'œil." },
+    { key: "perk", icon: "shield-checkmark-outline" as const, title: "Ouverture forte", body: "Ton bonus décide le tempo du début de run, pas seulement une ligne de texte." },
+    { key: "goal", icon: "rocket-outline" as const, title: "Objectif visible", body: nextRouteStop.threshold > 0 ? `Cap sur ${nextRouteStop.label} à ${Math.round(nextRouteStop.threshold / 1000)}k.` : "Cap sur le premier secteur." },
+  ];
+
+  const weeklyChallenge = useMemo(() => {
+    const safeBest = Math.max(0, best);
+    const displayName = (row: LBRow) => {
+      const first = row.admins?.first_name?.trim() || "";
+      const last = row.admins?.last_name?.trim() || "";
+      return `${first} ${last}`.trim() || "le top 5";
+    };
+    if (!top5 || top5.length === 0) {
+      return {
+        title: "Objectif hebdo",
+        body: "Pose le premier gros score de la semaine",
+        accent: "#FBBF24",
+      };
+    }
+    const others = top5
+      .filter((row) => !adminId || row.admin_id !== adminId)
+      .sort((a, b) => a.best_score - b.best_score);
+    const next = others.find((row) => row.best_score > safeBest);
+    if (next) {
+      return {
+        title: "Objectif hebdo",
+        body: `${Math.max(1, next.best_score - safeBest)} pts pour passer ${displayName(next)}`,
+        accent: "#67E8F9",
+      };
+    }
+    return {
+      title: "Objectif hebdo",
+      body: "Tu tiens le top 5 cette semaine. Défends ton score.",
+      accent: "#FACC15",
+    };
+  }, [adminId, best, top5]);
+
+  const activeEventHud = useMemo(() => {
+    const now = Date.now();
+    if (gameState !== "running") return null;
+    if (activeMiniEventState) {
+      const left = Math.max(0, Math.ceil((activeMiniEventState.endsAt - now) / 1000));
+      if (isMarsAscentEvent(activeMiniEventState)) {
+        return {
+          title: marsAscentArmed ? "Faille active" : "Faille en place",
+          subtitle: marsAscentArmed ? `Reste sur les plateformes · ${left}s` : `Montée sécurisée · ${left}s`,
+          accent: marsAscentArmed ? "#FB7185" : "#FDBA74",
+        };
+      }
+      if (activeMiniEventState.name === "terre_tresor") {
+        return { title: "Trésor terrestre", subtitle: `Fenêtre de loot · ${left}s`, accent: "#67E8F9" };
+      }
+      if (activeMiniEventState.name === "jupiter_crunch") {
+        return { title: "Jupiter crunch", subtitle: `Section lourde · ${left}s`, accent: "#F59E0B" };
+      }
+      return { title: "Solar storm", subtitle: `Burst cosmique · ${left}s`, accent: "#A78BFA" };
+    }
+    const nextMiniLeftMs = nextMiniEventAtRef.current - now;
+    if (mapNow !== "base" && mapFadeRef.current <= 0 && nextMiniLeftMs > 0 && nextMiniLeftMs <= 4_000) {
+      return {
+        title: "Moment spécial",
+        subtitle: `${Math.max(1, Math.ceil(nextMiniLeftMs / 1000))}s`,
+        accent: activeMapEffect.accent,
+      };
+    }
+    return null;
+  }, [activeMapEffect.accent, activeMiniEventState, frameTick, gameState, mapNow, marsAscentArmed]);
 
   const secsLeft = (ms: number) => Math.max(0, Math.ceil((ms - Date.now()) / 1000));
   const invBarInfo = () => {
@@ -2347,7 +4031,7 @@ useEffect(() => {
       <Image source={logoComets} style={styles.logoSlim} resizeMode="contain" />
       <View>
         <Text style={styles.titleSlim}>Comets Run</Text>
-        <Text style={styles.titleSubSlim}>Mode arcade du club</Text>
+        <Text style={styles.titleSubSlim}>{activeTitle.label} · {activePerk.label}</Text>
       </View>
     </View>
 
@@ -2403,25 +4087,25 @@ useEffect(() => {
 
   {/* 3. Bulle d’aide claire sur les bonus */}
   <View style={styles.missionHudWrap}>
-    <View style={styles.missionHudHeader}>
-      <Text style={styles.missionHudTitle}>Missions du jour</Text>
-      <Text style={styles.missionHudCount}>
-        {dailyMissionDoneCount}/{DAILY_MISSIONS.length}
-      </Text>
-    </View>
-    {DAILY_MISSIONS.map((mission) => {
-      const value = getDailyMissionValue(dailyMissions, mission.id);
-      const done = value >= mission.target;
-      return (
-        <View key={mission.id} style={styles.missionHudRow}>
-          <View style={[styles.missionHudDot, { backgroundColor: done ? "#22c55e" : mission.tint }]} />
-          <Text style={styles.missionHudLabel}>{mission.label}</Text>
-          <Text style={[styles.missionHudValue, done && styles.missionHudValueDone]}>
-            {Math.min(value, mission.target)}/{mission.target}
-          </Text>
-        </View>
-      );
-    })}
+      <View style={styles.missionHudHeader}>
+        <Text style={styles.missionHudTitle}>Missions du jour</Text>
+        <Text style={styles.missionHudCount}>
+          {dailyMissionDoneCount}/{DAILY_MISSIONS.length}
+        </Text>
+      </View>
+      {DAILY_MISSIONS.map((mission) => {
+        const value = getDailyMissionValue(dailyMissions, mission.id);
+        const done = value >= mission.target;
+        return (
+          <View key={mission.id} style={styles.missionHudRow}>
+            <View style={[styles.missionHudDot, { backgroundColor: done ? "#22c55e" : mission.tint }]} />
+            <Text style={styles.missionHudLabel}>{mission.label}</Text>
+            <Text style={[styles.missionHudValue, done && styles.missionHudValueDone]}>
+              {Math.min(value, mission.target)}/{mission.target}
+            </Text>
+          </View>
+        );
+      })}
   </View>
 
   {showHelp && (
@@ -2471,9 +4155,25 @@ useEffect(() => {
       )}
 
       {/* Score centré */}
-      <View pointerEvents="none" style={styles.scoreBigWrap}>
-        <Text style={styles.scoreBig}>{score}</Text>
-      </View>
+      {gameState !== "ready" && (
+        <View pointerEvents="none" style={styles.scoreBigWrap}>
+          <Text
+            style={[
+              styles.scoreBig,
+              { backgroundColor: activeTheme.scoreBg },
+              activeHudFlash
+                ? {
+                    borderColor: activeHudFlash.accent,
+                    color: activeHudFlash.accent,
+                    backgroundColor: "rgba(11,15,23,0.84)",
+                  }
+                : null,
+            ]}
+          >
+            {score}
+          </Text>
+        </View>
+      )}
 
       {/* Bandeau COMETS (descendu un peu) */}
       {gameState === "running" && (
@@ -2509,17 +4209,48 @@ useEffect(() => {
         </View>
       )}
 
+      {gameState === "running" && (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.mapHudWrap,
+            compactBadges.length > 0 ? styles.mapHudWrapWithBadges : styles.mapHudWrapSolo,
+          ]}
+        >
+          <View
+            style={[
+              styles.mapPill,
+              {
+                borderColor: activeMapEffect.accent,
+                backgroundColor: activeHudFlash ? "rgba(7,10,17,0.94)" : "rgba(7,10,17,0.74)",
+              },
+            ]}
+          >
+            <Text style={[styles.mapPillTitle, { color: activeMapEffect.accent }]}>{activeMapEffect.label}</Text>
+            <Text style={styles.mapPillTxt}>{activeMapEffect.hudNote}</Text>
+          </View>
+          {activeEventHud && (
+            <View style={[styles.eventPill, { borderColor: activeEventHud.accent }]}>
+              <Text style={[styles.eventPillTitle, { color: activeEventHud.accent }]}>{activeEventHud.title}</Text>
+              <Text style={styles.eventPillTxt}>{activeEventHud.subtitle}</Text>
+            </View>
+          )}
+        </View>
+      )}
+
       {/* GAME AREA */}
       <Pressable
         onLayout={onGameAreaLayout}
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
+        onPressIn={gameState === "ready" ? undefined : handlePressIn}
+        onPressOut={gameState === "ready" ? undefined : handlePressOut}
+        pointerEvents={gameState === "ready" ? "box-none" : "auto"}
         style={styles.gameArea}
         android_disableSound
         android_ripple={{ color: "transparent" }}
       >
         <Animated.View
           style={{
+            ...StyleSheet.absoluteFillObject,
             transform: [
               {
                 translateY: shake.interpolate({
@@ -2552,7 +4283,15 @@ useEffect(() => {
             })}
           </View>
 
-          {renderFence({ SCREEN_W, GROUND_Y, fenceOffsetRef, settings })}
+          {activeHudFlash && (
+            <View
+              pointerEvents="none"
+              style={[styles.hudFlashOverlay, { backgroundColor: activeHudFlash.accent }]}
+            />
+          )}
+
+          {(!highLoadVisuals || gameState !== "running") &&
+            renderFence({ SCREEN_W, GROUND_Y, fenceOffsetRef, settings: { ...settings, fenceColor: activeTheme.fence } })}
 
           {/* Sol */}
           {showGround && (
@@ -2560,16 +4299,30 @@ useEffect(() => {
               <View
                 style={[
                   styles.ground,
-                  { top: GROUND_Y, backgroundColor: settings.highContrast ? "#fff" : "#ff7a00" },
+                  { top: GROUND_Y, backgroundColor: settings.highContrast ? "#fff" : activeTheme.ground },
                 ]}
               />
               <View
                 style={[
                   styles.groundDetail,
-                  { top: GROUND_Y + 8, backgroundColor: settings.highContrast ? "#aaa" : "#402300" },
+                  { top: GROUND_Y + 8, backgroundColor: settings.highContrast ? "#aaa" : activeTheme.detail },
                 ]}
               />
-              {renderGroundStripes({ SCREEN_W, GROUND_Y, groundOffsetRef, settings })}
+              {(!highLoadVisuals || gameState !== "running") &&
+                renderGroundStripes({ SCREEN_W, GROUND_Y, groundOffsetRef, settings: { ...settings, stripeColor: activeTheme.detail } })}
+              {marsAscentActive && (
+                <View
+                  pointerEvents="none"
+                  style={[
+                    styles.marsHazardBand,
+                    {
+                      top: GROUND_Y - 2,
+                      backgroundColor: marsAscentArmed ? "rgba(153,27,27,0.48)" : "rgba(190,24,93,0.22)",
+                      borderColor: marsAscentArmed ? "rgba(251,113,133,0.92)" : "rgba(251,113,133,0.42)",
+                    },
+                  ]}
+                />
+              )}
             </>
           )}
 
@@ -2588,6 +4341,45 @@ useEffect(() => {
             }}
             pointerEvents="none"
           />
+
+          {gameState === "running" && (
+            <>
+              {Array.from({ length: visibleTrailDots }, (_, idx) => idx).map((idx) => (
+                <View
+                  key={`trail-${idx}`}
+                  pointerEvents="none"
+                  style={[
+                    styles.trailDot,
+                    {
+                      left: playerX - 8 - idx * 13,
+                      top: yRef.current + 18 + idx * 2,
+                      backgroundColor: activeTrail.accent,
+                      opacity: 0.46 - idx * 0.09,
+                      transform: [{ scale: (1 - idx * 0.16) * playerVisual.trailBoost }],
+                    },
+                  ]}
+                />
+              ))}
+            </>
+          )}
+
+          {gameState === "running" && (
+            !highLoadVisuals ? (
+              <View
+                pointerEvents="none"
+                style={[
+                  styles.playerCoreAura,
+                  {
+                    left: playerX - 7,
+                    top: yRef.current - 7,
+                    borderColor: activeMapEffect.accent,
+                    backgroundColor: `${activeMapEffect.accent}22`,
+                    transform: [{ scale: 1 + Math.min(0.16, Math.abs(velYRef.current) / 1800) }],
+                  },
+                ]}
+              />
+            ) : null
+          )}
 
           {/* Aura double saut */}
           {ENABLE_DOUBLEJUMP && doubleJumpUntil > Date.now() && (
@@ -2649,11 +4441,15 @@ useEffect(() => {
               styles.player,
               {
                 left: playerX,
-                top: yRef.current,
+                top: yRef.current + playerVisual.translateY,
                 width: PLAYER_SIZE,
                 height: PLAYER_SIZE,
                 borderRadius: PLAYER_RADIUS,
-                transform: [{ rotate: `${angleRef.current}rad` }],
+                transform: [
+                  { rotate: `${angleRef.current}rad` },
+                  { scaleX: playerVisual.scaleX },
+                  { scaleY: playerVisual.scaleY },
+                ],
                 tintColor: (Date.now() < invincibleUntil || Date.now() < superShieldUntil)
                   ? "rgba(255,187,107,0.9)"
                   : undefined,
@@ -2690,24 +4486,42 @@ useEffect(() => {
                     width: p.w,
                     height: p.h,
                     opacity: mapNow === "systeme_solaire" ? 0.94 : 1,
+                    borderColor: `${activeMapEffect.accent}55`,
                   },
                 ]}
               >
-                <View style={styles.platformTop} />
+                <View style={[styles.platformTop, { backgroundColor: activeMapEffect.accent }]} />
               </View>
             ))}
 
           {/* Obstacles */}
           {obstaclesRef.current.map((o) => (
-            <Image
-              key={o.id}
-              source={o.variant === 0 ? imgObs1 : imgObs2}
-              style={[
-                styles.obstacleImg,
-                { left: o.x, top: o.y, width: o.w, height: o.h, opacity: mapNow === "systeme_solaire" ? 0.95 : 1 },
-              ]}
-              resizeMode="cover"
-            />
+            <React.Fragment key={o.id}>
+              {!highLoadVisuals && (
+                <View
+                  pointerEvents="none"
+                  style={[
+                    styles.obstacleGlow,
+                    {
+                      left: o.x - 4,
+                      top: o.y - 4,
+                      width: o.w + 8,
+                      height: o.h + 8,
+                      borderColor: `${activeMapEffect.accent}55`,
+                      backgroundColor: `${activeMapEffect.accent}18`,
+                    },
+                  ]}
+                />
+              )}
+              <Image
+                source={o.variant === 0 ? imgObs1 : imgObs2}
+                style={[
+                  styles.obstacleImg,
+                  { left: o.x, top: o.y, width: o.w, height: o.h, opacity: mapNow === "systeme_solaire" ? 0.95 : 1 },
+                ]}
+                resizeMode="cover"
+              />
+            </React.Fragment>
           ))}
 
           {/* Collectibles */}
@@ -2728,7 +4542,6 @@ useEffect(() => {
 {powerUpsRef.current.map((p) => {
   if (p.kind === "letter") {
     const r = R_LETTER;
-    const LETTER_COLOR = (StyleSheet.flatten(styles.letterManga).color as string) ?? "#ffd166";
              // rayon de ta zone lettre
     const ringR = Math.round(r * 1.15); // rayon visuel du cercle autour
     return (
@@ -2752,7 +4565,7 @@ useEffect(() => {
             left: 0, top: 0, right: 0, bottom: 0,
             borderRadius: ringR,
             borderWidth: 3,
-            borderColor: LETTER_COLOR,
+            borderColor: LETTER_RING_COLOR,
             backgroundColor: "rgba(255,209,102,0.12)", // léger fill
           }}
         />
@@ -2809,31 +4622,527 @@ useEffect(() => {
 
           {/* Overlays (Ready / Pause) */}
           {gameState === "ready" && (
-            <View pointerEvents="box-none" style={styles.playCtaWrap}>
-              {pendingSnapshot && (
-                <TouchableOpacity
-                  onPress={() => {
-                    resumeFromSnapshot().catch(() => {});
-                  }}
-                  activeOpacity={0.9}
-                  style={styles.resumeSavedCtaBtn}
-                  testID="resume-snapshot-button"
-                >
-                  <Icon name="play-circle" size={20} color="#0a0a0a" />
-                  <Text style={styles.resumeSavedCtaTxt}>Reprendre la partie</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity
-                onPress={startGame}
-                activeOpacity={0.9}
-                style={pendingSnapshot ? styles.playCtaBtnSecondary : styles.playCtaBtn}
-                testID="play-button"
+            <Modal
+              transparent
+              animationType="fade"
+              visible
+              statusBarTranslucent
+              navigationBarTranslucent
+              onRequestClose={() => router.back()}
+            >
+            <View
+              style={[
+                styles.readyOverlayShell,
+                isReadyCompact ? styles.readyOverlayShellCompact : null,
+                isReadyShort ? styles.readyOverlayShellShort : null,
+              ]}
+            >
+              <LinearGradient
+                pointerEvents="none"
+                colors={["rgba(1,4,10,0.94)", "rgba(4,8,16,0.88)", "rgba(2,6,12,0.96)"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.readyOverlayScrim}
+              />
+              <View pointerEvents="none" style={[styles.readyBackdropGlow, { backgroundColor: `${activeThemeOption.accent}18` }]} />
+              <View pointerEvents="none" style={[styles.readyBackdropGlowSecondary, { backgroundColor: `${activeMapEffect.accent}18` }]} />
+              <ScrollView
+                style={styles.readyOverlayScrollView}
+                contentContainerStyle={[
+                  styles.readyOverlayScrollContent,
+                  isReadyViewportScroll ? styles.readyOverlayScrollContentScrollable : null,
+                ]}
+                scrollEnabled={isReadyViewportScroll}
+                showsVerticalScrollIndicator={isReadyViewportScroll}
+                bounces={false}
+                keyboardShouldPersistTaps="handled"
               >
-                <Text style={pendingSnapshot ? styles.playCtaTxtSecondary : styles.playCtaTxt}>
-                  {pendingSnapshot ? "Nouvelle partie" : "Jouez !"}
-                </Text>
-              </TouchableOpacity>
+              <View
+                style={[
+                  styles.readyTopBar,
+                  isReadyCompact ? styles.readyTopBarCompact : null,
+                  isReadyShort ? styles.readyTopBarShort : null,
+                ]}
+              >
+                <View style={styles.readyTopBarBrand}>
+                  <Pressable
+                    onPress={() => router.back()}
+                    style={[styles.iconBtnSlim, styles.readyTopActionBtn]}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Icon name="chevron-back" size={18} color={HOME_UI.accent} />
+                  </Pressable>
+                  <View style={styles.titleRowSlim}>
+                    <Image source={logoComets} style={styles.logoSlim} resizeMode="contain" />
+                    <View>
+                      <Text style={styles.titleSlim}>Comets Run</Text>
+                      <Text style={styles.readyTopBarSub}>{activeTitle.label} / {activePerk.label}</Text>
+                    </View>
+                  </View>
+                </View>
+
+                <View
+                  style={[
+                    styles.readyLaunchStatusPill,
+                    isReadyShort ? styles.readyLaunchStatusPillShort : null,
+                    { borderColor: `${activeMapEffect.accent}66` },
+                  ]}
+                >
+                  <Text style={[styles.readyLaunchStatusLabel, { color: activeMapEffect.accent }]}>Secteur</Text>
+                  <Text style={styles.readyLaunchStatusValue}>{activeMapEffect.label}</Text>
+                </View>
+
+                <View style={styles.readyTopBarActions}>
+                  <Pressable
+                    onPress={() => router.push("/CometsLeaderboardScreen" as any)}
+                    style={[styles.iconBtnSlim, styles.readyTopActionBtn]}
+                  >
+                    <Icon name="trophy-outline" size={18} color={HOME_UI.accent} />
+                  </Pressable>
+                  <Pressable
+                    onPress={() => setShowHelp((value) => !value)}
+                    style={[styles.iconBtnSlim, styles.readyTopActionBtn]}
+                  >
+                    <Icon name={showHelp ? "information-circle" : "help-circle-outline"} size={18} color={HOME_UI.accent} />
+                  </Pressable>
+                  <Pressable
+                    onPress={() => toggleSetting("mute")}
+                    style={[styles.iconBtnSlim, styles.readyTopActionBtn]}
+                  >
+                    <Icon
+                      name={settings.mute ? "volume-mute" : "volume-high"}
+                      size={18}
+                      color={settings.mute ? HOME_UI.muted : HOME_UI.accent}
+                    />
+                  </Pressable>
+                </View>
+              </View>
+
+              <View
+                style={[
+                  styles.readyLaunchLayout,
+                  isReadyViewportScroll ? styles.readyLaunchLayoutScrollable : null,
+                  isReadyShort ? styles.readyLaunchLayoutShort : null,
+                  isReadyStacked ? styles.readyLaunchLayoutStacked : null,
+                ]}
+              >
+                <LinearGradient
+                  colors={["rgba(7,12,21,0.88)", "rgba(10,20,36,0.82)", `${activeThemeOption.accent}20`]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={[
+                    styles.readyHeroStage,
+                    isReadyDense ? styles.readyHeroStageDense : null,
+                    isReadyShort ? styles.readyHeroStageShort : null,
+                    isReadyStacked ? styles.readyHeroStageStacked : null,
+                    isReadyShort ? styles.readyHeroStageStackedShort : null,
+                    isReadyViewportScroll ? styles.readyHeroStageScrollable : null,
+                    isReadyViewportScroll ? styles.readyHeroStageStackedScrollable : null,
+                  ]}
+                >
+                  <View pointerEvents="none" style={[styles.readyHeroGlow, { backgroundColor: `${activeMapEffect.accent}22` }]} />
+                  <View style={styles.readyHeroTopline}>
+                    <View>
+                      <Text style={styles.readyHeroEyebrow}>Pre-launch</Text>
+                      <Text style={[styles.readyHeroTitle, isReadyCompact ? styles.readyHeroTitleCompact : null]}>
+                        Sas orbital Comets
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.readyHeroBadge,
+                        isReadyShort ? styles.readyHeroBadgeShort : null,
+                        { borderColor: `${activeThemeOption.accent}66` },
+                      ]}
+                    >
+                      <Text style={[styles.readyHeroBadgeLabel, { color: activeThemeOption.accent }]}>Style</Text>
+                      <Text style={styles.readyHeroBadgeValue}>{activeThemeOption.label}</Text>
+                    </View>
+                  </View>
+
+                  <Text
+                    numberOfLines={isReadyDense || isReadyShort ? 2 : undefined}
+                    style={[
+                      styles.readyHeroBody,
+                      isReadyCompact ? styles.readyHeroBodyCompact : null,
+                      isReadyShort ? styles.readyHeroBodyShort : null,
+                    ]}
+                  >
+                    Prépare ta run comme une mise à feu : lecture claire, configuration visible et objectif de progression immédiat.
+                  </Text>
+
+                  <View
+                    style={[
+                      styles.readyHeroVisual,
+                      isReadyDense ? styles.readyHeroVisualDense : null,
+                      isReadyShort ? styles.readyHeroVisualShort : null,
+                      isReadyStacked ? styles.readyHeroVisualStacked : null,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.readyHeroOrbit,
+                        isReadyShort ? styles.readyHeroOrbitShort : null,
+                        { borderColor: `${activeMapEffect.accent}55` },
+                      ]}
+                    />
+                    <View
+                      style={[
+                        styles.readyHeroOrbitInner,
+                        isReadyShort ? styles.readyHeroOrbitInnerShort : null,
+                        { borderColor: `${activeThemeOption.accent}55` },
+                      ]}
+                    />
+                    <View
+                      style={[
+                        styles.readyHeroLogoFrame,
+                        isReadyDense ? styles.readyHeroLogoFrameDense : null,
+                        isReadyShort ? styles.readyHeroLogoFrameShort : null,
+                        { borderColor: `${activeMapEffect.accent}88` },
+                      ]}
+                    >
+                      <Image
+                        source={logoComets}
+                        style={[styles.readyHeroLogo, isReadyShort ? styles.readyHeroLogoShort : null]}
+                        resizeMode="contain"
+                      />
+                    </View>
+                    <View style={[styles.readyHeroTrailRow, isReadyShort ? styles.readyHeroTrailRowShort : null]}>
+                      {[0, 1, 2, 3].map((idx) => (
+                        <View
+                          key={idx}
+                          style={[
+                            styles.readyHeroTrailDot,
+                            isReadyShort ? styles.readyHeroTrailDotShort : null,
+                            {
+                              backgroundColor: activeTrail.accent,
+                              opacity: 0.85 - idx * 0.16,
+                              transform: [{ scale: 1 - idx * 0.12 }],
+                            },
+                          ]}
+                        />
+                      ))}
+                    </View>
+                  </View>
+
+                  <View
+                    style={[
+                      styles.readyHeroStatRow,
+                      isReadyCompact ? styles.readyHeroStatRowCompact : null,
+                      isReadyDense ? styles.readyHeroStatRowDense : null,
+                      isReadyShort ? styles.readyHeroStatRowShort : null,
+                    ]}
+                  >
+                    <View style={[styles.readyHeroStatCard, styles.readyHeroStatCardAccent, isReadyShort ? styles.readyHeroStatCardShort : null]}>
+                      <Text style={[styles.readyHeroStatLabel, isReadyShort ? styles.readyHeroStatLabelShort : null]}>Record</Text>
+                      <Text style={[styles.readyHeroStatValue, isReadyShort ? styles.readyHeroStatValueShort : null]}>{best}</Text>
+                    </View>
+                    <View style={[styles.readyHeroStatCard, isReadyShort ? styles.readyHeroStatCardShort : null]}>
+                      <Text style={[styles.readyHeroStatLabel, isReadyShort ? styles.readyHeroStatLabelShort : null]}>Missions</Text>
+                      <Text style={[styles.readyHeroStatValue, isReadyShort ? styles.readyHeroStatValueShort : null]}>
+                        {dailyMissionDoneCount}/{DAILY_MISSIONS.length}
+                      </Text>
+                    </View>
+                    <View style={[styles.readyHeroStatCard, isReadyShort ? styles.readyHeroStatCardShort : null]}>
+                      <Text style={[styles.readyHeroStatLabel, isReadyShort ? styles.readyHeroStatLabelShort : null]}>Cap suivant</Text>
+                      <Text style={[styles.readyHeroStatValue, isReadyShort ? styles.readyHeroStatValueShort : null]}>{nextRouteStop.label}</Text>
+                    </View>
+                  </View>
+
+                  {isReadyDense ? (
+                    <View style={[styles.readyRouteCompact, isReadyShort ? styles.readyRouteCompactShort : null]}>
+                      <Text style={styles.readyRoutePanelEyebrow}>Route</Text>
+                      <Text style={styles.readyRouteCompactText}>
+                        {Math.round(routeProgress * 100)} % complété · prochain cap {nextRouteStop.label}
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.readyRoutePanel, isReadyShort ? styles.readyRoutePanelShort : null]}>
+                      <View style={styles.readyRoutePanelHeader}>
+                        <View>
+                          <Text style={styles.readyRoutePanelEyebrow}>Route de vol</Text>
+                          <Text style={styles.readyRoutePanelTitle}>Base vers système solaire</Text>
+                        </View>
+                        <Text style={styles.readyRoutePanelMeta}>{Math.round(routeProgress * 100)}%</Text>
+                      </View>
+                      <View style={styles.readyRouteTrack}>
+                        <View style={[styles.readyRouteFill, { width: `${Math.max(10, Math.round(routeProgress * 100))}%` }]} />
+                      </View>
+                      <View style={styles.readyRouteStops}>
+                        {routeStops.map((stop) => {
+                          const unlocked = best >= stop.threshold;
+                          const isUpcoming = nextRouteStop.key === stop.key && !unlocked;
+                          return (
+                            <View key={stop.key} style={styles.readyRouteStop}>
+                              <View
+                                style={[
+                                  styles.readyRouteNode,
+                                  unlocked ? { backgroundColor: stop.accent, borderColor: stop.accent } : null,
+                                  isUpcoming ? styles.readyRouteNodeUpcoming : null,
+                                ]}
+                              />
+                              <Text style={[styles.readyRouteStopLabel, unlocked ? styles.readyRouteStopLabelActive : null]}>
+                                {stop.label}
+                              </Text>
+                              <Text style={styles.readyRouteStopMeta}>
+                                {stop.threshold === 0 ? "Start" : `${Math.round(stop.threshold / 1000)}k`}
+                              </Text>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  )}
+                </LinearGradient>
+
+                <View
+                  style={[
+                    styles.readyControlPanel,
+                    isReadyCompact ? styles.readyControlPanelCompact : null,
+                    isReadyDense ? styles.readyControlPanelDense : null,
+                    isReadyShort ? styles.readyControlPanelShort : null,
+                    isReadyStacked ? styles.readyControlPanelStacked : null,
+                    isReadyViewportScroll ? styles.readyControlPanelScrollable : null,
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.readyControlShell,
+                      isReadyDense ? styles.readyControlShellDense : null,
+                      isReadyShort ? styles.readyControlShellShort : null,
+                      isReadyViewportScroll ? styles.readyControlShellScrollable : null,
+                    ]}
+                  >
+                    <View style={[styles.readyControlHeader, isReadyShort ? styles.readyControlHeaderShort : null]}>
+                      <Text style={styles.readyDockEyebrow}>Mission control</Text>
+                      <Text
+                        style={[
+                          styles.readyDockTitle,
+                          isReadyCompact ? styles.readyDockTitleCompact : null,
+                          isReadyShort ? styles.readyDockTitleShort : null,
+                        ]}
+                      >
+                        Configuration de la run
+                      </Text>
+                      <Text
+                        style={[
+                          styles.readyDockBody,
+                          isReadyCompact ? styles.readyDockBodyCompact : null,
+                          isReadyShort ? styles.readyDockBodyShort : null,
+                        ]}
+                      >
+                        Toute la configuration est visible ici. Tu ajustes, puis tu lances.
+                      </Text>
+                    </View>
+
+                    <ScrollView
+                      style={[
+                        styles.readyControlScrollView,
+                        isReadyViewportScroll ? styles.readyControlScrollViewStatic : null,
+                      ]}
+                      contentContainerStyle={styles.readyControlScrollContent}
+                      showsVerticalScrollIndicator={!isReadyViewportScroll}
+                      nestedScrollEnabled={!isReadyViewportScroll}
+                      scrollEnabled={!isReadyViewportScroll}
+                      keyboardShouldPersistTaps="handled"
+                    >
+                      <View style={styles.readyControlBody}>
+                        <View style={styles.readyControlSummaryCol}>
+                          <View style={styles.readyPrepGrid}>
+                            <View style={[styles.readyPrepCard, styles.readyPrepCardWide, styles.readyPrepCardAccent]}>
+                              <Text style={styles.readyMetaLabel}>Challenge</Text>
+                              <Text numberOfLines={3} style={styles.readyPrepValue}>{weeklyChallenge.body}</Text>
+                            </View>
+                            <View style={styles.readyPrepCard}>
+                              <Text style={styles.readyMetaLabel}>Missions</Text>
+                              <Text style={styles.readyPrepValue}>{dailyMissionDoneCount}/{DAILY_MISSIONS.length}</Text>
+                              <Text numberOfLines={1} style={styles.readyPrepMeta}>{missionStatusText}</Text>
+                            </View>
+                            <View style={styles.readyPrepCard}>
+                              <Text style={styles.readyMetaLabel}>Secteur</Text>
+                              <Text style={styles.readyPrepValue}>{activeMapEffect.label}</Text>
+                              <Text numberOfLines={1} style={styles.readyPrepMeta}>{activeMapEffect.hudNote}</Text>
+                            </View>
+                            {primaryUnlockHint && (
+                              <View style={styles.readyPrepCard}>
+                                <Text style={styles.readyMetaLabel}>Prochain unlock</Text>
+                                <Text numberOfLines={1} style={[styles.readyPrepValue, { color: primaryUnlockHint.accent }]}>
+                                  {primaryUnlockHint.label}
+                                </Text>
+                                <Text numberOfLines={1} style={styles.readyPrepMeta}>{primaryUnlockHint.unlockLabel}</Text>
+                              </View>
+                            )}
+                          </View>
+
+                          <View style={styles.readyMissionCompactPanel}>
+                            <View style={styles.readyMissionCompactHeader}>
+                              <Text style={styles.readyMissionEyebrow}>Missions du jour</Text>
+                              <Text style={styles.readyMissionCompactMeta}>{Math.round(missionRatio * 100)}%</Text>
+                            </View>
+                            <View style={styles.unlockTrackBar}>
+                              <View
+                                style={[
+                                  styles.unlockTrackFill,
+                                  {
+                                    width: `${Math.max(10, Math.round(missionRatio * 100))}%`,
+                                    backgroundColor: "#67E8F9",
+                                  },
+                                ]}
+                              />
+                            </View>
+                            <View style={styles.readyMissionCompactList}>
+                              {DAILY_MISSIONS.map((mission) => {
+                                const value = getDailyMissionValue(dailyMissions, mission.id);
+                                const done = value >= mission.target;
+                                return (
+                                  <View key={mission.id} style={styles.readyMissionCompactRow}>
+                                    <View
+                                      style={[
+                                        styles.readyMissionDot,
+                                        { backgroundColor: done ? "#22C55E" : mission.tint },
+                                      ]}
+                                    />
+                                    <Text numberOfLines={1} style={styles.readyMissionCompactLabel}>{mission.label}</Text>
+                                    <Text style={[styles.readyMissionValue, done ? styles.readyMissionValueDone : null]}>
+                                      {Math.min(value, mission.target)}/{mission.target}
+                                    </Text>
+                                  </View>
+                                );
+                              })}
+                            </View>
+                          </View>
+
+                          {showHelp && (
+                            <View style={styles.readyBriefingCompactCard}>
+                              <Text style={styles.readySectionTitle}>Aide rapide</Text>
+                              <View style={styles.readyBriefingCompactList}>
+                                {readyBriefingRows.map((item) => (
+                                  <View key={item.key} style={styles.readyBriefingCompactRow}>
+                                    <View style={styles.readyBriefingIconWrapCompact}>
+                                      <Icon name={item.icon} size={15} color={HOME_UI.accent} />
+                                    </View>
+                                    <Text numberOfLines={2} style={styles.readyBriefingCompactText}>
+                                      <Text style={styles.readyBriefingCompactLabel}>{item.title}: </Text>
+                                      {item.body}
+                                    </Text>
+                                  </View>
+                                ))}
+                              </View>
+                            </View>
+                          )}
+                        </View>
+
+                        <View style={styles.readyControlLoadoutCol}>
+                          <View style={styles.readyLoadoutSection}>
+                            <Text style={styles.readySectionTitle}>Loadout actif</Text>
+                            <Text style={styles.readySectionSub}>Les 4 réglages sont visibles ici.</Text>
+                            <View style={styles.readyLoadoutList}>
+                              {readyLoadoutCards.map((card) => (
+                                <Pressable
+                                  key={card.key}
+                                  style={[styles.readyLoadoutListItem, { borderColor: `${card.accent}44` }]}
+                                  onPress={card.onPress}
+                                >
+                                  <View style={styles.readyLoadoutListItemMain}>
+                                    <View style={[styles.readyLoadoutCardIcon, { backgroundColor: `${card.accent}22`, borderColor: `${card.accent}55` }]}>
+                                      <Icon name={card.icon} size={15} color={card.accent} />
+                                    </View>
+                                    <View style={styles.readyLoadoutListItemCopy}>
+                                      <Text style={styles.readyQuickLabel}>{card.label}</Text>
+                                      <Text numberOfLines={1} style={[styles.readyLoadoutListItemValue, { color: card.accent }]}>
+                                        {card.value}
+                                      </Text>
+                                    </View>
+                                  </View>
+                                  <Text style={styles.readyLoadoutListItemAction}>Changer</Text>
+                                </Pressable>
+                              ))}
+                            </View>
+                          </View>
+                        </View>
+                      </View>
+                    </ScrollView>
+
+                    <View style={[styles.readyLaunchFooter, isReadyDense ? styles.readyLaunchFooterCompact : null]}>
+                      {!isReadyTight && (
+                        <View style={styles.readyLaunchFooterIntro}>
+                          <Text style={styles.readyLaunchFooterEyebrow}>Action</Text>
+                          <Text
+                            style={[
+                              styles.readyLaunchFooterTitle,
+                              isReadyDense ? styles.readyLaunchFooterTitleCompact : null,
+                            ]}
+                          >
+                            Le bouton principal lance directement la partie
+                          </Text>
+                        </View>
+                      )}
+                      {pendingSnapshot && (
+                        <TouchableOpacity
+                          onPress={() => {
+                            resumeFromSnapshot().catch(() => {});
+                          }}
+                          activeOpacity={0.9}
+                          style={[
+                            styles.readySecondaryButton,
+                            isReadyDense ? styles.readySecondaryButtonCompact : null,
+                          ]}
+                          testID="resume-snapshot-button"
+                        >
+                          <Icon name="play-circle" size={18} color={HOME_UI.text} />
+                          <Text
+                            style={[
+                              styles.readySecondaryButtonText,
+                              isReadyDense ? styles.readySecondaryButtonTextCompact : null,
+                            ]}
+                          >
+                            Reprendre la partie
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+
+                      <TouchableOpacity
+                        onPress={startGame}
+                        activeOpacity={0.92}
+                        style={[
+                          styles.readyPrimaryButton,
+                          !isReadyDense ? styles.readyPrimaryButtonHero : null,
+                          isReadyCompact ? styles.readyPrimaryButtonCompact : null,
+                          { backgroundColor: activeMapEffect.accent, borderColor: activeThemeOption.accent },
+                        ]}
+                        testID="play-button"
+                      >
+                        <View style={styles.readyPrimaryButtonCore}>
+                          <Icon name="rocket" size={20} color="#0a0a0a" />
+                          <View>
+                            <Text style={styles.readyPrimaryButtonKicker}>Launch</Text>
+                            <Text
+                              style={[
+                                styles.readyPrimaryButtonText,
+                                isReadyCompact ? styles.readyPrimaryButtonTextCompact : null,
+                              ]}
+                            >
+                              {pendingSnapshot ? "Nouvelle partie" : "Lancer la run"}
+                            </Text>
+                          </View>
+                        </View>
+                        {!isReadyTight && (
+                          <Text style={styles.readyPrimaryButtonAside}>Base vers {nextRouteStop.label}</Text>
+                        )}
+                      </TouchableOpacity>
+
+                      {!isReadyDense && (
+                        <Text style={styles.readyHintText}>
+                          Objectif du moment : {weeklyChallenge.body}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                </View>
+              </View>
+              </ScrollView>
             </View>
+            </Modal>
           )}
 
 {gameState === "paused" && (
@@ -2863,22 +5172,33 @@ useEffect(() => {
 
       {/* Toast global */}
       {toast && (
-        <View style={styles.toast}>
+        <View style={[styles.toast, activeRunBanner ? styles.toastWithBanner : null]}>
           <Text style={styles.toastTxt}>{toast}</Text>
+        </View>
+      )}
+
+      {activeRunBanner && gameState === "running" && (
+        <View pointerEvents="none" style={styles.runBannerWrap}>
+          <View style={[styles.runBannerCard, { borderColor: activeRunBanner.accent }]}>
+            <Text style={[styles.runBannerTitle, { color: activeRunBanner.accent }]}>{activeRunBanner.label}</Text>
+            {!!activeRunBanner.subtitle && <Text style={styles.runBannerSubtitle}>{activeRunBanner.subtitle}</Text>}
+          </View>
         </View>
       )}
 
       {/* Game Over (le modal responsive sera ajusté en Partie 4) */}
       {gameState === "gameover" && (
-        <GameOverModal
+        <GameOverArcadeModal
           visible
           onRestart={() => {
             if (Date.now() >= restartAllowedAtRef.current) startGame();
           }}
           onLeaderboard={() => router.push("/CometsLeaderboardScreen" as any)}
+          onHome={() => router.replace("/")}
           top5={top5}
           myId={adminId || ""}
           myScore={score}
+          runMeta={lastRunMeta}
           dailyMissions={dailyMissions}
         />
       )}
@@ -2901,7 +5221,7 @@ function renderGroundStripes({ SCREEN_W, GROUND_Y, groundOffsetRef, settings }: 
           top: GROUND_Y - STRIPE_H - 2,
           width: STRIPE_W,
           height: STRIPE_H,
-          backgroundColor: settings.highContrast ? "#fff" : "#2b1900",
+          backgroundColor: settings.highContrast ? "#fff" : settings.stripeColor || "#2b1900",
           borderRadius: 3,
           opacity: settings.highContrast ? 0.7 : 1,
         }}
@@ -2915,6 +5235,7 @@ function renderFence({ SCREEN_W, GROUND_Y, fenceOffsetRef, settings }: any) {
   const posts: React.ReactElement[] = [];
   const span = 52;
   const offset = -((fenceOffsetRef.current % span) | 0);
+  const fenceColor = settings.highContrast ? "#fff" : settings.fenceColor || "#1f2937";
   for (let x = -span; x < SCREEN_W + span; x += span) {
     posts.push(
       <View
@@ -2925,7 +5246,7 @@ function renderFence({ SCREEN_W, GROUND_Y, fenceOffsetRef, settings }: any) {
           top: GROUND_Y - 54,
           width: 6,
           height: 48,
-          backgroundColor: settings.highContrast ? "#fff" : "#1f2937",
+          backgroundColor: fenceColor,
           borderRadius: 3,
           opacity: 0.7,
         }}
@@ -2935,8 +5256,8 @@ function renderFence({ SCREEN_W, GROUND_Y, fenceOffsetRef, settings }: any) {
   return (
     <>
       {posts}
-      <View style={{ position: "absolute", left: 0, right: 0, top: GROUND_Y - 46, height: 2, backgroundColor: settings.highContrast ? "#fff" : "#1f2937", opacity: 0.7 }} />
-      <View style={{ position: "absolute", left: 0, right: 0, top: GROUND_Y - 32, height: 2, backgroundColor: settings.highContrast ? "#fff" : "#1f2937", opacity: 0.7 }} />
+      <View style={{ position: "absolute", left: 0, right: 0, top: GROUND_Y - 46, height: 2, backgroundColor: fenceColor, opacity: 0.7 }} />
+      <View style={{ position: "absolute", left: 0, right: 0, top: GROUND_Y - 32, height: 2, backgroundColor: fenceColor, opacity: 0.7 }} />
     </>
   );
 }
@@ -2988,6 +5309,7 @@ function GameOverModal({
   top5,
   myId,
   myScore,
+  runMeta,
   dailyMissions,
 }: {
   visible: boolean;
@@ -2996,6 +5318,7 @@ function GameOverModal({
   top5: LBRow[] | null;
   myId: string;
   myScore: number;
+  runMeta: RunMeta | null;
   dailyMissions: DailyMissionState;
 }) {
   const { width, height } = useWindowDimensions();
@@ -3032,6 +5355,36 @@ function GameOverModal({
     return Math.max(0, top5.length - maxRows);
   }, [top5, maxRows]);
 
+  const nextRival = useMemo(() => {
+    if (!top5 || top5.length === 0) return null;
+    const candidates = [...top5]
+      .filter((row) => row.best_score > myScore)
+      .sort((a, b) => a.best_score - b.best_score);
+    return candidates[0] ?? null;
+  }, [myScore, top5]);
+
+  const nextRivalLabel = useMemo(() => {
+    if (!nextRival) return null;
+    const first = nextRival.admins?.first_name?.trim() || "";
+    const last = nextRival.admins?.last_name?.trim() || "";
+    return `${first} ${last}`.trim() || "le top 5";
+  }, [nextRival]);
+
+  const gameOverTitle = runMeta?.beatBest ? "Nouveau record !" : "Crash !";
+  const gameOverSubtitle = runMeta?.beatBest
+    ? `+${Math.max(1, myScore - runMeta.previousBest)} sur ton ancien record`
+    : runMeta
+      ? `Encore ${Math.max(1, runMeta.previousBest - myScore)} pts pour ton record perso`
+      : "Relance pour remonter";
+  const weeklyRaceLabel =
+    runMeta?.weeklyRankGain && runMeta.weeklyRankGain > 0
+      ? `+${runMeta.weeklyRankGain} places cette semaine`
+      : runMeta?.enteredWeeklyBoard && runMeta.currentWeeklyRank
+        ? `Entrée hebdo : #${runMeta.currentWeeklyRank}`
+        : runMeta?.currentWeeklyRank
+          ? `Classement 7j: #${runMeta.currentWeeklyRank}`
+          : null;
+
   const cardStyle = {
     width: maxW,
     maxHeight: maxH,
@@ -3045,7 +5398,7 @@ function GameOverModal({
   };
 
   return (
-    <Modal transparent animationType="fade" visible={visible} onRequestClose={onRestart}>
+    <Modal transparent animationType="fade" visible={visible} statusBarTranslucent navigationBarTranslucent onRequestClose={onRestart}>
       {/* Backdrop neutre pour éviter un restart accidentel */}
       <View
         style={{
@@ -3070,6 +5423,67 @@ function GameOverModal({
             nestedScrollEnabled
             showsVerticalScrollIndicator={false}
           >
+            <View
+              style={{
+                alignSelf: "stretch",
+                marginBottom: ms(10),
+                paddingVertical: ms(10),
+                paddingHorizontal: ms(12),
+                borderRadius: ms(12),
+                borderWidth: 1,
+                borderColor: runMeta?.beatBest ? "rgba(134,239,172,0.45)" : "rgba(251,113,133,0.32)",
+                backgroundColor: runMeta?.beatBest ? "rgba(20,83,45,0.32)" : "rgba(69,10,10,0.26)",
+              }}
+            >
+              <Text
+                style={{
+                  color: runMeta?.beatBest ? "#bbf7d0" : "#fecdd3",
+                  fontWeight: "900",
+                  textAlign: "center",
+                  fontSize: ms(18),
+                }}
+              >
+                {gameOverTitle}
+              </Text>
+              <Text
+                style={{
+                  marginTop: ms(4),
+                  color: "#e5edf7",
+                  fontWeight: "700",
+                  textAlign: "center",
+                  fontSize: ms(12),
+                }}
+              >
+                {gameOverSubtitle}
+              </Text>
+            </View>
+
+            {!!weeklyRaceLabel && (
+              <View
+                style={{
+                  alignSelf: "stretch",
+                  marginBottom: ms(10),
+                  paddingVertical: ms(8),
+                  paddingHorizontal: ms(10),
+                  borderRadius: ms(10),
+                  borderWidth: 1,
+                  borderColor: "rgba(103,232,249,0.28)",
+                  backgroundColor: "rgba(8,47,73,0.28)",
+                }}
+              >
+                <Text
+                  style={{
+                    color: "#c7f9ff",
+                    fontWeight: "800",
+                    textAlign: "center",
+                    fontSize: ms(12.5),
+                  }}
+                >
+                  {weeklyRaceLabel}
+                </Text>
+              </View>
+            )}
+
 {/* Bouton Rejouez */}
 <TouchableOpacity
   onPress={onRestart}
@@ -3216,6 +5630,31 @@ function GameOverModal({
               </Text>
             </View>
 
+            {nextRival && nextRivalLabel && (
+              <View
+                style={{
+                  alignSelf: "stretch",
+                  marginTop: ms(8),
+                  padding: ms(10),
+                  borderRadius: ms(12),
+                  borderWidth: 1,
+                  borderColor: "rgba(103,232,249,0.28)",
+                  backgroundColor: "rgba(8,47,73,0.32)",
+                }}
+              >
+                <Text
+                  style={{
+                    color: "#c7f9ff",
+                    fontWeight: "800",
+                    textAlign: "center",
+                    fontSize: ms(13),
+                  }}
+                >
+                  Encore {Math.max(1, nextRival.best_score - myScore)} pts pour passer {nextRivalLabel}
+                </Text>
+              </View>
+            )}
+
             <View
               style={{
                 alignSelf: "stretch",
@@ -3299,6 +5738,430 @@ function GameOverModal({
   );
 }
 
+function GameOverArcadeModal({
+  visible,
+  onRestart,
+  onLeaderboard,
+  onHome,
+  top5,
+  myId,
+  myScore,
+  runMeta,
+  dailyMissions,
+}: {
+  visible: boolean;
+  onRestart: () => void;
+  onLeaderboard: () => void;
+  onHome: () => void;
+  top5: LBRow[] | null;
+  myId: string;
+  myScore: number;
+  runMeta: RunMeta | null;
+  dailyMissions: DailyMissionState;
+}) {
+  const { width, height } = useWindowDimensions();
+  const overlayHPad = 12;
+  const overlayVPad = 16;
+  const sysTop = getSystemTopInset();
+  const safetyBottom = 20;
+  const usableH = Math.max(320, height - (sysTop + overlayVPad * 2 + safetyBottom));
+  const shortSide = Math.min(width, height);
+  const longSide = Math.max(width, height);
+  const maxW = Math.min(560, shortSide - overlayHPad * 2);
+  const maxH = Math.min(Math.floor(longSide * 0.92), Math.floor(usableH));
+  const cardH = Math.min(maxH, Math.max(360, Math.floor(usableH * 0.78)));
+  const scale = Math.max(0.84, Math.min(1, maxH / 540));
+  const ms = (value: number) => Math.round(value * scale);
+  const compactActions = maxW < 420 || maxH < 470;
+  const isMeInTop5 = !!myId && !!top5?.some((row) => row.admin_id === myId);
+
+  const nextRival = useMemo(() => {
+    if (!top5 || top5.length === 0) return null;
+    const candidates = [...top5]
+      .filter((row) => row.best_score > myScore)
+      .sort((a, b) => a.best_score - b.best_score);
+    return candidates[0] ?? null;
+  }, [myScore, top5]);
+
+  const nextRivalLabel = useMemo(() => {
+    if (!nextRival) return null;
+    const first = nextRival.admins?.first_name?.trim() || "";
+    const last = nextRival.admins?.last_name?.trim() || "";
+    return `${first} ${last}`.trim() || "le top 5";
+  }, [nextRival]);
+
+  const missionDoneCount = useMemo(() => getDailyMissionDoneCount(dailyMissions), [dailyMissions]);
+  const nextMission = useMemo(
+    () => DAILY_MISSIONS.find((mission) => getDailyMissionValue(dailyMissions, mission.id) < mission.target) ?? null,
+    [dailyMissions],
+  );
+  const nextMissionValue = nextMission ? getDailyMissionValue(dailyMissions, nextMission.id) : 0;
+  const personalBest = Math.max(myScore, runMeta?.previousBest ?? 0);
+  const recordLabel = runMeta?.beatBest ? "Nouveau record" : "Record perso";
+  const recordSub = runMeta?.beatBest
+    ? `+${Math.max(1, myScore - (runMeta?.previousBest ?? 0))} sur ton meilleur score`
+    : `À battre : ${personalBest}`;
+  const weeklyLabel = runMeta?.currentWeeklyRank
+    ? `#${runMeta.currentWeeklyRank} cette semaine`
+    : isMeInTop5
+      ? "Top 5 cette semaine"
+      : "Pas de rang hebdo";
+  const weeklySub =
+    runMeta?.weeklyRankGain && runMeta.weeklyRankGain > 0
+      ? `+${runMeta.weeklyRankGain} place${runMeta.weeklyRankGain > 1 ? "s" : ""}`
+      : runMeta?.enteredWeeklyBoard
+        ? "Entrée dans le classement"
+        : nextRival && nextRivalLabel
+          ? `Encore ${Math.max(1, nextRival.best_score - myScore)} pts pour passer ${nextRivalLabel}`
+          : "Relance pour remonter";
+  const missionLabel = `${missionDoneCount}/${DAILY_MISSIONS.length} missions`;
+  const missionSub = nextMission
+    ? `${Math.min(nextMissionValue, nextMission.target)}/${nextMission.target} ${nextMission.label}`
+    : "Toutes les missions du jour sont bouclées";
+
+  return (
+    <Modal transparent animationType="fade" visible={visible} statusBarTranslucent navigationBarTranslucent onRequestClose={onRestart}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "rgba(4,8,16,0.82)",
+          alignItems: "center",
+          justifyContent: "center",
+          paddingHorizontal: overlayHPad,
+          paddingVertical: overlayVPad,
+          paddingTop: overlayVPad + Math.max(0, sysTop - 6),
+        }}
+      >
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            width: shortSide * 0.92,
+            height: shortSide * 0.92,
+            borderRadius: 999,
+            backgroundColor: "rgba(255,130,0,0.12)",
+            top: "16%",
+            alignSelf: "center",
+          }}
+        />
+
+        <View
+          style={{
+            width: maxW,
+            height: cardH,
+            maxHeight: maxH,
+            borderRadius: ms(24),
+            borderWidth: 1,
+            borderColor: "rgba(255,170,88,0.26)",
+            overflow: "hidden",
+            backgroundColor: "rgba(5,9,18,0.98)",
+            shadowColor: "#000",
+            shadowOpacity: 0.42,
+            shadowRadius: 22,
+            shadowOffset: { width: 0, height: 12 },
+            elevation: 16,
+          }}
+        >
+          <LinearGradient
+            colors={["rgba(255,130,0,0.18)", "rgba(16,22,37,0.98)", "rgba(7,11,20,1)"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{ flex: 1, width: "100%" }}
+          >
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{
+                padding: ms(18),
+                paddingBottom: ms(20),
+              }}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={false}
+            >
+              <View
+                style={{
+                  borderRadius: ms(20),
+                  borderWidth: 1,
+                  borderColor: runMeta?.beatBest ? "rgba(134,239,172,0.42)" : "rgba(255,170,88,0.22)",
+                  backgroundColor: "rgba(8,12,21,0.9)",
+                  paddingHorizontal: ms(16),
+                  paddingTop: ms(16),
+                  paddingBottom: ms(18),
+                  overflow: "hidden",
+                }}
+              >
+                <View
+                  pointerEvents="none"
+                  style={{
+                    position: "absolute",
+                    width: ms(180),
+                    height: ms(180),
+                    borderRadius: 999,
+                    backgroundColor: runMeta?.beatBest ? "rgba(34,197,94,0.18)" : "rgba(255,130,0,0.14)",
+                    right: -ms(40),
+                    top: -ms(70),
+                  }}
+                />
+
+                <Text
+                  style={{
+                    color: HOME_UI.accentSoft,
+                    fontWeight: "900",
+                    fontSize: ms(11),
+                    textTransform: "uppercase",
+                    letterSpacing: 1.2,
+                  }}
+                >
+                  Game Over
+                </Text>
+                <Text
+                  style={{
+                    marginTop: ms(6),
+                    color: HOME_UI.text,
+                    fontWeight: "900",
+                    fontSize: ms(26),
+                    lineHeight: ms(28),
+                  }}
+                >
+                  {runMeta?.beatBest ? "Run légendaire" : "Run terminée"}
+                </Text>
+                <Text
+                  style={{
+                    marginTop: ms(6),
+                    color: "#D7E0EB",
+                    fontWeight: "700",
+                    fontSize: ms(12),
+                    lineHeight: ms(16),
+                  }}
+                >
+                  {runMeta?.beatBest
+                    ? `+${Math.max(1, myScore - (runMeta?.previousBest ?? 0))} sur ton meilleur score`
+                    : "Recharge, recale ta ligne et repars plus haut."}
+                </Text>
+
+                <View
+                  style={{
+                    marginTop: ms(14),
+                    flexDirection: compactActions ? "column" : "row",
+                    gap: ms(10),
+                  }}
+                >
+                  <TouchableOpacity
+                    onPress={onRestart}
+                    activeOpacity={0.9}
+                    style={{
+                      flex: compactActions ? 0 : 1.15,
+                      minHeight: ms(54),
+                      borderRadius: ms(16),
+                      backgroundColor: HOME_UI.accent,
+                      borderWidth: 1,
+                      borderColor: HOME_UI.accentSoft,
+                      shadowColor: "#000",
+                      shadowOpacity: 0.3,
+                      shadowRadius: 8,
+                      shadowOffset: { width: 0, height: 4 },
+                      elevation: 6,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: ms(16),
+                    }}
+                    testID="restart-button"
+                  >
+                    <Icon name="reload" size={ms(18)} color="#111827" />
+                    <Text style={{ marginLeft: ms(8), color: "#111827", fontSize: ms(16), fontWeight: "900" }}>
+                      Relancer
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={onLeaderboard}
+                    activeOpacity={0.85}
+                    style={{
+                      flex: 1,
+                      minHeight: ms(54),
+                      borderRadius: ms(16),
+                      backgroundColor: "rgba(255,255,255,0.05)",
+                      borderWidth: 1,
+                      borderColor: "rgba(255,255,255,0.14)",
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: ms(16),
+                    }}
+                    testID="go-to-leaderboard"
+                  >
+                    <Icon name="trophy-outline" size={ms(18)} color="#FFD27A" />
+                    <Text style={{ marginLeft: ms(8), color: HOME_UI.text, fontSize: ms(14), fontWeight: "800" }}>
+                      Classement
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={onHome}
+                    activeOpacity={0.85}
+                    style={{
+                      flex: 1,
+                      minHeight: ms(54),
+                      borderRadius: ms(16),
+                      backgroundColor: "rgba(103,232,249,0.08)",
+                      borderWidth: 1,
+                      borderColor: "rgba(103,232,249,0.24)",
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: ms(16),
+                    }}
+                    testID="go-home-button"
+                  >
+                    <Icon name="home-outline" size={ms(18)} color="#91DFFF" />
+                    <Text style={{ marginLeft: ms(8), color: "#DFF8FF", fontSize: ms(14), fontWeight: "800" }}>
+                      Accueil
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View
+                  style={{
+                    marginTop: ms(18),
+                    alignSelf: "stretch",
+                    paddingVertical: ms(14),
+                    paddingHorizontal: ms(14),
+                    borderRadius: ms(18),
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.08)",
+                    backgroundColor: "rgba(255,255,255,0.04)",
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#8EA0B8",
+                      fontWeight: "800",
+                      fontSize: ms(11),
+                      textTransform: "uppercase",
+                      letterSpacing: 1,
+                      textAlign: "center",
+                    }}
+                  >
+                    Score final
+                  </Text>
+                  <Text
+                    style={{
+                      marginTop: ms(6),
+                      color: HOME_UI.text,
+                      textAlign: "center",
+                      fontWeight: "900",
+                      fontSize: ms(42),
+                      lineHeight: ms(44),
+                    }}
+                  >
+                    {myScore}
+                  </Text>
+                </View>
+              </View>
+
+              <View
+                style={{
+                  marginTop: ms(14),
+                  flexDirection: compactActions ? "column" : "row",
+                  gap: ms(10),
+                }}
+              >
+                <View
+                  style={{
+                    flex: 1,
+                    paddingHorizontal: ms(12),
+                    paddingVertical: ms(12),
+                    borderRadius: ms(16),
+                    borderWidth: 1,
+                    borderColor: runMeta?.beatBest ? "rgba(134,239,172,0.26)" : "rgba(255,255,255,0.09)",
+                    backgroundColor: "rgba(13,19,32,0.9)",
+                  }}
+                >
+                  <Text style={{ color: "#92A4BB", fontSize: ms(10.5), fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.8 }}>
+                    {recordLabel}
+                  </Text>
+                  <Text style={{ marginTop: ms(5), color: HOME_UI.text, fontSize: ms(20), fontWeight: "900" }}>
+                    {personalBest}
+                  </Text>
+                  <Text style={{ marginTop: ms(4), color: "#D7E0EB", fontSize: ms(11), fontWeight: "700", lineHeight: ms(14) }}>
+                    {recordSub}
+                  </Text>
+                </View>
+
+                <View
+                  style={{
+                    flex: 1,
+                    paddingHorizontal: ms(12),
+                    paddingVertical: ms(12),
+                    borderRadius: ms(16),
+                    borderWidth: 1,
+                    borderColor: "rgba(103,232,249,0.24)",
+                    backgroundColor: "rgba(8,25,40,0.88)",
+                  }}
+                >
+                  <Text style={{ color: "#91DFFF", fontSize: ms(10.5), fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.8 }}>
+                    Semaine
+                  </Text>
+                  <Text style={{ marginTop: ms(5), color: HOME_UI.text, fontSize: ms(20), fontWeight: "900" }}>
+                    {weeklyLabel}
+                  </Text>
+                  <Text style={{ marginTop: ms(4), color: "#D7E0EB", fontSize: ms(11), fontWeight: "700", lineHeight: ms(14) }}>
+                    {weeklySub}
+                  </Text>
+                </View>
+              </View>
+
+              <View
+                style={{
+                  marginTop: ms(10),
+                  paddingHorizontal: ms(12),
+                  paddingVertical: ms(12),
+                  borderRadius: ms(16),
+                  borderWidth: 1,
+                  borderColor: missionDoneCount >= DAILY_MISSIONS.length ? "rgba(134,239,172,0.26)" : "rgba(255,255,255,0.09)",
+                  backgroundColor: "rgba(13,19,32,0.9)",
+                }}
+              >
+                <Text
+                  style={{
+                    color: HOME_UI.text,
+                    fontSize: ms(10.5),
+                    fontWeight: "800",
+                    textTransform: "uppercase",
+                    letterSpacing: 0.8,
+                  }}
+                >
+                  Missions du jour
+                </Text>
+                <Text style={{ marginTop: ms(6), color: HOME_UI.text, fontSize: ms(22), fontWeight: "900" }}>
+                  {missionLabel}
+                </Text>
+                <Text
+                  style={{
+                    marginTop: ms(4),
+                    color: missionDoneCount >= DAILY_MISSIONS.length ? "#BBF7D0" : "#D7E0EB",
+                    fontSize: ms(11.5),
+                    fontWeight: "700",
+                    lineHeight: ms(15),
+                  }}
+                >
+                  {missionSub}
+                </Text>
+              </View>
+
+              <View
+                style={{
+                  marginTop: ms(14),
+                }}
+              />
+            </ScrollView>
+          </LinearGradient>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 // --- Styles (ajouts : styleLettreManga, bigEventOverlay, etc.)
 const styles = StyleSheet.create({
   safe: {
@@ -3322,6 +6185,38 @@ const styles = StyleSheet.create({
     zIndex: 10,
     flexDirection: "row",
     gap: 6,
+  },
+  mapHudWrap: {
+    position: "absolute",
+    left: 12,
+    zIndex: 10,
+    alignItems: "flex-start",
+  },
+  mapHudWrapSolo: {
+    top: Platform.OS === "android" ? 64 : 70,
+  },
+  mapHudWrapWithBadges: {
+    top: Platform.OS === "android" ? 100 : 106,
+  },
+  eventPill: {
+    marginTop: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    backgroundColor: "rgba(8,12,19,0.9)",
+    minWidth: 118,
+  },
+  eventPillTitle: {
+    fontSize: 10.5,
+    fontWeight: "900",
+    letterSpacing: 0.3,
+  },
+  eventPillTxt: {
+    marginTop: 1,
+    color: "#d8dfec",
+    fontSize: 9.5,
+    fontWeight: "700",
   },
   reminderBadgeRow: {
     flexDirection: "row",
@@ -3356,10 +6251,37 @@ const styles = StyleSheet.create({
     right: 0,
     height: 2,
   },
+  marsHazardBand: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    height: 26,
+    borderTopWidth: 2,
+    opacity: 0.95,
+  },
   player: {
     position: "absolute",
     backgroundColor: "transparent",
     backfaceVisibility: "hidden",
+  },
+  playerCoreAura: {
+    position: "absolute",
+    width: PLAYER_SIZE + 14,
+    height: PLAYER_SIZE + 14,
+    borderRadius: (PLAYER_SIZE + 14) / 2,
+    borderWidth: 1.5,
+    opacity: 0.9,
+  },
+  trailDot: {
+    position: "absolute",
+    width: 18,
+    height: 18,
+    borderRadius: 999,
+  },
+  obstacleGlow: {
+    position: "absolute",
+    borderRadius: 10,
+    borderWidth: 1,
   },
   obstacleImg: {
     position: "absolute",
@@ -3385,18 +6307,29 @@ const styles = StyleSheet.create({
 
   toast: {
     position: "absolute",
-    top: Platform.OS === "android" ? 64 : 72,
-    alignSelf: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    top: Platform.OS === "android" ? 120 : 126,
+    right: 12,
+    maxWidth: 204,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
     borderRadius: 12,
     backgroundColor: "rgba(19,27,42,0.96)",
     borderWidth: 1,
     borderColor: "rgba(255,130,0,0.42)",
+    zIndex: 16,
+  },
+  toastWithBanner: {
+    top: Platform.OS === "android" ? 152 : 158,
   },
   toastTxt: {
     color: "#FFD27A",
     fontWeight: "800",
+    fontSize: 12,
+  },
+
+  hudFlashOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.12,
   },
 
   hudWrap: {
@@ -3423,6 +6356,25 @@ const styles = StyleSheet.create({
     right: 0,
     alignItems: "center",
     zIndex: 9,
+  },
+  mapPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: "flex-start",
+    minWidth: 112,
+  },
+  mapPillTitle: {
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 0.3,
+  },
+  mapPillTxt: {
+    marginTop: 1,
+    color: "#dbe4f1",
+    fontSize: 10,
+    fontWeight: "700",
   },
   scoreBig: {
     color: HOME_UI.accent,
@@ -3484,15 +6436,14 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 0,
     right: 0,
-    top: 0,
-    bottom: 0,
+    top: Platform.OS === "android" ? 88 : 96,
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "flex-start",
     pointerEvents: "none",
   },
   bigEventText: {
     color: "#FFD27A",
-    fontSize: 64,
+    fontSize: 46,
     fontWeight: "900",
     letterSpacing: 2,
     textShadowColor: "rgba(0,0,0,0.95)",
@@ -3500,78 +6451,1655 @@ const styles = StyleSheet.create({
     textShadowRadius: 8,
   },
   bigEventSub: {
-    marginTop: 6,
+    marginTop: 4,
     color: HOME_UI.text,
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "800",
     textShadowColor: "rgba(0,0,0,0.7)",
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 4,
   },
 
-  playCtaWrap: {
+  runBannerWrap: {
     position: "absolute",
-    left: 0,
-    right: 0,
-    top: "50%",
-    alignItems: "center",
-    gap: 10,
-    zIndex: 12,
+    top: Platform.OS === "android" ? 64 : 70,
+    right: 12,
+    left: 148,
+    alignItems: "flex-end",
+    zIndex: 15,
   },
-  playCtaBtn: {
-    paddingHorizontal: 28,
-    paddingVertical: 14,
-    borderRadius: 14,
-    backgroundColor: HOME_UI.accent,
-    borderWidth: 1,
-    borderColor: HOME_UI.accentSoft,
-    shadowColor: "#000",
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
+  runBannerCard: {
+    minWidth: 144,
+    maxWidth: 204,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    backgroundColor: "rgba(7,10,17,0.9)",
+    alignItems: "flex-start",
   },
-  playCtaTxt: {
-    color: "#111827",
-    fontSize: 20,
+  runBannerTitle: {
+    fontSize: 13,
     fontWeight: "900",
-    letterSpacing: 0.6,
+    letterSpacing: 0.2,
   },
-  playCtaBtnSecondary: {
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 14,
-    backgroundColor: "rgba(0,0,0,0.38)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.45)",
+  runBannerSubtitle: {
+    marginTop: 3,
+    color: "#edf3fb",
+    fontSize: 10.5,
+    fontWeight: "700",
+    textAlign: "left",
   },
-  playCtaTxtSecondary: {
-    color: HOME_UI.text,
-    fontSize: 17,
-    fontWeight: "800",
-    letterSpacing: 0.4,
+  readyOverlayShell: {
+    position: "absolute",
+    inset: 0,
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === "android" ? 16 : 18,
+    paddingBottom: 16,
+    backgroundColor: "rgba(2,6,12,0.72)",
+    zIndex: 12,
+    overflow: "hidden",
   },
-  resumeSavedCtaBtn: {
+  readyOverlayShellCompact: {
+    paddingHorizontal: 12,
+    paddingTop: Platform.OS === "android" ? 12 : 14,
+    paddingBottom: 12,
+  },
+  readyOverlayShellShort: {
+    paddingHorizontal: 10,
+    paddingTop: Platform.OS === "android" ? 10 : 12,
+    paddingBottom: 10,
+  },
+  readyOverlayScrollView: {
+    flex: 1,
+    minHeight: 0,
+    zIndex: 2,
+  },
+  readyOverlayScrollContent: {
+    flexGrow: 1,
+  },
+  readyOverlayScrollContentScrollable: {
+    paddingBottom: 6,
+  },
+  readyTopBar: {
+    width: "100%",
+    minHeight: 60,
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 28,
-    paddingVertical: 14,
+    justifyContent: "space-between",
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(7,12,21,0.96)",
+    zIndex: 2,
+    elevation: 10,
+    shadowColor: "#000",
+    shadowOpacity: 0.24,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  readyTopBarCompact: {
+    minHeight: 52,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  readyTopBarShort: {
+    minHeight: 46,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 18,
+    gap: 8,
+  },
+  readyTopBarBrand: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    minWidth: 0,
+  },
+  readyTopBarActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  readyTopActionBtn: {
+    backgroundColor: "rgba(255,255,255,0.05)",
+  },
+  readyTopBarSub: {
+    marginTop: 2,
+    color: "#C8D2E3",
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  readyDockWrap: {
+    flex: 1,
+    justifyContent: "flex-end",
+    paddingBottom: 18,
+  },
+  readyDock: {
+    alignSelf: "center",
+    width: "100%",
+    maxWidth: 1060,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(7,12,21,0.84)",
+  },
+  readyDockCompact: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 18,
+  },
+  readyDockEyebrow: {
+    color: HOME_UI.accentSoft,
+    fontSize: 10.5,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
+  readyDockTitle: {
+    marginTop: 6,
+    color: HOME_UI.text,
+    fontSize: 28,
+    fontWeight: "900",
+    lineHeight: 32,
+  },
+  readyDockTitleCompact: {
+    fontSize: 22,
+    lineHeight: 25,
+  },
+  readyDockTitleShort: {
+    fontSize: 19,
+    lineHeight: 22,
+  },
+  readyDockBody: {
+    marginTop: 6,
+    color: "#cdd8e6",
+    fontSize: 12.5,
+    fontWeight: "700",
+    lineHeight: 18,
+  },
+  readyDockBodyCompact: {
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  readyDockBodyShort: {
+    marginTop: 4,
+    fontSize: 10.5,
+    lineHeight: 14,
+  },
+  readyMetaRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 14,
+  },
+  readyMetaRowCompact: {
+    gap: 8,
+    marginTop: 12,
+  },
+  readyMetaChip: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+  },
+  readyMetaChipAccent: {
+    backgroundColor: "rgba(255,130,0,0.15)",
+    borderColor: "rgba(255,170,88,0.3)",
+  },
+  readyMetaLabel: {
+    color: "#9CA8BA",
+    fontSize: 10,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.7,
+  },
+  readyMetaValue: {
+    marginTop: 4,
+    color: HOME_UI.text,
+    fontSize: 14.5,
+    fontWeight: "900",
+  },
+  readyQuickGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 14,
+  },
+  readyQuickGridCompact: {
+    gap: 8,
+    marginTop: 12,
+  },
+  readyQuickAction: {
+    width: "48%",
+    minWidth: 140,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+    backgroundColor: "rgba(17,25,39,0.92)",
+  },
+  readyQuickLabel: {
+    color: "#9CA8BA",
+    fontSize: 10,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.7,
+  },
+  readyQuickValue: {
+    marginTop: 4,
+    fontSize: 13.5,
+    fontWeight: "900",
+  },
+  readyProgressInline: {
+    marginTop: 12,
+  },
+  readyProgressText: {
+    color: "#cdd8e6",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  readyLayout: {
+    width: "100%",
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 14,
+    marginTop: 14,
+  },
+  readyLayoutStacked: {
+    flexDirection: "column",
+  },
+  readyHeroCard: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(6,10,17,0.82)",
+  },
+  readyMainCard: {
+    justifyContent: "flex-start",
+  },
+  readyHeroCardCompact: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 18,
+  },
+  readyHeroEyebrow: {
+    color: HOME_UI.accentSoft,
+    fontSize: 10.5,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
+  readyHeroTitle: {
+    marginTop: 6,
+    color: HOME_UI.text,
+    fontSize: 30,
+    fontWeight: "900",
+    lineHeight: 34,
+  },
+  readyHeroTitleCompact: {
+    fontSize: 23,
+    lineHeight: 27,
+  },
+  readyHeroBody: {
+    marginTop: 10,
+    color: "#cdd8e6",
+    fontSize: 13.5,
+    lineHeight: 19,
+    fontWeight: "700",
+    maxWidth: 520,
+  },
+  readyHeroBodyCompact: {
+    marginTop: 6,
+    fontSize: 11.5,
+    lineHeight: 16,
+  },
+  readyHeroBodyShort: {
+    marginTop: 5,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  readyStatsRow: {
+    width: "100%",
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 14,
+  },
+  readyStatsRowCompact: {
+    gap: 8,
+    marginTop: 12,
+  },
+  readyStatCard: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+  },
+  readyStatCardAccent: {
+    backgroundColor: "rgba(255,130,0,0.14)",
+    borderColor: "rgba(255,170,88,0.3)",
+  },
+  readyStatLabel: {
+    color: "#9CA8BA",
+    fontSize: 10,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.7,
+  },
+  readyStatValue: {
+    marginTop: 4,
+    color: HOME_UI.text,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  readyStatusCard: {
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    gap: 4,
+  },
+  readyStatusTitle: {
+    color: HOME_UI.accentSoft,
+    fontSize: 10.5,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  readyStatusValue: {
+    color: HOME_UI.text,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  readyStatusCopy: {
+    color: "#cdd8e6",
+    fontSize: 11.5,
+    fontWeight: "700",
+    lineHeight: 15,
+  },
+  readyCtaStack: {
+    width: "100%",
+    gap: 10,
+    marginTop: 2,
+  },
+  readyCtaStackCompact: {
+    gap: 8,
+    marginTop: 0,
+  },
+  readyOverlayScrim: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  readyBackdropGlow: {
+    position: "absolute",
+    width: 360,
+    height: 360,
+    borderRadius: 999,
+    top: -120,
+    left: -90,
+  },
+  readyBackdropGlowSecondary: {
+    position: "absolute",
+    width: 320,
+    height: 320,
+    borderRadius: 999,
+    right: -100,
+    bottom: 24,
+  },
+  readyLaunchStatusPill: {
+    minWidth: 124,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 16,
+    borderWidth: 1,
+    backgroundColor: "rgba(11,18,31,0.84)",
+  },
+  readyLaunchStatusPillShort: {
+    minWidth: 108,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  readyLaunchStatusLabel: {
+    fontSize: 9.5,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  readyLaunchStatusValue: {
+    marginTop: 3,
+    color: HOME_UI.text,
+    fontSize: 12.5,
+    fontWeight: "900",
+  },
+  readyLaunchLayout: {
+    flex: 1,
+    flexDirection: "row",
+    gap: 16,
+    marginTop: 16,
+    minHeight: 0,
+    zIndex: 2,
+  },
+  readyLaunchLayoutScrollable: {
+    flex: 0,
+  },
+  readyLaunchLayoutShort: {
+    gap: 10,
+    marginTop: 10,
+  },
+  readyLaunchLayoutStacked: {
+    flexDirection: "column",
+    gap: 12,
+  },
+  readyHeroTopline: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  readyHeroStage: {
+    flex: 1.06,
+    minWidth: 0,
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOpacity: 0.28,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 12,
+  },
+  readyHeroStageDense: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 22,
+  },
+  readyHeroStageShort: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    paddingBottom: 14,
+    borderRadius: 20,
+  },
+  readyHeroStageStacked: {
+    flex: 0.66,
+    minHeight: 0,
+    maxHeight: 252,
+  },
+  readyHeroStageStackedShort: {
+    maxHeight: 320,
+  },
+  readyHeroStageScrollable: {
+    flex: 0,
+  },
+  readyHeroStageStackedScrollable: {
+    maxHeight: 380,
+    paddingBottom: 18,
+  },
+  readyHeroBadge: {
+    minWidth: 112,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 16,
+    borderWidth: 1,
+    backgroundColor: "rgba(8,14,24,0.86)",
+  },
+  readyHeroBadgeShort: {
+    minWidth: 96,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 14,
+  },
+  readyHeroBadgeLabel: {
+    fontSize: 9.5,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  readyHeroBadgeValue: {
+    marginTop: 3,
+    color: HOME_UI.text,
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  readyHeroVisual: {
+    flex: 1,
+    minHeight: 176,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 8,
+  },
+  readyHeroVisualDense: {
+    minHeight: 126,
+    marginTop: 4,
+  },
+  readyHeroVisualShort: {
+    minHeight: 88,
+    marginTop: 2,
+  },
+  readyHeroVisualStacked: {
+    minHeight: 96,
+    marginTop: 2,
+  },
+  readyHeroGlow: {
+    position: "absolute",
+    width: 280,
+    height: 280,
+    borderRadius: 999,
+    right: -60,
+    top: -80,
+  },
+  readyHeroOrbit: {
+    position: "absolute",
+    width: 220,
+    height: 220,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  readyHeroOrbitShort: {
+    width: 166,
+    height: 166,
+  },
+  readyHeroOrbitInner: {
+    position: "absolute",
+    width: 158,
+    height: 158,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  readyHeroOrbitInnerShort: {
+    width: 118,
+    height: 118,
+  },
+  readyHeroLogoFrame: {
+    width: 108,
+    height: 108,
+    borderRadius: 26,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.1)",
+    shadowColor: "#000",
+    shadowOpacity: 0.32,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 10,
+  },
+  readyHeroLogoFrameDense: {
+    width: 86,
+    height: 86,
+    borderRadius: 20,
+  },
+  readyHeroLogoFrameShort: {
+    width: 72,
+    height: 72,
+    borderRadius: 18,
+  },
+  readyHeroLogo: {
+    width: 74,
+    height: 74,
+  },
+  readyHeroLogoShort: {
+    width: 52,
+    height: 52,
+  },
+  readyHeroTrailRow: {
+    position: "absolute",
+    left: "50%",
+    marginLeft: -112,
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "center",
+  },
+  readyHeroTrailRowShort: {
+    marginLeft: -86,
+    gap: 8,
+  },
+  readyHeroTrailDot: {
+    width: 22,
+    height: 22,
+    borderRadius: 999,
+  },
+  readyHeroTrailDotShort: {
+    width: 16,
+    height: 16,
+  },
+  readyHeroStatRow: {
+    width: "100%",
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 4,
+  },
+  readyHeroStatRowCompact: {
+    gap: 8,
+  },
+  readyHeroStatRowDense: {
+    marginTop: 2,
+  },
+  readyHeroStatRowShort: {
+    gap: 6,
+    marginTop: 0,
+    marginBottom: 10,
+    zIndex: 2,
+  },
+  readyHeroStatCard: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+    backgroundColor: "rgba(10,16,28,0.84)",
+  },
+  readyHeroStatCardShort: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 14,
+  },
+  readyHeroStatCardAccent: {
+    backgroundColor: "rgba(255,130,0,0.14)",
+    borderColor: "rgba(255,170,88,0.3)",
+  },
+  readyHeroStatLabel: {
+    color: "#9CA8BA",
+    fontSize: 9.5,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  readyHeroStatLabelShort: {
+    fontSize: 8.5,
+  },
+  readyHeroStatValue: {
+    marginTop: 4,
+    color: HOME_UI.text,
+    fontSize: 15.5,
+    fontWeight: "900",
+  },
+  readyHeroStatValueShort: {
+    marginTop: 3,
+    fontSize: 13,
+  },
+  readyRoutePanel: {
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+    backgroundColor: "rgba(7,12,21,0.94)",
+  },
+  readyRoutePanelShort: {
+    marginTop: 14,
+  },
+  readyRoutePanelHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  readyRoutePanelEyebrow: {
+    color: "#A5B4C7",
+    fontSize: 10,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  readyRoutePanelTitle: {
+    marginTop: 3,
+    color: HOME_UI.text,
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  readyRoutePanelMeta: {
+    color: HOME_UI.accentSoft,
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  readyRouteTrack: {
+    marginTop: 12,
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    overflow: "hidden",
+  },
+  readyRouteFill: {
+    height: "100%",
+    minWidth: 8,
+    borderRadius: 999,
+    backgroundColor: HOME_UI.accent,
+  },
+  readyRouteStops: {
+    marginTop: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  readyRouteStop: {
+    flex: 1,
+    alignItems: "center",
+    gap: 4,
+  },
+  readyRouteNode: {
+    width: 13,
+    height: 13,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+  readyRouteNodeUpcoming: {
+    transform: [{ scale: 1.16 }],
+    borderColor: HOME_UI.text,
+  },
+  readyRouteStopLabel: {
+    color: "#AEB9CA",
+    fontSize: 10.5,
+    fontWeight: "800",
+  },
+  readyRouteStopLabelActive: {
+    color: HOME_UI.text,
+  },
+  readyRouteStopMeta: {
+    color: "#7F8DA3",
+    fontSize: 9.5,
+    fontWeight: "700",
+  },
+  readyRouteCompact: {
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(7,12,21,0.92)",
+  },
+  readyRouteCompactShort: {
+    marginTop: 12,
+  },
+  readyRouteCompactText: {
+    marginTop: 3,
+    color: HOME_UI.text,
+    fontSize: 11.5,
+    fontWeight: "800",
+  },
+  readyControlPanel: {
+    width: 406,
+    minWidth: 0,
+    minHeight: 0,
+    flexShrink: 1,
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(7,12,21,0.96)",
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOpacity: 0.28,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 12,
+  },
+  readyControlPanelCompact: {
+    width: "100%",
+    borderRadius: 22,
+  },
+  readyControlPanelDense: {
+    width: 374,
+    borderRadius: 22,
+  },
+  readyControlPanelShort: {
+    borderRadius: 20,
+  },
+  readyControlPanelStacked: {
+    width: "100%",
+    flex: 1.42,
+    minHeight: 0,
+  },
+  readyControlPanelScrollable: {
+    flex: 0,
+  },
+  readyControlShell: {
+    flex: 1,
+    minHeight: 0,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    justifyContent: "flex-start",
+    gap: 14,
+  },
+  readyControlShellShort: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 10,
+  },
+  readyControlShellScrollable: {
+    flex: 0,
+  },
+  readyControlShellDense: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 10,
+  },
+  readyControlBody: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "flex-start",
+  },
+  readyControlSummaryCol: {
+    flex: 1.04,
+    gap: 10,
+    minWidth: 0,
+  },
+  readyControlLoadoutCol: {
+    flex: 0.96,
+    gap: 10,
+    minWidth: 0,
+  },
+  readyControlScrollView: {
+    flex: 1,
+    minHeight: 0,
+  },
+  readyControlScrollViewStatic: {
+    flex: 0,
+  },
+  readyControlScroll: {
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    gap: 16,
+  },
+  readyControlScrollContent: {
+    paddingBottom: 12,
+  },
+  readyControlHeader: {
+    gap: 4,
+  },
+  readyControlHeaderShort: {
+    gap: 2,
+  },
+  readyPrepGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  readyPrepCard: {
+    width: "48%",
+    minWidth: 0,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.09)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+  },
+  readyPrepCardWide: {
+    width: "100%",
+  },
+  readyPrepCardAccent: {
+    backgroundColor: "rgba(255,130,0,0.15)",
+    borderColor: "rgba(255,170,88,0.3)",
+  },
+  readyPrepValue: {
+    marginTop: 5,
+    color: HOME_UI.text,
+    fontSize: 11.5,
+    fontWeight: "900",
+    lineHeight: 15,
+  },
+  readyPrepMeta: {
+    marginTop: 4,
+    color: "#9FB0C5",
+    fontSize: 9.5,
+    fontWeight: "700",
+  },
+  readyMissionCompactPanel: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+  },
+  readyMissionCompactHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  readyMissionCompactMeta: {
+    color: "#67E8F9",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  readyMissionCompactList: {
+    marginTop: 10,
+    gap: 7,
+  },
+  readyMissionCompactRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  readyMissionCompactLabel: {
+    flex: 1,
+    color: HOME_UI.text,
+    fontSize: 10.5,
+    fontWeight: "700",
+  },
+  readyMissionPanel: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+  readyMissionHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  readyMissionEyebrow: {
+    color: "#9CA8BA",
+    fontSize: 10,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  readyMissionTitle: {
+    marginTop: 3,
+    color: HOME_UI.text,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  readyMissionCount: {
+    alignItems: "flex-end",
+  },
+  readyMissionCountValue: {
+    color: HOME_UI.text,
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  readyMissionCountLabel: {
+    marginTop: 2,
+    color: "#93A2B8",
+    fontSize: 9.5,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
+  readyMissionList: {
+    marginTop: 10,
+    gap: 8,
+  },
+  readyMissionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  readyMissionDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 999,
+  },
+  readyMissionLabel: {
+    flex: 1,
+    color: HOME_UI.text,
+    fontSize: 12.5,
+    fontWeight: "700",
+  },
+  readyMissionValue: {
+    color: "#D6E0EC",
+    fontSize: 11.5,
+    fontWeight: "900",
+  },
+  readyMissionValueDone: {
+    color: "#86EFAC",
+  },
+  readySectionTitle: {
+    color: HOME_UI.text,
+    fontSize: 13.5,
+    fontWeight: "900",
+    letterSpacing: 0.3,
+  },
+  readySectionSub: {
+    marginTop: 4,
+    color: "#9FB0C5",
+    fontSize: 10.5,
+    fontWeight: "700",
+    lineHeight: 14,
+  },
+  readyLoadoutSection: {
+    gap: 0,
+  },
+  readyLoadoutList: {
+    marginTop: 8,
+    gap: 8,
+  },
+  readyLoadoutListItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderRadius: 14,
+    borderWidth: 1,
+    backgroundColor: "rgba(12,18,31,0.96)",
+  },
+  readyLoadoutListItemMain: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minWidth: 0,
+  },
+  readyLoadoutListItemCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  readyLoadoutListItemValue: {
+    marginTop: 3,
+    fontSize: 12.5,
+    fontWeight: "900",
+  },
+  readyLoadoutListItemAction: {
+    color: "#8FA0B6",
+    fontSize: 9.5,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.7,
+  },
+  readyLoadoutGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 10,
+  },
+  readyLoadoutCard: {
+    width: "48%",
+    minWidth: 150,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 18,
+    borderWidth: 1,
+    backgroundColor: "rgba(12,18,31,0.96)",
+  },
+  readyLoadoutCardCompact: {
+    minWidth: 138,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  readyLoadoutCardTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  readyLoadoutCardIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  readyLoadoutCardValue: {
+    marginTop: 7,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  readyLoadoutCardHint: {
+    marginTop: 3,
+    color: "#D0D9E5",
+    fontSize: 10.5,
+    fontWeight: "700",
+    lineHeight: 13,
+  },
+  readyLoadoutCardAction: {
+    marginTop: 6,
+    color: "#8FA0B6",
+    fontSize: 9.5,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  readyUnlockPanel: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+    backgroundColor: "rgba(8,14,24,0.96)",
+  },
+  readyUnlockHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  readyUnlockTitle: {
+    marginTop: 3,
+    color: HOME_UI.text,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  readyUnlockTag: {
+    fontSize: 11,
+    fontWeight: "900",
+    textAlign: "right",
+  },
+  readyUnlockBody: {
+    marginTop: 6,
+    color: "#CDD8E6",
+    fontSize: 11.5,
+    fontWeight: "700",
+    lineHeight: 16,
+  },
+  readyUnlockMiniGrid: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 10,
+  },
+  readyUnlockMiniCard: {
+    flex: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+  },
+  readyUnlockMiniGroup: {
+    fontSize: 9.5,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.7,
+  },
+  readyUnlockMiniLabel: {
+    marginTop: 3,
+    color: HOME_UI.text,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  readyUnlockMiniMeta: {
+    marginTop: 3,
+    color: "#C8D2E3",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  readyBriefingCard: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+  readyBriefingList: {
+    marginTop: 10,
+    gap: 10,
+  },
+  readyBriefingRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  readyBriefingIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,130,0,0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(255,170,88,0.28)",
+  },
+  readyBriefingCopy: {
+    flex: 1,
+  },
+  readyBriefingLabel: {
+    color: HOME_UI.text,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  readyBriefingText: {
+    marginTop: 2,
+    color: "#C9D4E2",
+    fontSize: 11,
+    fontWeight: "700",
+    lineHeight: 15,
+  },
+  readyBriefingCompactCard: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+  },
+  readyBriefingCompactList: {
+    marginTop: 8,
+    gap: 8,
+  },
+  readyBriefingCompactRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+  },
+  readyBriefingIconWrapCompact: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,130,0,0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(255,170,88,0.28)",
+  },
+  readyBriefingCompactText: {
+    flex: 1,
+    color: "#C9D4E2",
+    fontSize: 10.5,
+    fontWeight: "700",
+    lineHeight: 14,
+  },
+  readyBriefingCompactLabel: {
+    color: HOME_UI.text,
+    fontWeight: "900",
+  },
+  readyLaunchFooter: {
+    marginTop: 8,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.08)",
+    gap: 10,
+    backgroundColor: "rgba(7,12,21,0.98)",
+  },
+  readyLaunchFooterCompact: {
+    marginTop: 6,
+    paddingTop: 8,
+    gap: 8,
+  },
+  readyLaunchFooterIntro: {
+    gap: 2,
+  },
+  readyLaunchFooterEyebrow: {
+    color: HOME_UI.accentSoft,
+    fontSize: 10,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  readyLaunchFooterTitle: {
+    color: HOME_UI.text,
+    fontSize: 13,
+    fontWeight: "900",
+    lineHeight: 17,
+  },
+  readyLaunchFooterTitleCompact: {
+    fontSize: 11.5,
+    lineHeight: 15,
+  },
+  readySideRail: {
+    width: 340,
+    minWidth: 0,
+    alignSelf: "flex-start",
+  },
+  readySideRailStacked: {
+    width: "100%",
+  },
+  loadoutPanel: {
+    marginTop: 6,
+    padding: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(8,12,19,0.84)",
+  },
+  loadoutPanelSide: {
+    marginTop: 0,
+    padding: 12,
+    borderRadius: 20,
+    backgroundColor: "rgba(8,12,19,0.88)",
+    shadowColor: "#000",
+    shadowOpacity: 0.24,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  loadoutPanelCompact: {
+    marginTop: 4,
+    padding: 7,
+    borderRadius: 12,
+  },
+  loadoutTitle: {
+    color: HOME_UI.text,
+    fontSize: 12.5,
+    fontWeight: "900",
+    textAlign: "center",
+    marginBottom: 6,
+    letterSpacing: 0.4,
+  },
+  loadoutTitleCompact: {
+    fontSize: 11.5,
+    marginBottom: 4,
+  },
+  loadoutTitleSide: {
+    textAlign: "left",
+    marginBottom: 10,
+    letterSpacing: 0.8,
+  },
+  readyProgressStack: {
+    gap: 8,
+    marginBottom: 10,
+  },
+  readyInfoRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 8,
+  },
+  readyInfoRowCompact: {
+    marginBottom: 5,
+  },
+  challengeCardCompact: {
+    flex: 1.1,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: "rgba(12,18,31,0.92)",
+  },
+  challengeCardSide: {
+    flex: 0,
+  },
+  challengeTitle: {
+    fontSize: 10.5,
+    fontWeight: "900",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+  },
+  challengeTextCompact: {
+    marginTop: 2,
+    color: "#eef2f8",
+    fontSize: 11.5,
+    fontWeight: "700",
+    lineHeight: 15,
+  },
+  challengeTextCompactSmall: {
+    fontSize: 10.5,
+    lineHeight: 13,
+  },
+  loadoutGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 6,
+  },
+  loadoutGridCompact: {
+    gap: 4,
+  },
+  loadoutMenuList: {
+    gap: 8,
+  },
+  loadoutMenuItem: {
+    minHeight: 62,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+    backgroundColor: "rgba(17,25,39,0.92)",
+  },
+  loadoutMenuItemCompact: {
+    minHeight: 54,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 14,
+  },
+  loadoutMenuText: {
+    flex: 1,
+    paddingRight: 10,
+  },
+  loadoutMenuValue: {
+    marginTop: 2,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  loadoutMenuHint: {
+    marginTop: 2,
+    color: "#d8dfec",
+    fontSize: 10.5,
+    fontWeight: "700",
+  },
+  loadoutChip: {
+    width: "48%",
+    minWidth: 136,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(19,27,42,0.94)",
+  },
+  loadoutChipCompact: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  loadoutChipLabel: {
+    color: "#9ca3af",
+    fontSize: 10.5,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  loadoutChipLabelCompact: {
+    fontSize: 9.5,
+    letterSpacing: 0.45,
+  },
+  loadoutChipValue: {
+    marginTop: 2,
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  loadoutChipValueCompact: {
+    fontSize: 12,
+  },
+  loadoutChipHint: {
+    marginTop: 3,
+    color: "#d8dfec",
+    fontSize: 10.5,
+    fontWeight: "700",
+  },
+  loadoutChipHintCompact: {
+    marginTop: 2,
+    fontSize: 9.5,
+  },
+  unlockMiniCard: {
+    flex: 0.95,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(14,20,33,0.9)",
+  },
+  unlockMiniCardSide: {
+    flex: 0,
+  },
+  unlockMiniGroup: {
+    fontSize: 10,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  unlockMiniLabel: {
+    marginTop: 2,
+    color: "#eef2f8",
+    fontSize: 12.5,
+    fontWeight: "800",
+  },
+  unlockMiniMeta: {
+    marginTop: 3,
+    color: "#c8d2e3",
+    fontSize: 10.5,
+    fontWeight: "700",
+  },
+  unlockTrackBar: {
+    marginTop: 6,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    overflow: "hidden",
+  },
+  unlockTrackFill: {
+    height: "100%",
+    borderRadius: 999,
+    minWidth: 10,
+  },
+  readySetupCard: {
+    flexShrink: 1,
+  },
+  readySetupIntro: {
+    marginTop: -2,
+    marginBottom: 12,
+    color: "#cdd8e6",
+    fontSize: 11.5,
+    fontWeight: "700",
+    lineHeight: 16,
+  },
+  readySetupIntroCompact: {
+    marginBottom: 10,
+    fontSize: 10.5,
+    lineHeight: 14,
+  },
+  readyLoadoutScroll: {
+    maxHeight: 320,
+  },
+  readyLoadoutScrollCompact: {
+    maxHeight: 220,
+  },
+  readyPrimaryButton: {
+    minHeight: 60,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 15,
+    borderRadius: 18,
     backgroundColor: HOME_UI.accent,
     borderWidth: 1,
     borderColor: HOME_UI.accentSoft,
     shadowColor: "#000",
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 8,
   },
-  resumeSavedCtaTxt: {
-    marginLeft: 8,
-    color: "#111827",
-    fontSize: 19,
+  readyPrimaryButtonHero: {
+    minHeight: 84,
+    borderWidth: 2,
+    shadowOpacity: 0.48,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 7 },
+    elevation: 12,
+  },
+  readyPrimaryButtonCompact: {
+    minHeight: 52,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 14,
+  },
+  readyPrimaryButtonCore: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  readyPrimaryButtonKicker: {
+    color: "rgba(17,24,39,0.72)",
+    fontSize: 10,
     fontWeight: "900",
-    letterSpacing: 0.5,
+    textTransform: "uppercase",
+    letterSpacing: 0.9,
+  },
+  readyPrimaryButtonText: {
+    color: "#111827",
+    fontSize: 18,
+    fontWeight: "900",
+    letterSpacing: 0.4,
+  },
+  readyPrimaryButtonTextCompact: {
+    fontSize: 16,
+  },
+  readyPrimaryButtonAside: {
+    color: "rgba(17,24,39,0.82)",
+    fontSize: 10.5,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.7,
+  },
+  readySecondaryButton: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
+  },
+  readySecondaryButtonCompact: {
+    minHeight: 44,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  readySecondaryButtonText: {
+    color: HOME_UI.text,
+    fontSize: 15,
+    fontWeight: "900",
+    letterSpacing: 0.3,
+  },
+  readySecondaryButtonTextCompact: {
+    fontSize: 13.5,
+  },
+  readyHintText: {
+    marginTop: 12,
+    color: "#9CA8BA",
+    fontSize: 11,
+    fontWeight: "700",
+    textAlign: "center",
+    lineHeight: 15,
   },
   resumeCtaWrap: {
     position: "absolute",

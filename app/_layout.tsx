@@ -3,10 +3,11 @@
 
 import { DarkTheme, DefaultTheme, ThemeProvider } from "@react-navigation/native";
 import { useFonts } from "expo-font";
+import * as NavigationBar from "expo-navigation-bar";
 import { Stack, usePathname } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { InteractionManager, View } from "react-native";
+import { InteractionManager, Platform, View } from "react-native";
 import "react-native-reanimated";
 
 import PushGateway from "../components/PushGateway";
@@ -49,6 +50,8 @@ function GlobalRouteLoader() {
       cometsleaderboardscreen: "Classement Comets Run",
       actudetail: "Actualit\u00E9",
       login: "Connexion",
+      "forgot-password": "Mot de passe oublié",
+      "reset-password": "Nouveau mot de passe",
       register: "Inscription",
       admin: "Administration",
     };
@@ -160,6 +163,17 @@ export default function RootLayout() {
     initFirebase?.();
   }, []);
 
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+
+    (async () => {
+      try {
+        await NavigationBar.setButtonStyleAsync("light");
+        await NavigationBar.setVisibilityAsync("visible");
+      } catch {}
+    })();
+  }, []);
+
   if (!loaded) {
     return (
       <View style={{ flex: 1, backgroundColor: "#070C14" }}>
@@ -186,6 +200,7 @@ export default function RootLayout() {
             <Stack.Screen name="index" options={{ headerShown: false }} />
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="(admin)" options={{ headerShown: false, title: "" }} />
+            <Stack.Screen name="reset-password" options={{ headerShown: false, title: "" }} />
             <Stack.Screen name="+not-found" />
           </Stack>
 
@@ -193,7 +208,11 @@ export default function RootLayout() {
           <GlobalRouteLoader />
           <GlobalAppDrawer />
 
-          <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
+          <StatusBar
+            style={colorScheme === "dark" ? "light" : "dark"}
+            translucent
+            backgroundColor="transparent"
+          />
         </ThemeProvider>
       </AppDrawerProvider>
     </AdminProvider>

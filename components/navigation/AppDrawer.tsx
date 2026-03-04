@@ -122,7 +122,7 @@ export function GlobalAppDrawer() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { isOpen, closeDrawer } = useAppDrawer();
-  const { isAdmin, isMember, logout } = useAdmin();
+  const { isAdmin, isMember } = useAdmin();
 
   const [visible, setVisible] = useState(false);
   const progress = useRef(new Animated.Value(0)).current;
@@ -303,12 +303,6 @@ export function GlobalAppDrawer() {
     [closeDrawer, router],
   );
 
-  const handleLogout = useCallback(async () => {
-    closeDrawer();
-    await logout();
-    router.replace("/");
-  }, [closeDrawer, logout, router]);
-
   if (!visible) return null;
 
   return (
@@ -396,16 +390,7 @@ export function GlobalAppDrawer() {
             ))}
 
             <View style={styles.footerBlock}>
-              {isLoggedIn ? (
-                <TouchableOpacity
-                  style={[styles.footerBtn, styles.footerBtnDanger]}
-                  activeOpacity={0.9}
-                  onPress={handleLogout}
-                >
-                  <Icon name="log-out-outline" size={16} color="#FFFFFF" />
-                  <Text style={styles.footerBtnDangerTxt}>Déconnexion</Text>
-                </TouchableOpacity>
-              ) : (
+              {!isLoggedIn ? (
                 <TouchableOpacity
                   style={[styles.footerBtn, styles.footerBtnPrimary]}
                   activeOpacity={0.9}
@@ -414,7 +399,7 @@ export function GlobalAppDrawer() {
                   <Icon name="log-in-outline" size={16} color="#111827" />
                   <Text style={styles.footerBtnPrimaryTxt}>Se connecter</Text>
                 </TouchableOpacity>
-              )}
+              ) : null}
             </View>
           </ScrollView>
         </Animated.View>
@@ -600,17 +585,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#F9FAFB",
     borderColor: "#FFFFFF",
   },
-  footerBtnDanger: {
-    backgroundColor: "#B91C1C",
-    borderColor: "#DC2626",
-  },
   footerBtnPrimaryTxt: {
     color: "#111827",
-    fontWeight: "900",
-    fontSize: 13.5,
-  },
-  footerBtnDangerTxt: {
-    color: "#FFFFFF",
     fontWeight: "900",
     fontSize: 13.5,
   },

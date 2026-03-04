@@ -348,7 +348,7 @@ export default function MembresAdminScreen() {
                     {m.date_naissance ?? "-"}
                   </Text>
                   <Text style={styles.memberRow}>
-                    <Text style={styles.label}>Categorie :</Text>{" "}
+                    <Text style={styles.label}>Catégorie :</Text>{" "}
                     {m.categorie ?? "-"}
                   </Text>
                   <Text style={styles.memberRow}>

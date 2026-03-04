@@ -31,7 +31,6 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 import { DrawerMenuButton } from "../../components/navigation/AppDrawer";
-import LogoutButton from "../../components/LogoutButton";
 import { useAdmin } from "../../contexts/AdminContext";
 import { supabase } from "../../supabase";
 import { formatDateFr } from "../../lib/date";
@@ -72,7 +71,7 @@ const COLORS = {
 };
 
 const TOP_TABS = [
-  { key: "upcoming", label: "A venir", icon: "calendar-outline" },
+  { key: "upcoming", label: "À venir", icon: "calendar-outline" },
   { key: "played", label: "joués", icon: "list-outline" },
 ] as const;
 
@@ -155,6 +154,76 @@ const LOGO_MAP: Record<string, any> = {
   "Saint-Lo": require("../../assets/images/Saint-Lo.jpg"),
 };
 
+const TEAM_ALIASES: Record<string, string> = {
+  hon: "Honfleur",
+  honfleur: "Honfleur",
+  lha: "Le Havre",
+  havre: "Le Havre",
+  "le havre": "Le Havre",
+  sailors: "Le Havre",
+  rou: "Rouen",
+  rouen: "Rouen",
+  dragons: "Rouen",
+  cae: "Caen",
+  caen: "Caen",
+  phenix: "Caen",
+  che: "Cherbourg",
+  cherbourg: "Cherbourg",
+  seagulls: "Cherbourg",
+  wal: "Louviers",
+  louviers: "Louviers",
+  wallabies: "Louviers",
+  and: "Les Andelys",
+  andelys: "Les Andelys",
+  "les andelys": "Les Andelys",
+  stl: "Saint-Lô",
+  "saint lo": "Saint-Lô",
+  "saint-lo": "Saint-Lô",
+  "saint lô": "Saint-Lô",
+  "saint-lô": "Saint-Lô",
+  jimmers: "Saint-Lô",
+};
+
+type VenueInfo = {
+  label: string;
+  address: string;
+};
+
+const VENUE_MAP: Record<string, VenueInfo> = {
+  Honfleur: {
+    label: "Stade d'Honfleur",
+    address: "Avenue de la brigade Piron, 14600 Honfleur",
+  },
+  Rouen: {
+    label: "Stade de Rouen",
+    address: "37 rue Verdi, 76000 Rouen",
+  },
+  Caen: {
+    label: "Stade de Caen",
+    address: "26 rue Henri de Montherlant, 14123 Ifs",
+  },
+  Louviers: {
+    label: "Stade de Louviers",
+    address: "Mairie de Louviers CS 10621 2, 27406 Louviers Cedex",
+  },
+  "Le Havre": {
+    label: "Stade du Havre",
+    address: "19 rue Hélène Boucher, 76600 Le Havre",
+  },
+  "Les Andelys": {
+    label: "Stade des Andelys",
+    address: "Allée du Roi de Rome, 27700 Les Andelys",
+  },
+  "Saint-Lo": {
+    label: "Stade de Saint-Lô",
+    address: "Rue des Ronchettes, 50000 Saint-Lô",
+  },
+  Cherbourg: {
+    label: "Stade de Cherbourg",
+    address: "Place de la République, 50100 Cherbourg",
+  },
+};
+
 // === Badges ===
 const BADGE_ASSETS = {
   rookie: require("../../assets/badges/rookie.png"),
@@ -204,6 +273,43 @@ function hexToRgba(hex: string, alpha = 0.33) {
 }
 function normalizeName(name: string) {
   return name.replace(/^Les\s+/i, "").trim();
+}
+
+function normalizeTeamKey(name: string) {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function resolveTeamName(name?: string | null) {
+  if (!name) return null;
+
+  const raw = String(name).trim();
+  if (!raw) return null;
+
+  const byAbbr = TEAM_NAMES[raw.toUpperCase()];
+  if (byAbbr) return byAbbr;
+
+  const normalized = normalizeTeamKey(raw);
+  const exactAlias = TEAM_ALIASES[normalized];
+  if (exactAlias) return exactAlias;
+
+  const partialAlias = Object.entries(TEAM_ALIASES).find(
+    ([alias]) => alias.length > 3 && normalized.includes(alias),
+  );
+  if (partialAlias) return partialAlias[1];
+
+  return raw;
+}
+
+function getVenueInfo(teamName?: string | null) {
+  const resolvedName = resolveTeamName(teamName);
+  if (!resolvedName) return null;
+  if (resolvedName === "Saint-Lô") return VENUE_MAP["Saint-Lo"] || null;
+  return VENUE_MAP[resolvedName] || null;
 }
 function parseDateValue(dateValue: string): Date | null {
   if (!dateValue) return null;
@@ -258,6 +364,7 @@ const TEAM_NAMES: Record<string, string> = {
   CHE: "Cherbourg",
   WAL: "Louviers",
   AND: "Les Andelys",
+  STL: "Saint-Lô",
 };
 type Game = {
   id: number;
@@ -282,11 +389,22 @@ type PlannedGame = {
   note?: string | null;
   categorie?: "Seniors" | "15U" | "12U";
 };
-type ParticipationsGET = { matchIds: string[]; declinedMatchIds?: string[] };
+type ParticipationsGET = {
+  matchIds: string[];
+  declinedMatchIds?: string[];
+  memberId?: string | null;
+};
 type ParticipatePOST = { ok: boolean; participations: number };
 type Eligibility = {
   eligible: boolean | null;
   category: "Seniors" | "15U" | "12U" | null;
+};
+type FamilyMember = {
+  id: string;
+  relation: "self" | "child";
+  first_name: string;
+  last_name: string;
+  categorie?: "Seniors" | "15U" | "12U" | null;
 };
 type MatchListItem =
   | { type: "month"; key: string; label: string }
@@ -360,14 +478,16 @@ function groupPlayedByMonth(items: Game[]): MatchListItem[] {
 }
 
 // ================== Local storage ==================
-const storageKey = (adminId: string | number) => `comets:joined:${adminId}`;
+const storageKey = (adminId: string | number, memberId?: string | null) =>
+  `comets:joined:${adminId}:${memberId || "self"}`;
 type JoinedCache = { map: Record<string, boolean>; ts: number };
 
 async function readJoinedFromStorage(
   adminId: string | number,
+  memberId?: string | null,
 ): Promise<JoinedCache | null> {
   try {
-    const raw = await AsyncStorage.getItem(storageKey(adminId));
+    const raw = await AsyncStorage.getItem(storageKey(adminId, memberId));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (parsed && parsed.map && typeof parsed.ts === "number")
@@ -379,11 +499,12 @@ async function readJoinedFromStorage(
 }
 async function writeJoinedToStorage(
   adminId: string | number,
+  memberId: string | null | undefined,
   map: Record<string, boolean>,
 ) {
   try {
     const payload: JoinedCache = { map, ts: Date.now() };
-    await AsyncStorage.setItem(storageKey(adminId), JSON.stringify(payload));
+    await AsyncStorage.setItem(storageKey(adminId, memberId), JSON.stringify(payload));
   } catch {}
 }
 
@@ -595,6 +716,9 @@ export default function MatchsScreen() {
     "Seniors",
   );
 
+  const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>([]);
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+
   const [joined, setJoined] = useState<Record<string, boolean>>({});
   const [declined, setDeclined] = useState<Record<string, boolean>>({});
   const [posting, setPosting] = useState<Record<string, boolean>>({});
@@ -608,6 +732,15 @@ export default function MatchsScreen() {
 
   // Comptes d'inscrits par match (cache locale)
   const [counts, setCounts] = useState<Record<string, number>>({});
+
+  const selectedMember = useMemo(
+    () => familyMembers.find((m) => m.id === selectedMemberId) ?? null,
+    [familyMembers, selectedMemberId],
+  );
+  const hasLinkedChild = useMemo(
+    () => familyMembers.some((m) => m.relation === "child"),
+    [familyMembers],
+  );
 
   // Toast
   const [toastVisible, setToastVisible] = useState(false);
@@ -683,18 +816,44 @@ export default function MatchsScreen() {
     })();
   }, []);
 
+  const refreshFamilyMembers = useCallback(async () => {
+    if (!admin?.id) {
+      setFamilyMembers([]);
+      setSelectedMemberId(null);
+      return;
+    }
+    try {
+      const res = await apiGet<{ ok: boolean; data?: FamilyMember[] }>(
+        "/api/family/members",
+      );
+      const list = Array.isArray(res?.data) ? res.data : [];
+      setFamilyMembers(list);
+      setSelectedMemberId((prev) => {
+        if (prev && list.some((m) => m.id === prev)) return prev;
+        const self = list.find((m) => m.relation === "self");
+        return self?.id ?? list[0]?.id ?? null;
+      });
+    } catch {
+      setFamilyMembers([]);
+      setSelectedMemberId(null);
+    }
+  }, [admin?.id]);
+
   // —— Hydrate "joined" depuis storage puis API (TTL)
   const hydrateJoined = useCallback(async () => {
     if (!admin?.id) return;
-    const local = await readJoinedFromStorage(admin.id);
+    const local = await readJoinedFromStorage(admin.id, selectedMemberId);
     if (local?.map) setJoined(local.map);
 
     try {
       let apiMap: Record<string, boolean> = {};
       let apiDeclinedMap: Record<string, boolean> = {};
       try {
+        const memberQuery = selectedMemberId
+          ? `&memberId=${encodeURIComponent(selectedMemberId)}`
+          : "";
         const res = await apiGet<ParticipationsGET>(
-          `/api/matches/participations?adminId=${admin.id}`,
+          `/api/matches/participations?adminId=${admin.id}${memberQuery}`,
         );
         (res.matchIds || []).forEach((mid) => {
           apiMap[String(mid)] = true;
@@ -709,36 +868,51 @@ export default function MatchsScreen() {
       };
       setJoined(merged);
       setDeclined(apiDeclinedMap);
-      await writeJoinedToStorage(admin.id, merged);
+      await writeJoinedToStorage(admin.id, selectedMemberId, merged);
     } catch {
       setDeclined({});
     }
-  }, [admin?.id]);
+  }, [admin?.id, selectedMemberId]);
 
   // 🔎 Check éligibilité + hydrate joined au focus
   useFocusEffect(
     useCallback(() => {
-      (async () => {
-        if (!admin?.id) {
-          setElig({ eligible: null, category: null });
-          setJoined({});
-          setDeclined({});
-          return;
-        }
-        try {
-          const res = await apiGet<{
-            eligible: boolean;
-            source: "players" | "young_players" | null;
-            category: "Seniors" | "15U" | "12U" | null;
-          }>(`/api/matches/eligibility?adminId=${admin.id}`);
-          setElig({ eligible: !!res.eligible, category: res.category ?? null });
-        } catch {
-          setElig({ eligible: false, category: null });
-        }
-      })();
-      if (admin?.id) hydrateJoined();
-    }, [admin?.id, hydrateJoined]),
+      if (!admin?.id) {
+        setElig({ eligible: null, category: null });
+        setJoined({});
+        setDeclined({});
+        setFamilyMembers([]);
+        setSelectedMemberId(null);
+        return;
+      }
+      refreshFamilyMembers();
+    }, [admin?.id, refreshFamilyMembers]),
   );
+
+  useEffect(() => {
+    (async () => {
+      if (!admin?.id) {
+        setElig({ eligible: null, category: null });
+        setJoined({});
+        setDeclined({});
+        return;
+      }
+      try {
+        const memberQuery = selectedMemberId
+          ? `&memberId=${encodeURIComponent(selectedMemberId)}`
+          : "";
+        const res = await apiGet<{
+          eligible: boolean;
+          source: "players" | "young_players" | "family_members" | null;
+          category: "Seniors" | "15U" | "12U" | null;
+        }>(`/api/matches/eligibility?adminId=${admin.id}${memberQuery}`);
+        setElig({ eligible: !!res.eligible, category: res.category ?? null });
+      } catch {
+        setElig({ eligible: false, category: null });
+      }
+      await hydrateJoined();
+    })();
+  }, [admin?.id, selectedMemberId, hydrateJoined]);
 
   // ===== Comptage des inscrits (par match) =====
   useEffect(() => {
@@ -833,16 +1007,18 @@ export default function MatchsScreen() {
         Alert.alert("Erreur", "Aucun calendrier modifiable trouvé.");
         return;
       }
-      const baseDate = new Date(match.date);
+      const venueTeam = match.is_home ? "Honfleur" : resolveTeamName(match.opponent) || match.opponent;
+      const venueInfo = getVenueInfo(venueTeam);
+      const baseDate = parseDateValue(match.date) ?? new Date(match.date);
       baseDate.setHours(11, 0, 0, 0);
       const endDate = new Date(baseDate.getTime() + 6 * 60 * 60 * 1000);
       await Calendar.createEventAsync(defaultCal.id, {
-        title: `Match ${match.categorie ? `[${match.categorie}] ` : ""}Comets vs ${match.opponent}`,
+        title: `Match ${match.categorie ? `[${match.categorie}] ` : ""}Comets vs ${resolveTeamName(match.opponent) || match.opponent}`,
         startDate: baseDate,
         endDate,
-        location: match.is_home
-          ? "Stade de Honfleur"
-          : `Déplacement - ${match.opponent}`,
+        location: venueInfo
+          ? `${venueInfo.label}, ${venueInfo.address}`
+          : `Déplacement - ${resolveTeamName(match.opponent) || match.opponent}`,
         notes: match.note || "",
         alarms: [{ relativeOffset: -60 }],
         timeZone: "Europe/Paris",
@@ -871,7 +1047,7 @@ export default function MatchsScreen() {
       else
         Alert.alert(
           "Profil joueur requis",
-          "Ton profil (admins) doit correspondre à un joueur dans players ou young_players (prénom/nom).",
+          "Le profil joueur sélectionné doit être lié à un joueur (family/players/young_players).",
         );
       return;
     }
@@ -882,11 +1058,11 @@ export default function MatchsScreen() {
     try {
       const res = await apiPost<ParticipatePOST>(
         `/api/matches/${mid}/participate`,
-        { adminId: admin.id },
+        { adminId: admin.id, memberId: selectedMemberId },
       );
       setJoined((j) => {
         const upd = { ...j, [mid]: true };
-        writeJoinedToStorage(admin.id, upd);
+        writeJoinedToStorage(admin.id, selectedMemberId, upd);
         return upd;
       });
       setDeclined((d) => {
@@ -935,11 +1111,12 @@ export default function MatchsScreen() {
       try {
         await apiPost<{ ok: boolean }>(`/api/matches/${mid}/unparticipate`, {
           adminId: admin.id,
+          memberId: selectedMemberId,
         });
         setJoined((j) => {
           const upd = { ...j };
           delete upd[mid];
-          writeJoinedToStorage(admin.id, upd);
+          writeJoinedToStorage(admin.id, selectedMemberId, upd);
           return upd;
         });
         setDeclined((d) => ({ ...d, [mid]: true }));
@@ -970,7 +1147,8 @@ export default function MatchsScreen() {
   }
 
   function getOpponentLogo(opponent: string): any {
-    return LOGO_MAP[opponent] || LOGO_MAP[normalizeName(opponent)] || null;
+    const resolvedName = resolveTeamName(opponent) || opponent;
+    return LOGO_MAP[resolvedName] || LOGO_MAP[normalizeName(resolvedName)] || null;
   }
 
   const openUpcomingDetail = useCallback(
@@ -1048,6 +1226,12 @@ export default function MatchsScreen() {
               <Text style={styles.statePillTxt}>{stateLabel}</Text>
             </View>
           </View>
+        )}
+
+        {showParticipationControls && selectedMember && (
+          <Text style={styles.selectedMemberTxt}>
+            Profil: {[selectedMember.first_name, selectedMember.last_name].filter(Boolean).join(" ")}
+          </Text>
         )}
 
         <View style={styles.venueRow}>
@@ -1139,39 +1323,15 @@ export default function MatchsScreen() {
         </View>
 
         {/* Catégorie + Note */}
-        <View
-          style={{
-            flexDirection: "row",
-            gap: 8,
-            marginTop: 8,
-            flexWrap: "wrap",
-            justifyContent: "center",
-          }}
-        >
+        <View style={styles.metaRow}>
           {!!item.categorie && (
-            <Text
-              style={{
-                color: COLORS.text,
-                backgroundColor: COLORS.card,
-                borderColor: COLORS.orangeSoftBorder,
-                borderWidth: 1,
-                paddingHorizontal: 10,
-                paddingVertical: 4,
-                borderRadius: 10,
-                fontWeight: "900",
-                fontSize: 12.5,
-              }}
-            >
-              {item.categorie}
-            </Text>
+            <View style={styles.metaChip}>
+              <Text style={styles.metaChipTxt}>{item.categorie}</Text>
+            </View>
           )}
           {!!item.note && (
             <Text
-              style={{
-                color: COLORS.orange,
-                fontWeight: "bold",
-                fontSize: 12.5,
-              }}
+              style={styles.metaNoteTxt}
               numberOfLines={2}
             >
               {item.note}
@@ -1259,8 +1419,8 @@ export default function MatchsScreen() {
     const homeTeam = g.is_home ? teamAbbr : g.opponent_abbr;
     const awayTeam = g.is_home ? g.opponent_abbr : teamAbbr;
 
-    const leftName = TEAM_NAMES[homeTeam] || homeTeam;
-    const rightName = TEAM_NAMES[awayTeam] || awayTeam;
+    const leftName = resolveTeamName(homeTeam) || homeTeam;
+    const rightName = resolveTeamName(awayTeam) || awayTeam;
 
     const homeIsHonfleur = leftName === "Honfleur";
     const leftLogo = homeIsHonfleur
@@ -1426,7 +1586,6 @@ export default function MatchsScreen() {
               <Text style={styles.heroSub}>Saison {new Date().getFullYear()}</Text>
             </View>
 
-            <LogoutButton />
           </View>
 
           <View style={styles.heroMetaCompactRow}>
@@ -1440,7 +1599,7 @@ export default function MatchsScreen() {
                 color="#FFDDBA"
               />
               <Text style={styles.heroPillText}>
-                {selectedTab === "upcoming" ? catFilter : "Resultats"}
+                {selectedTab === "upcoming" ? catFilter : "Résultats"}
               </Text>
             </View>
           </View>
@@ -1477,34 +1636,72 @@ export default function MatchsScreen() {
           </View>
 
           {selectedTab === "upcoming" && (
-            <View style={styles.catRow}>
-              {CATEGORY_FILTERS.map((f) => {
-                const active = catFilter === f;
-                return (
-                  <TouchableOpacity
-                    key={f}
-                    onPress={() => {
-                      setCatFilter(f);
-                      flatListRef.current?.scrollToOffset({
-                        offset: 0,
-                        animated: true,
-                      });
-                    }}
-                    style={[styles.catBtn, active && styles.catBtnActive]}
-                    activeOpacity={0.9}
-                  >
-                    <Icon
-                      name={CATEGORY_META[f].icon}
-                      size={14}
-                      color={active ? "#111827" : CATEGORY_META[f].tone}
-                    />
-                    <Text style={[styles.catBtnText, active && styles.catBtnTextActive]}>
-                      {f} ({catCounts[f]})
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+            <>
+              <View style={styles.catRow}>
+                {CATEGORY_FILTERS.map((f) => {
+                  const active = catFilter === f;
+                  return (
+                    <TouchableOpacity
+                      key={f}
+                      onPress={() => {
+                        setCatFilter(f);
+                        flatListRef.current?.scrollToOffset({
+                          offset: 0,
+                          animated: true,
+                        });
+                      }}
+                      style={[styles.catBtn, active && styles.catBtnActive]}
+                      activeOpacity={0.9}
+                    >
+                      <Icon
+                        name={CATEGORY_META[f].icon}
+                        size={14}
+                        color={active ? "#111827" : CATEGORY_META[f].tone}
+                      />
+                      <Text style={[styles.catBtnText, active && styles.catBtnTextActive]}>
+                        {f} ({catCounts[f]})
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {admin?.id && hasLinkedChild && (
+                <View style={styles.memberRow}>
+                  {familyMembers.map((member) => {
+                    const active = selectedMemberId === member.id;
+                    const name = [member.first_name, member.last_name]
+                      .filter(Boolean)
+                      .join(" ")
+                      .trim();
+                    const suffix =
+                      member.relation === "self"
+                        ? " (Moi)"
+                        : member.categorie
+                          ? ` (${member.categorie})`
+                          : "";
+                    return (
+                      <TouchableOpacity
+                        key={member.id}
+                        onPress={() => {
+                          setSelectedMemberId(member.id);
+                          flatListRef.current?.scrollToOffset({
+                            offset: 0,
+                            animated: true,
+                          });
+                        }}
+                        style={[styles.memberBtn, active && styles.memberBtnActive]}
+                        activeOpacity={0.9}
+                      >
+                        <Text style={[styles.memberBtnText, active && styles.memberBtnTextActive]}>
+                          {name || "Profil"}{suffix}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </>
           )}
         </LinearGradient>
       </View>
@@ -1531,7 +1728,7 @@ export default function MatchsScreen() {
                 <Text style={styles.emptyTxt}>
                   {selectedTab === "upcoming"
                     ? `Aucun match en ${catFilter} à venir.`
-                    : "Aucun match joué a afficher."}
+                    : "Aucun match joué à afficher."}
                 </Text>
               }
               renderItem={({ item }) => {
@@ -1715,6 +1912,33 @@ const styles = StyleSheet.create({
     marginTop: 8,
     flexDirection: "row",
     gap: 6,
+  },
+  memberRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  memberBtn: {
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.22)",
+    backgroundColor: "rgba(0,0,0,0.3)",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  memberBtnActive: {
+    borderColor: "#FFBD80",
+    backgroundColor: "#FF9E3A",
+  },
+  memberBtnText: {
+    color: "#E5E7EB",
+    fontWeight: "700",
+    fontSize: 11.5,
+  },
+  memberBtnTextActive: {
+    color: "#111827",
+    fontWeight: "800",
   },
   catBtn: {
     flex: 1,
@@ -1904,6 +2128,36 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
     marginHorizontal: 6,
   },
+  metaRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 8,
+    width: "100%",
+  },
+  metaChip: {
+    backgroundColor: COLORS.card,
+    borderColor: COLORS.orangeSoftBorder,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    maxWidth: "100%",
+  },
+  metaChipTxt: {
+    color: COLORS.text,
+    fontWeight: "900",
+    fontSize: 12.5,
+  },
+  metaNoteTxt: {
+    color: COLORS.orange,
+    fontWeight: "bold",
+    fontSize: 12.5,
+    flexShrink: 1,
+    flexGrow: 1,
+    minWidth: 120,
+  },
 
   scoresRow: {
     flexDirection: "row",
@@ -1961,7 +2215,9 @@ const styles = StyleSheet.create({
   boxscoreBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 13.5 },
 
   calBtn: {
-    marginTop: 12,
+    marginTop: 10,
+    width: "100%",
+    minHeight: 42,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -1970,9 +2226,16 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.24)",
     backgroundColor: "rgba(0,0,0,0.3)",
     borderRadius: 12,
+    paddingHorizontal: 12,
     paddingVertical: 10,
   },
-  calBtnTxt: { color: "#E5E7EB", fontWeight: "800", fontSize: 13.5 },
+  calBtnTxt: {
+    color: "#E5E7EB",
+    fontWeight: "800",
+    fontSize: 13.5,
+    textAlign: "center",
+    flexShrink: 1,
+  },
 
   joinBtn: {
     marginTop: 10,
@@ -2011,6 +2274,12 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     textAlign: "center",
     marginTop: 6,
+  },
+  selectedMemberTxt: {
+    marginTop: 6,
+    color: "#CBD5E1",
+    fontSize: 12,
+    fontWeight: "700",
   },
 
   scrollTopBtn: {

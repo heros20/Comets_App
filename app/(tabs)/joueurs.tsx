@@ -18,7 +18,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 
 import { DrawerMenuButton } from "../../components/navigation/AppDrawer";
-import LogoutButton from "../../components/LogoutButton";
 import { supabase } from "../../supabase";
 
 type YoungPlayer = {
@@ -359,11 +358,10 @@ export default function JoueursScreen() {
               <Text style={styles.heroSub}>Saison {new Date().getFullYear()}</Text>
             </View>
 
-            <LogoutButton />
           </View>
 
           <View style={styles.heroMetaCompactRow}>
-            <Text style={styles.heroMetaText}>{totalPlayers} joueurs references</Text>
+            <Text style={styles.heroMetaText}>{totalPlayers} joueurs référencés</Text>
             <View style={styles.heroPill}>
               <Icon name="people-outline" size={13} color="#FFDDBA" />
               <Text style={styles.heroPillText}>{selectedCat}</Text>
@@ -481,7 +479,7 @@ export default function JoueursScreen() {
             ) : null
           }
           ListEmptyComponent={
-            <Text style={styles.emptyTxt}>Aucun joueur a afficher dans cette categorie.</Text>
+            <Text style={styles.emptyTxt}>Aucun joueur à afficher dans cette catégorie.</Text>
           }
           onScroll={(e) => setShowScrollTop(e.nativeEvent.contentOffset.y > 240)}
           scrollEventThrottle={16}

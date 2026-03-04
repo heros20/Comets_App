@@ -72,11 +72,6 @@ export default function MessagesScreen() {
     })();
   }, [checkingSession]);
 
-  async function handleLogout() {
-    await SecureStore.deleteItemAsync("session");
-    router.replace("/login");
-  }
-
   function confirmDelete(id: number) {
     Alert.alert("Supprimer le message", "Tu es sur de vouloir supprimer ce message ?", [
       { text: "Annuler", style: "cancel" },
@@ -109,15 +104,9 @@ export default function MessagesScreen() {
       <StatusBar barStyle="light-content" />
 
       <AdminHero
-        title="Messages recus"
+        title="Messages reçus"
         subtitle="Reponds, gere et supprime les messages entrants"
         onBack={() => (router.canGoBack() ? router.back() : router.replace("/"))}
-        rightSlot={
-          <TouchableOpacity style={styles.logoutPill} onPress={handleLogout} activeOpacity={0.9}>
-            <Icon name="log-out-outline" size={16} color="#fff" />
-            <Text style={styles.logoutPillTxt}>Deconnexion</Text>
-          </TouchableOpacity>
-        }
       />
 
       {loading ? (
@@ -218,17 +207,6 @@ export default function MessagesScreen() {
 }
 
 const styles = StyleSheet.create({
-  logoutPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: "#B91C1C",
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-  },
-  logoutPillTxt: { color: "#fff", fontWeight: "900", fontSize: 12.5 },
-
   loaderBox: { flex: 1, alignItems: "center", justifyContent: "center" },
   loaderTxt: { color: "#FF8200", marginTop: 10, fontWeight: "bold", fontSize: 16 },
   emptyBox: {

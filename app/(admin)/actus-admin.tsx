@@ -321,7 +321,7 @@ export default function AdminActusScreen() {
         <ScrollView contentContainerStyle={{ padding: 12, paddingBottom: 48 }}>
           <AdminHero
             title="Administration actus"
-            subtitle="Gestion des actualites et notifications"
+            subtitle="Gestion des actualités et notifications"
             onBack={() => (navigation as any)?.goBack?.()}
           />
 
