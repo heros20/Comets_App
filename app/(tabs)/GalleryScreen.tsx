@@ -5,6 +5,7 @@ import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Alert,
   ActivityIndicator,
   FlatList,
   Modal,
@@ -24,6 +25,7 @@ import Icon from "react-native-vector-icons/Ionicons";
 
 import { DrawerMenuButton } from "../../components/navigation/AppDrawer";
 import { sortGalleryNewest } from "../../lib/gallerySort";
+import { saveRemoteImage } from "../../utils/saveRemoteImage";
 
 const GALLERY_API = "https://les-comets-honfleur.vercel.app/api/gallery";
 const INITIAL_BATCH = 18;
@@ -43,6 +45,8 @@ type GalleryTileProps = {
   height: number;
   marginRight: number;
   onOpen: (index: number) => void;
+  onSave: (item: GalleryItem, index: number) => void;
+  isSaving: boolean;
 };
 
 const GalleryTile = React.memo(function GalleryTile({
@@ -52,6 +56,8 @@ const GalleryTile = React.memo(function GalleryTile({
   height,
   marginRight,
   onOpen,
+  onSave,
+  isSaving,
 }: GalleryTileProps) {
   const [isReady, setIsReady] = useState(false);
 
@@ -60,38 +66,47 @@ const GalleryTile = React.memo(function GalleryTile({
   }, [item.url]);
 
   return (
-    <TouchableOpacity
-      style={[styles.tile, { width, height, marginRight }]}
-      activeOpacity={0.9}
-      onPress={() => onOpen(index)}
-      onLongPress={() => onOpen(index)}
-    >
-      <ExpoImage
-        source={{ uri: item.url, cacheKey: String(item.id ?? item.url) }}
-        recyclingKey={String(item.id ?? item.url)}
-        cachePolicy="memory-disk"
-        priority={index < 8 ? "high" : "normal"}
-        transition={180}
-        contentFit="cover"
-        style={styles.tileImage}
-        onLoad={() => setIsReady(true)}
-        onError={() => setIsReady(true)}
-      />
+    <View style={[styles.tile, { width, height, marginRight }]}>
+      <TouchableOpacity
+        style={styles.tilePress}
+        activeOpacity={0.9}
+        onPress={() => onOpen(index)}
+        onLongPress={() => onSave(item, index)}
+        delayLongPress={280}
+      >
+        <ExpoImage
+          source={{ uri: item.url, cacheKey: String(item.id ?? item.url) }}
+          recyclingKey={String(item.id ?? item.url)}
+          cachePolicy="memory-disk"
+          priority={index < 8 ? "high" : "normal"}
+          transition={180}
+          contentFit="cover"
+          style={styles.tileImage}
+          onLoad={() => setIsReady(true)}
+          onError={() => setIsReady(true)}
+        />
 
-      {!isReady && (
-        <View style={styles.tileLoader}>
-          <ActivityIndicator size="small" color="#FF9E3A" />
+        {!isReady && (
+          <View style={styles.tileLoader}>
+            <ActivityIndicator size="small" color="#FF9E3A" />
+          </View>
+        )}
+
+        {!!item.legend && (
+          <View style={styles.legendBar}>
+            <Text style={styles.legendText} numberOfLines={2}>
+              {item.legend}
+            </Text>
+          </View>
+        )}
+      </TouchableOpacity>
+
+      {isSaving && (
+        <View style={styles.tileSavingBadge}>
+          <ActivityIndicator size="small" color="#111827" />
         </View>
       )}
-
-      {!!item.legend && (
-        <View style={styles.legendBar}>
-          <Text style={styles.legendText} numberOfLines={2}>
-            {item.legend}
-          </Text>
-        </View>
-      )}
-    </TouchableOpacity>
+    </View>
   );
 });
 
@@ -116,6 +131,7 @@ export default function GalleryScreen() {
   const [showSlowLoading, setShowSlowLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(INITIAL_BATCH);
+  const [savingPhotoKey, setSavingPhotoKey] = useState<string | null>(null);
 
   const [modalIdx, setModalIdx] = useState<number | null>(null);
   const pagerRef = useRef<ScrollView>(null);
@@ -274,6 +290,19 @@ export default function GalleryScreen() {
     setVisibleCount((prev) => Math.min(prev + LOAD_STEP, gallery.length));
   }, [gallery.length]);
 
+  const handleSavePhoto = useCallback(async (item: GalleryItem, index: number) => {
+    const key = String(item.id ?? `${item.url}-${index}`);
+    try {
+      setSavingPhotoKey(key);
+      await saveRemoteImage(item.url, `galerie-comets-${index + 1}`);
+    } catch (error: any) {
+      const detail = String(error?.message ?? "").trim();
+      Alert.alert("Erreur", detail ? `Impossible d'enregistrer cette photo.\n${detail}` : "Impossible d'enregistrer cette photo.");
+    } finally {
+      setSavingPhotoKey((current) => (current === key ? null : current));
+    }
+  }, []);
+
   const keyExtractor = useCallback(
     (item: GalleryItem, index: number) => String(item.id ?? `${item.url}-${index}`),
     []
@@ -290,10 +319,12 @@ export default function GalleryScreen() {
           height={tileH}
           marginRight={marginRight}
           onOpen={openModalAt}
+          onSave={handleSavePhoto}
+          isSaving={savingPhotoKey === String(item.id ?? `${item.url}-${index}`)}
         />
       );
     },
-    [colCount, gap, openModalAt, tileH, tileW]
+    [colCount, gap, handleSavePhoto, openModalAt, savingPhotoKey, tileH, tileW]
   );
 
   return (
@@ -396,13 +427,13 @@ export default function GalleryScreen() {
                   <Text style={styles.warningText}>{errorMsg}</Text>
                 </View>
               )}
-              <View style={styles.introCard}>
-                <Text style={styles.introTitle}>Dernieres photos</Text>
-                <Text style={styles.introText}>
-                  Tape une image pour ouvrir le mode plein ecran et faire defiler la galerie.
-                </Text>
-              </View>
-            </View>
+          <View style={styles.introCard}>
+            <Text style={styles.introTitle}>Dernieres photos</Text>
+            <Text style={styles.introText}>
+              Tape une image pour ouvrir le mode plein ecran. Maintiens appuye sur une image pour l enregistrer.
+            </Text>
+          </View>
+        </View>
           }
           ListFooterComponent={
             canLoadMore ? (
@@ -447,26 +478,35 @@ export default function GalleryScreen() {
 
                 return (
                   <View key={String(item.id ?? idx)} style={[styles.modalPage, { width: windowWidth }]}>
-                    {shouldRenderImage ? (
-                      <ExpoImage
-                        source={{ uri: item.url, cacheKey: String(item.id ?? item.url) }}
-                        recyclingKey={`modal-${String(item.id ?? item.url)}`}
-                        cachePolicy="memory-disk"
-                        priority="high"
-                        transition={140}
-                        contentFit="contain"
-                        style={[styles.modalImage, { width: imageWidth, height: imageHeight }]}
-                      />
-                    ) : (
-                      <View style={[styles.modalImagePlaceholder, { width: imageWidth, height: imageHeight }]}>
-                        <ActivityIndicator size="small" color="#FF9E3A" />
-                      </View>
-                    )}
+                    <TouchableOpacity
+                      activeOpacity={1}
+                      onLongPress={() => handleSavePhoto(item, idx)}
+                      delayLongPress={280}
+                    >
+                      {shouldRenderImage ? (
+                        <ExpoImage
+                          source={{ uri: item.url, cacheKey: String(item.id ?? item.url) }}
+                          recyclingKey={`modal-${String(item.id ?? item.url)}`}
+                          cachePolicy="memory-disk"
+                          priority="high"
+                          transition={140}
+                          contentFit="contain"
+                          style={[styles.modalImage, { width: imageWidth, height: imageHeight }]}
+                        />
+                      ) : (
+                        <View style={[styles.modalImagePlaceholder, { width: imageWidth, height: imageHeight }]}>
+                          <ActivityIndicator size="small" color="#FF9E3A" />
+                        </View>
+                      )}
+                    </TouchableOpacity>
 
                     {!!item.legend && (
                       <Text style={styles.modalLegend} numberOfLines={3}>
                         {item.legend}
                       </Text>
+                    )}
+                    {modalIdx === idx && (
+                      <Text style={styles.modalHint}>Maintiens appuye sur la photo pour l enregistrer</Text>
                     )}
                   </View>
                 );
@@ -684,6 +724,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#111827",
     position: "relative",
   },
+  tilePress: {
+    flex: 1,
+  },
   tileImage: {
     ...StyleSheet.absoluteFillObject,
   },
@@ -709,6 +752,19 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     fontWeight: "700",
     textAlign: "center",
+  },
+  tileSavingBadge: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FF9E3A",
+    borderWidth: 1,
+    borderColor: "#FFBD80",
   },
   moreBtn: {
     alignSelf: "center",
@@ -815,6 +871,12 @@ const styles = StyleSheet.create({
     textAlign: "center",
     paddingHorizontal: 22,
     lineHeight: 19,
+  },
+  modalHint: {
+    marginTop: 6,
+    color: "#FFB366",
+    fontSize: 11.5,
+    fontWeight: "700",
   },
   navArrow: {
     position: "absolute",

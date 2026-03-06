@@ -26,7 +26,7 @@ type AdminContextType = {
   isMember: boolean;
   isLoading: boolean;
   setAdmin: React.Dispatch<React.SetStateAction<Admin | null>>;
-  login: (email: string, password: string) => Promise<boolean>;
+  login: (email: string, password: string, remember?: boolean) => Promise<boolean>;
   register: (email: string, password: string) => Promise<boolean>;
   requestPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
   resetPassword: (token: string, password: string) => Promise<{ ok: boolean; error?: string }>;
@@ -244,13 +244,13 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     return () => sub.remove();
   }, [runSessionCheck]);
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string, remember = true) => {
     try {
       const res = await fetchWithTimeout(`${API_BASE}/api/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, remember }),
       });
       if (!res.ok) return false;
 
@@ -379,13 +379,26 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     try {
       const sessionStr = await SecureStore.getItemAsync(SESSION_KEY);
       if (sessionStr) {
-        const s = JSON.parse(sessionStr) as { id: string; email?: string };
-        await supabase.from("admins").update({ expo_push_token: null }).eq("id", s.id);
-        if (s.email) {
-          await supabase.from("admins").update({ expo_push_token: null }).eq("email", s.email);
+        let parsed: { id?: string; email?: string } | null = null;
+        try {
+          parsed = JSON.parse(sessionStr) as { id?: string; email?: string };
+        } catch {
+          parsed = null;
+        }
+
+        const id = typeof parsed?.id === "string" ? parsed.id.trim() : "";
+        const email =
+          typeof parsed?.email === "string" ? parsed.email.trim().toLowerCase() : "";
+
+        if (id) {
+          await supabase.from("admins").update({ expo_push_token: null }).eq("id", id);
+        }
+        if (email) {
+          await supabase.from("admins").update({ expo_push_token: null }).eq("email", email);
         }
       }
-    } finally {
+    } catch {}
+    finally {
       await SecureStore.deleteItemAsync(EXPO_PUSH_TOKEN_KEY);
       await SecureStore.deleteItemAsync(SESSION_KEY);
       setAdmin(null);

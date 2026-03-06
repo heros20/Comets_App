@@ -84,6 +84,20 @@ function formatMatchDate(input?: string | null) {
   return parsed.toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit", month: "long" });
 }
 
+function formatKickoffHint(input?: string | null) {
+  const parsed = parseDateValue(input);
+  if (!parsed) return "Bientot";
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+  const diffDays = Math.round((target.getTime() - today.getTime()) / 86400000);
+
+  if (diffDays <= 0) return "Aujourd'hui";
+  if (diffDays === 1) return "Demain";
+  return `Dans ${diffDays} jours`;
+}
+
 function stripHtml(text = "") {
   return text.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -431,7 +445,7 @@ export default function Accueil() {
           if (item.kind === "gallery") {
             const photoId = item.item.id != null ? String(item.item.id) : "";
             return (
-              <TouchableOpacity style={styles.card} activeOpacity={0.94} onPress={() => router.push(photoId ? (`/GalleryScreen?photoId=${encodeURIComponent(photoId)}` as any) : ("/GalleryScreen" as any))}>
+              <TouchableOpacity style={styles.card} activeOpacity={0.94} onPress={() => router.push("/GalleryScreen" as any)}>
                 <ExpoImage source={{ uri: item.item.url, cacheKey: `gallery-${photoId || item.item.url}` }} recyclingKey={`gallery-${photoId || item.item.url}`} style={styles.galleryImage} contentFit="cover" cachePolicy="memory-disk" transition={120} />
                 <LinearGradient colors={["rgba(0,0,0,0)", "rgba(0,0,0,0.78)"]} style={styles.galleryOverlay} />
                 <View style={styles.galleryContent}>
@@ -487,17 +501,59 @@ export default function Accueil() {
           const isUpcoming = item.mode === "upcoming";
           const match = item.item as PlannedMatch & PlayedGame;
           const opponent = isUpcoming ? match.opponent : TEAM_NAMES[match.opponent_abbr] || match.opponent_abbr;
+          const upcomingMeta = `${match.is_home ? "Domicile" : "Exterieur"}${match.categorie ? ` · ${match.categorie}` : ""}`;
+
+          if (isUpcoming) {
+            return (
+              <TouchableOpacity
+                style={[styles.card, styles.upcomingCard]}
+                activeOpacity={0.94}
+                onPress={() => router.push(`/match-detail?kind=upcoming&matchId=${encodeURIComponent(String(match.id))}` as any)}
+              >
+                <LinearGradient colors={["#1C314F", "#13243A", "#0A1422"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.upcomingGradient}>
+                  <View style={styles.upcomingTopRow}>
+                    <View style={styles.upcomingBadge}>
+                      <Icon name="flash-outline" size={13} color="#FFE9C6" />
+                      <Text style={styles.upcomingBadgeText}>PROCHAIN MATCH</Text>
+                    </View>
+                    <Text style={styles.upcomingCountdown}>{formatKickoffHint(match.date)}</Text>
+                  </View>
+
+                  <Text style={styles.upcomingDate}>{formatMatchDate(match.date)}</Text>
+                  <Text style={styles.upcomingTitle}>Comets vs {opponent}</Text>
+
+                  <View style={styles.upcomingInfoRow}>
+                    <View style={styles.upcomingInfoPill}>
+                      <Icon name={match.is_home ? "home-outline" : "airplane-outline"} size={12} color="#FFD5AF" />
+                      <Text style={styles.upcomingInfoText}>{match.is_home ? "Domicile" : "Exterieur"}</Text>
+                    </View>
+                    {!!match.categorie && (
+                      <View style={styles.upcomingInfoPill}>
+                        <Icon name="people-outline" size={12} color="#FFD5AF" />
+                        <Text style={styles.upcomingInfoText}>{match.categorie}</Text>
+                      </View>
+                    )}
+                  </View>
+
+                  {!!match.note && <Text style={styles.upcomingNote}>{match.note}</Text>}
+                  {!match.note && <Text style={styles.upcomingSubtle}>{upcomingMeta}</Text>}
+
+                  <View style={styles.upcomingFooterRow}>
+                    <Text style={styles.upcomingFooterText}>Voir la fiche du match</Text>
+                    <Icon name="arrow-forward" size={15} color="#FFE2C0" />
+                  </View>
+                </LinearGradient>
+              </TouchableOpacity>
+            );
+          }
+
           return (
-            <TouchableOpacity style={styles.card} activeOpacity={0.94} onPress={() => router.push((isUpcoming ? `/match-detail?kind=upcoming&matchId=${encodeURIComponent(String(match.id))}` : `/match-detail?kind=played&matchId=${encodeURIComponent(String(match.id))}`) as any)}>
+            <TouchableOpacity style={styles.card} activeOpacity={0.94} onPress={() => router.push(`/match-detail?kind=played&matchId=${encodeURIComponent(String(match.id))}` as any)}>
               <View style={styles.cardBody}>
-                <Text style={styles.meta}>{isUpcoming ? "À VENIR" : "RÉSULTAT"} · {formatMatchDate(match.date)}</Text>
+                <Text style={styles.meta}>RÉSULTAT · {formatMatchDate(match.date)}</Text>
                 <Text style={styles.cardTitle}>Comets vs {opponent}</Text>
-                <Text style={styles.cardText}>
-                  {isUpcoming
-                    ? `${match.is_home ? "Domicile" : "Extérieur"}${match.categorie ? ` · ${match.categorie}` : ""}`
-                    : `${match.team_score ?? "-"} - ${match.opponent_score ?? "-"} · ${resultLabel(match.result)}`}
-                </Text>
-                {!isUpcoming && <View style={[styles.resultPill, { backgroundColor: resultColor(match.result) }]}><Text style={styles.resultText}>{resultLabel(match.result)}</Text></View>}
+                <Text style={styles.cardText}>{`${match.team_score ?? "-"} - ${match.opponent_score ?? "-"} · ${resultLabel(match.result)}`}</Text>
+                <View style={[styles.resultPill, { backgroundColor: resultColor(match.result) }]}><Text style={styles.resultText}>{resultLabel(match.result)}</Text></View>
                 {!!match.note && <Text style={styles.note}>{match.note}</Text>}
               </View>
             </TouchableOpacity>
@@ -596,6 +652,21 @@ const styles = StyleSheet.create({
   runScoreValue: { marginTop: 4, color: "#FFFFFF", fontSize: 22, fontWeight: "900" },
   runFooterRow: { marginTop: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, paddingTop: 12, borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.08)" },
   runFooterText: { color: "#FFD5AF", fontSize: 12.8, fontWeight: "900" },
+  upcomingCard: { borderColor: "rgba(255,130,0,0.36)", backgroundColor: "#132238" },
+  upcomingGradient: { paddingHorizontal: 16, paddingVertical: 15 },
+  upcomingTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  upcomingBadge: { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: "rgba(255,213,175,0.38)", backgroundColor: "rgba(255,130,0,0.2)" },
+  upcomingBadgeText: { color: "#FFE7CF", fontSize: 10.8, fontWeight: "900", letterSpacing: 0.5 },
+  upcomingCountdown: { color: "#FFD5AF", fontSize: 12.2, fontWeight: "900" },
+  upcomingDate: { marginTop: 13, color: "#9FC3EC", fontSize: 12.2, fontWeight: "800" },
+  upcomingTitle: { marginTop: 8, color: "#FFFFFF", fontSize: 24, lineHeight: 29, fontWeight: "900" },
+  upcomingInfoRow: { marginTop: 12, flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  upcomingInfoPill: { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: "rgba(255,213,175,0.3)", backgroundColor: "rgba(255,255,255,0.05)" },
+  upcomingInfoText: { color: "#FEE8D2", fontSize: 11.6, fontWeight: "800" },
+  upcomingNote: { marginTop: 12, color: "#FCE7CF", fontSize: 12.8, lineHeight: 18 },
+  upcomingSubtle: { marginTop: 12, color: "#C4D4E9", fontSize: 12.6, lineHeight: 18 },
+  upcomingFooterRow: { marginTop: 15, paddingTop: 11, borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.1)", flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  upcomingFooterText: { color: "#FFE2C0", fontSize: 12.6, fontWeight: "900" },
   cardImage: { width: "100%", height: 188, backgroundColor: "#1F2937" },
   galleryImage: { width: "100%", height: 270, backgroundColor: "#1F2937" },
   galleryOverlay: { ...StyleSheet.absoluteFillObject },
@@ -616,3 +687,4 @@ const styles = StyleSheet.create({
   scrollTopWrap: { position: "absolute", right: 18 },
   scrollTopBtn: { width: 46, height: 46, borderRadius: 23, alignItems: "center", justifyContent: "center", backgroundColor: "#101827EE", borderWidth: 1.5, borderColor: "#FF9E3A", shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 4 },
 });
+

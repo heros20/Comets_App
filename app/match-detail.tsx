@@ -2,9 +2,11 @@
 
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
+import * as Calendar from "expo-calendar";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Image as RNImage,
   Linking,
   Platform,
@@ -19,8 +21,14 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 import { supabase } from "../supabase";
+import { useAdmin } from "../contexts/AdminContext";
 
 const SITE_URL = "https://les-comets-honfleur.vercel.app";
+const PRIMARY_API =
+  process.env.EXPO_PUBLIC_API_URL ??
+  (__DEV__ ? "http://10.0.2.2:3000" : SITE_URL);
+const FALLBACK_API = SITE_URL;
+const PARTICIPANTS_PATH = "/api/admin/match/participants";
 const TEAM_NAMES: Record<string, string> = {
   HON: "Honfleur",
   LHA: "Le Havre",
@@ -107,6 +115,19 @@ type AdminRow = {
   email?: string | null;
 };
 type Participant = { id: string; name: string };
+type ParticipantApiPerson = {
+  id?: string | number | null;
+  first_name?: string | null;
+  last_name?: string | null;
+};
+type ParticipantApiItem = {
+  match_id: string | number;
+  count?: number | null;
+  participants?: ParticipantApiPerson[] | null;
+};
+type ParticipantApiResponse = {
+  items?: ParticipantApiItem[] | null;
+};
 type VenueInfo = { label: string; address: string };
 
 const VENUE_MAP: Record<string, VenueInfo> = {
@@ -191,6 +212,24 @@ function getVenueInfo(name?: string | null) {
 function getGoogleMapsUrl(address: string) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 }
+async function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = 2500) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...(init ?? {}), signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function getApiCandidates(path: string) {
+  return Array.from(
+    new Set(
+      [PRIMARY_API, FALLBACK_API]
+        .map((base) => String(base ?? "").trim())
+        .filter((base) => !!base),
+    ),
+  ).map((base) => `${base}${path}`);
+}
 function parseDateValue(dateValue: string): Date | null {
   if (!dateValue) return null;
   const frMatch = dateValue.match(/^\s*(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s+.*)?$/);
@@ -234,6 +273,11 @@ function formatResultLabel(result?: string | null) {
 export default function MatchDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { admin } = useAdmin();
+  const adminSessionToken = useMemo(() => {
+    if (typeof admin?.session_token !== "string") return "";
+    return admin.session_token.trim();
+  }, [admin?.session_token]);
 
   const params = useLocalSearchParams<{ matchId?: string | string[]; kind?: string | string[] }>();
   const rawMatchId = Array.isArray(params.matchId) ? params.matchId[0] : params.matchId;
@@ -266,7 +310,68 @@ export default function MatchDetailScreen() {
     let mounted = true;
     const mid = String(matchId);
 
-    const loadParticipants = async () => {
+    const loadParticipantsFromApi = async (): Promise<"full" | "count_only" | "none"> => {
+      if (!adminSessionToken) return "none";
+
+      const urls = getApiCandidates(PARTICIPANTS_PATH);
+      for (const url of urls) {
+        try {
+          const res = await fetchWithTimeout(url, {
+            method: "GET",
+            credentials: "include",
+            headers: {
+              "x-admin-session": adminSessionToken,
+              Authorization: `Bearer ${adminSessionToken}`,
+            },
+          });
+
+          if (res.status === 401 || res.status === 403) {
+            continue;
+          }
+          if (!res.ok) {
+            continue;
+          }
+
+          const json = (await res.json().catch(() => null)) as ParticipantApiResponse | null;
+          if (!json || !Array.isArray(json.items)) {
+            continue;
+          }
+
+          const item = json.items.find((entry) => String(entry.match_id) === mid);
+          if (!item) {
+            continue;
+          }
+
+          const names = (Array.isArray(item.participants) ? item.participants : [])
+            .map((person, idx) => {
+              const id = String(person?.id ?? `participant-${idx}`);
+              const fullName = `${person?.first_name ?? ""} ${person?.last_name ?? ""}`.trim();
+              return {
+                id,
+                name: fullName || "Participant",
+              };
+            })
+            .sort((a, b) => a.name.localeCompare(b.name, "fr"));
+
+          if (!mounted) return "none";
+
+          const countRaw = Number(item.count ?? names.length);
+          const count = Number.isFinite(countRaw) ? countRaw : names.length;
+          setParticipantCount(count);
+          setParticipants(names);
+
+          if (count > 0 && names.length === 0) {
+            return "count_only";
+          }
+
+          return "full";
+        } catch {}
+      }
+
+      return "none";
+    };
+
+    const loadParticipantsFromSupabase = async (opts?: { keepExistingOnFail?: boolean }) => {
       try {
         const { data, error } = await supabase
           .from("match_participations")
@@ -274,11 +379,11 @@ export default function MatchDetailScreen() {
           .eq("match_id", mid);
 
         if (error || !Array.isArray(data)) {
-          if (mounted) {
+          if (mounted && !opts?.keepExistingOnFail) {
             setParticipantCount(0);
             setParticipants([]);
           }
-          return;
+          return false;
         }
 
         const ids = Array.from(
@@ -294,7 +399,7 @@ export default function MatchDetailScreen() {
 
         if (!ids.length) {
           setParticipants([]);
-          return;
+          return true;
         }
 
         const { data: admins, error: adminsError } = await supabase
@@ -309,7 +414,7 @@ export default function MatchDetailScreen() {
               name: `Participant ${idx + 1}`,
             })),
           );
-          return;
+          return true;
         }
 
         const byId = new Map(
@@ -329,17 +434,29 @@ export default function MatchDetailScreen() {
           .sort((a, b) => a.name.localeCompare(b.name, "fr"));
 
         setParticipants(names);
+        return true;
       } catch {
         if (!mounted) return;
-        setParticipantCount(0);
-        setParticipants([]);
+        if (!opts?.keepExistingOnFail) {
+          setParticipantCount(0);
+          setParticipants([]);
+        }
+        return false;
       }
+    };
+
+    const loadParticipants = async () => {
+      const apiStatus = await loadParticipantsFromApi();
+      if (apiStatus === "full") return;
+      await loadParticipantsFromSupabase({ keepExistingOnFail: apiStatus === "count_only" });
     };
 
     const loadMatch = async () => {
       try {
         setLoading(true);
         setErrorMsg(null);
+        setParticipantCount(0);
+        setParticipants([]);
 
         if (kind === "played") {
           const { data, error } = await supabase
@@ -361,11 +478,11 @@ export default function MatchDetailScreen() {
           setUpcoming(data as PlannedGame);
         }
 
-        await loadParticipants();
+        if (mounted) setLoading(false);
+        loadParticipants().catch(() => {});
       } catch {
         if (!mounted) return;
         setErrorMsg("Impossible de charger les details du match.");
-      } finally {
         if (mounted) setLoading(false);
       }
     };
@@ -374,7 +491,7 @@ export default function MatchDetailScreen() {
     return () => {
       mounted = false;
     };
-  }, [kind, matchId]);
+  }, [adminSessionToken, kind, matchId]);
 
   const isUpcoming = kind === "upcoming";
 
@@ -450,64 +567,15 @@ export default function MatchDetailScreen() {
     played?.result === "W" ? "#16A34A" : played?.result === "L" ? "#B91C1C" : "#334155";
 
   const shareTitle = `Match Comets vs ${opponentName}`;
-  const shareUrl = `${SITE_URL}/matchs?matchId=${encodeURIComponent(matchId)}&kind=${kind}`;
+  const shareUrl = `${SITE_URL}/calendrier/match-detail?kind=${encodeURIComponent(kind)}&matchId=${encodeURIComponent(matchId)}&src=mobile-app`;
+  const shareAddress = venueInfo ? `${venueInfo.label}, ${venueInfo.address}` : "Adresse a confirmer";
   const shareText = `${shareTitle}
 ${formatDateLong(dateValue || "")}
 ${venueLabel}
+Adresse : ${shareAddress}
 Catégorie : ${category}
 Participants: ${participantCount}`;
-
-  const shareTargets = useMemo(
-    () => [
-      {
-        key: "whatsapp",
-        label: "WhatsApp",
-        icon: "logo-whatsapp" as const,
-        color: "#22c55e",
-        url: `https://wa.me/?text=${encodeURIComponent(`${shareText}\n${shareUrl}`)}`,
-      },
-      {
-        key: "x",
-        label: "X / Twitter",
-        icon: "logo-twitter" as const,
-        color: "#93c5fd",
-        url: `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(shareUrl)}`,
-      },
-      {
-        key: "facebook",
-        label: "Facebook",
-        icon: "logo-facebook" as const,
-        color: "#60a5fa",
-        url: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}&quote=${encodeURIComponent(
-          shareText,
-        )}`,
-      },
-      {
-        key: "telegram",
-        label: "Telegram",
-        icon: "paper-plane-outline" as const,
-        color: "#38bdf8",
-        url: `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(shareText)}`,
-      },
-      {
-        key: "linkedin",
-        label: "LinkedIn",
-        icon: "logo-linkedin" as const,
-        color: "#94a3b8",
-        url: `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(shareUrl)}`,
-      },
-      {
-        key: "email",
-        label: "Email",
-        icon: "mail-outline" as const,
-        color: "#f59e0b",
-        url: `mailto:?subject=${encodeURIComponent(shareTitle)}&body=${encodeURIComponent(
-          `${shareText}\n\n${shareUrl}`,
-        )}`,
-      },
-    ],
-    [shareText, shareTitle, shareUrl],
-  );
+  const shareMessageWithUrl = `${shareText}\n${shareUrl}`;
 
   const openUrl = useCallback(async (url: string) => {
     try {
@@ -519,10 +587,57 @@ Participants: ${participantCount}`;
     try {
       await Share.share({
         title: shareTitle,
-        message: `${shareText}\n${shareUrl}`,
+        message: shareMessageWithUrl,
       });
     } catch {}
-  }, [shareText, shareTitle, shareUrl]);
+  }, [shareMessageWithUrl, shareTitle]);
+
+  const addMatchToCalendar = useCallback(async (match: PlannedGame) => {
+    try {
+      const { status } = await Calendar.requestCalendarPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission requise", "Autorisez l'accès au calendrier.");
+        return;
+      }
+
+      const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+      const defaultCal = calendars.find((cal) => cal.allowsModifications);
+      if (!defaultCal) {
+        Alert.alert("Erreur", "Aucun calendrier modifiable trouve.");
+        return;
+      }
+
+      const resolvedOpponent = resolveTeamName(match.opponent) || match.opponent;
+      const venueTeam = match.is_home ? "Honfleur" : resolvedOpponent;
+      const venueInfo = getVenueInfo(venueTeam);
+      const baseDate = parseDateValue(match.date) ?? new Date(match.date);
+      baseDate.setHours(11, 0, 0, 0);
+      const endDate = new Date(baseDate.getTime() + 6 * 60 * 60 * 1000);
+
+      const eventId = await Calendar.createEventAsync(defaultCal.id, {
+        title: `Match ${match.categorie ? `[${match.categorie}] ` : ""}Comets vs ${resolvedOpponent}`,
+        startDate: baseDate,
+        endDate,
+        location: venueInfo
+          ? `${venueInfo.label}, ${venueInfo.address}`
+          : `Deplacement - ${resolvedOpponent}`,
+        notes: match.note || "",
+        alarms: [{ relativeOffset: -60 }],
+        timeZone: "Europe/Paris",
+      });
+
+      try {
+        await Calendar.openEventInCalendarAsync({ id: eventId });
+      } catch {
+        Alert.alert(
+          "Ajoute !",
+          "Le match a ete ajoute dans votre calendrier."
+        );
+      }
+    } catch (e: any) {
+      Alert.alert("Erreur calendrier", e?.message || "Erreur inconnue.");
+    }
+  }, []);
 
   if (loading) {
     return (
@@ -629,7 +744,7 @@ Participants: ${participantCount}`;
                 <Icon name="information-circle-outline" size={16} color="#F59E0B" />
                 <View style={styles.noteContent}>
                   <Text style={styles.noteTxt}>{note}</Text>
-                  <Text style={styles.noteLinkTxt}>Ouvrir le lieu dans Google Maps</Text>
+                  <Text style={styles.noteLinkTxt}>Ouvrir dans Google Maps</Text>
                 </View>
                 <Icon name="open-outline" size={16} color="#F59E0B" />
               </TouchableOpacity>
@@ -639,6 +754,26 @@ Participants: ${participantCount}`;
                 <Text style={styles.noteTxt}>{note}</Text>
               </View>
             )
+          )}
+
+          {isUpcoming && upcoming && (
+            <TouchableOpacity
+              style={styles.calBtn}
+              activeOpacity={0.9}
+              onPress={() =>
+                Alert.alert(
+                  "Ajouter au calendrier",
+                  "Ajouter ce match a votre calendrier ?",
+                  [
+                    { text: "Annuler", style: "cancel" },
+                    { text: "Oui", onPress: () => addMatchToCalendar(upcoming) },
+                  ]
+                )
+              }
+            >
+              <Icon name="calendar-outline" size={16} color="#fff" />
+              <Text style={styles.calBtnTxt}>Ajouter au calendrier</Text>
+            </TouchableOpacity>
           )}
 
           {!!played?.boxscore_link && (
@@ -686,22 +821,8 @@ Participants: ${participantCount}`;
 
           <TouchableOpacity style={styles.sharePrimary} activeOpacity={0.9} onPress={openNativeShare}>
             <Icon name="share-social-outline" size={18} color="#111827" />
-            <Text style={styles.sharePrimaryTxt}>Partager (natif)</Text>
+            <Text style={styles.sharePrimaryTxt}>Partager</Text>
           </TouchableOpacity>
-
-          <View style={styles.shareGrid}>
-            {shareTargets.map((s) => (
-              <TouchableOpacity
-                key={s.key}
-                style={[styles.shareBtn, { borderColor: `${s.color}88` }]}
-                activeOpacity={0.9}
-                onPress={() => openUrl(s.url)}
-              >
-                <Icon name={s.icon} size={16} color={s.color} />
-                <Text style={styles.shareBtnTxt}>{s.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -799,6 +920,20 @@ const styles = StyleSheet.create({
   noteContent: { flex: 1 },
   noteTxt: { color: "#E5E7EB", fontSize: 13.5, fontWeight: "600", flex: 1 },
   noteLinkTxt: { color: "#FDBA74", fontSize: 12, fontWeight: "800", marginTop: 6 },
+  calBtn: {
+    marginTop: 12,
+    borderRadius: 10,
+    backgroundColor: "#0F2746",
+    borderWidth: 1,
+    borderColor: "rgba(96,165,250,0.7)",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  calBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 13.5 },
   boxscoreBtn: {
     marginTop: 12,
     borderRadius: 10,
@@ -862,16 +997,4 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   sharePrimaryTxt: { color: "#111827", fontWeight: "900", fontSize: 13.5 },
-  shareGrid: { marginTop: 10, flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  shareBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    backgroundColor: "#141821",
-  },
-  shareBtnTxt: { color: "#e5e7eb", fontWeight: "800", fontSize: 12.5 },
 });

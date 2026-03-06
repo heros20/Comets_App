@@ -20,6 +20,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import Icon from "react-native-vector-icons/Ionicons";
 
 import { DrawerMenuButton } from "../../components/navigation/AppDrawer";
+import { parseNewsCategoriesWithFallback } from "../../lib/newsCategories";
 import { markArticleRead } from "../../lib/newsNotifyStore";
 
 const logoComets = require("../../assets/images/iconComets.png");
@@ -45,14 +46,6 @@ const CATEGORY_META = [
 type CatValue = (typeof CATEGORY_META)[number]["value"];
 type CategoryFilter = CatValue | "ALL";
 type SeasonFilter = "ALL" | string;
-
-function normalizeKey(input: string) {
-  return input
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[\s\-_]/g, "")
-    .toUpperCase();
-}
 
 function stripHtml(html: string) {
   return (html || "").replace(/(<([^>]+)>)/gi, "").replace(/&nbsp;/g, " ");
@@ -91,21 +84,14 @@ function getSeasonYear(str: string) {
   return m >= 8 ? y + 1 : y;
 }
 
-function getCatValue(article: Article): CatValue {
-  const raw = (article.category || "").trim();
-  if (raw) {
-    const key = normalizeKey(raw);
-    if (key === "12U") return "12U";
-    if (key === "15U") return "15U";
-    if (key === "SENIOR" || key === "SENIORS") return "Seniors";
-    return "Autres";
-  }
+function readCategory(article: Article): string {
+  const raw = article.category ?? "";
+  return typeof raw === "string" ? raw : String(raw ?? "");
+}
 
-  const titleKey = normalizeKey(article.title || "");
-  if (titleKey.startsWith("12U")) return "12U";
-  if (titleKey.startsWith("15U")) return "15U";
-  if (titleKey.startsWith("SENIOR") || titleKey.startsWith("SENIORS")) return "Seniors";
-  return "Autres";
+function getArticleCategories(article: Article): CatValue[] {
+  const parsed = parseNewsCategoriesWithFallback(readCategory(article), article.title);
+  return parsed.length ? parsed : ["Autres"];
 }
 
 function catMetaOf(value: CatValue) {
@@ -150,11 +136,10 @@ const ArticleCard = React.memo(function ArticleCard({ article, index, onOpen }: 
     setIsReady(!article.image_url);
   }, [article.image_url]);
 
-  const cat = getCatValue(article);
-  const meta = catMetaOf(cat);
-  const badgeBg = withAlpha(meta.color, 0.14);
-  const badgeBorder = withAlpha(meta.color, 0.42);
-  const cardBorder = withAlpha(meta.color, 0.3);
+  const categories = getArticleCategories(article);
+  const metas = categories.map((cat) => catMetaOf(cat));
+  const primaryMeta = metas[0];
+  const cardBorder = withAlpha(primaryMeta.color, 0.3);
 
   return (
     <TouchableOpacity
@@ -191,9 +176,14 @@ const ArticleCard = React.memo(function ArticleCard({ article, index, onOpen }: 
 
       <View style={styles.cardBody}>
         <View style={styles.chipsRow}>
-          <View style={[styles.chip, { backgroundColor: badgeBg, borderColor: badgeBorder }]}>
-            <Text style={[styles.chipTxt, { color: meta.color }]}>{meta.label}</Text>
-          </View>
+          {metas.map((meta) => (
+            <View
+              key={`${article.id}-${meta.value}`}
+              style={[styles.chip, { backgroundColor: withAlpha(meta.color, 0.14), borderColor: withAlpha(meta.color, 0.42) }]}
+            >
+              <Text style={[styles.chipTxt, { color: meta.color }]}>{meta.label}</Text>
+            </View>
+          ))}
 
           <View style={[styles.chip, styles.dateChip]}>
             <Icon name="time-outline" size={13} color="#CBD5E1" />
@@ -205,7 +195,7 @@ const ArticleCard = React.memo(function ArticleCard({ article, index, onOpen }: 
         <Text style={styles.cardExcerpt}>{excerpt(article.content, 180)}</Text>
 
         <View style={styles.readRow}>
-          <Text style={styles.readBtnTxt}>Lire l'article</Text>
+          <Text style={styles.readBtnTxt}>Lire l&apos;article</Text>
           <Icon name="chevron-forward" size={18} color="#111827" />
         </View>
       </View>
@@ -301,9 +291,9 @@ export default function ActusScreen() {
   const filtered = useMemo(() => {
     return articles.filter((a) => {
       const season = String(getSeasonYear(a.created_at));
-      const category = getCatValue(a);
+      const categories = getArticleCategories(a);
       const seasonOk = selectedSeason === "ALL" ? true : season === selectedSeason;
-      const catOk = selectedCat === "ALL" ? true : category === selectedCat;
+      const catOk = selectedCat === "ALL" ? true : categories.includes(selectedCat);
       return seasonOk && catOk;
     });
   }, [articles, selectedSeason, selectedCat]);

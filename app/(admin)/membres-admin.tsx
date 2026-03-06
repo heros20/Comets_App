@@ -62,8 +62,10 @@ const catRank = (c?: string | null) =>
   c && c in CAT_ORDER ? CAT_ORDER[c] : 9999;
 
 export default function MembresAdminScreen() {
-  const { isAdmin } = useAdmin();
+  const { isAdmin, admin } = useAdmin();
   const insets = useSafeAreaInsets();
+  const adminSessionToken =
+    typeof admin?.session_token === "string" ? admin.session_token.trim() : "";
 
   const [members, setMembers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -143,7 +145,10 @@ export default function MembresAdminScreen() {
         "https://les-comets-honfleur.vercel.app/api/admin/members",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(adminSessionToken ? { "x-admin-session": adminSessionToken } : {}),
+          },
           credentials: "include",
           body: JSON.stringify({
             email,
@@ -204,7 +209,10 @@ export default function MembresAdminScreen() {
         "https://les-comets-honfleur.vercel.app/api/admin/members",
         {
           method: "DELETE",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(adminSessionToken ? { "x-admin-session": adminSessionToken } : {}),
+          },
           credentials: "include",
           body: JSON.stringify({ id }),
         }

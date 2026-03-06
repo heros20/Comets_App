@@ -1,7 +1,6 @@
 // app/screens/AdminActusScreen.tsx
 "use client";
 
-import { Picker } from "@react-native-picker/picker";
 import * as ExpoFileSystem from "expo-file-system/legacy";
 import * as ExpoImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
@@ -23,25 +22,30 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 import { AdminHero } from "../../components/admin/AdminHero";
+import {
+  type NewsCategory,
+  newsCategoryIncludes,
+  parseNewsCategoriesWithFallback,
+  serializeNewsCategories,
+} from "../../lib/newsCategories";
 import { useAdmin } from "../../contexts/AdminContext";
 import { supabase } from "../../supabase";
 import { useNavigation } from "@react-navigation/native";
 
 
 /** Catégories disponibles */
-const CATEGORY_META = [
-  { value: "", label: "Aucune", color: "#6b7280" },
+const CATEGORY_META: { value: NewsCategory; label: string; color: string }[] = [
   { value: "12U", label: "12U", color: "#10b981" },
   { value: "15U", label: "15U", color: "#3b82f6" },
-  { value: "Séniors", label: "Séniors", color: "#f59e0b" },
+  { value: "Seniors", label: "Séniors", color: "#f59e0b" },
 ];
 
 /** Onglets de filtre */
-const CATEGORY_TABS = [
+const CATEGORY_TABS: { value: "__ALL__" | NewsCategory; label: string }[] = [
   { value: "__ALL__", label: "Toutes" },
   { value: "12U", label: "12U" },
   { value: "15U", label: "15U" },
-  { value: "Séniors", label: "Séniors" },
+  { value: "Seniors", label: "Séniors" },
 ];
 
 const initialForm = { title: "", content: "", image_url: "" };
@@ -122,24 +126,32 @@ export default function AdminActusScreen() {
   const { isAdmin } = useAdmin();
   const [newsList, setNewsList] = useState<any[]>([]);
   const [form, setForm] = useState(initialForm);
-  const [categoryValue, setCategoryValue] = useState<string>(""); // champ du formulaire
+  const [categoryValues, setCategoryValues] = useState<NewsCategory[]>([]);
   const [formError, setFormError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<string>("__ALL__"); // filtre de la liste
+  const [activeTab, setActiveTab] = useState<"__ALL__" | NewsCategory>("__ALL__");
   const navigation = useNavigation();
 
-  const fetchNews = useCallback(async (filter: string) => {
+  const fetchNews = useCallback(async (filter: "__ALL__" | NewsCategory) => {
     setLoading(true);
     try {
-      let q = supabase.from("news").select("*").order("created_at", { ascending: false });
-      if (filter !== "__ALL__") {
-        q = q.eq("category", filter);
-      }
-      const { data, error } = await q;
+      const { data, error } = await supabase
+        .from("news")
+        .select("*")
+        .order("created_at", { ascending: false });
       if (error) throw error;
-      setNewsList(data || []);
+
+      const rows = data || [];
+      if (filter === "__ALL__") {
+        setNewsList(rows);
+        return;
+      }
+
+      setNewsList(
+        rows.filter((item) => newsCategoryIncludes(item?.category, item?.title, filter))
+      );
     } catch (e) {
       console.warn("fetchNews error:", e);
       setNewsList([]);
@@ -213,6 +225,8 @@ export default function AdminActusScreen() {
     setLoading(true);
 
     try {
+      const serializedCategories = serializeNewsCategories(categoryValues);
+
       if (editingId) {
         const { error } = await supabase
           .from("news")
@@ -220,7 +234,7 @@ export default function AdminActusScreen() {
             title: form.title.trim(),
             content: form.content.trim(),
             image_url: form.image_url || null,
-            category: categoryValue,
+            category: serializedCategories || null,
           })
           .eq("id", editingId);
         if (error) throw error;
@@ -232,7 +246,7 @@ export default function AdminActusScreen() {
               title: form.title.trim(),
               content: form.content.trim(),
               image_url: form.image_url || null,
-              category: categoryValue,
+              category: serializedCategories || null,
             },
           ])
           .select("id")
@@ -251,7 +265,7 @@ export default function AdminActusScreen() {
       }
 
       setForm(initialForm);
-      setCategoryValue("");
+      setCategoryValues([]);
       setEditingId(null);
       fetchNews(activeTab); // refresh avec filtre courant
     } catch (e: any) {
@@ -267,7 +281,7 @@ export default function AdminActusScreen() {
       content: news.content || "",
       image_url: news.image_url || "",
     });
-    setCategoryValue(news.category || "");
+    setCategoryValues(parseNewsCategoriesWithFallback(news.category, news.title));
     setEditingId(news.id);
     setFormError("");
   }
@@ -284,7 +298,7 @@ export default function AdminActusScreen() {
           if (editingId === id) {
             setEditingId(null);
             setForm(initialForm);
-            setCategoryValue("");
+            setCategoryValues([]);
           }
         },
       },
@@ -293,7 +307,7 @@ export default function AdminActusScreen() {
 
   function handleCancelEdit() {
     setForm(initialForm);
-    setCategoryValue("");
+    setCategoryValues([]);
     setEditingId(null);
     setFormError("");
   }
@@ -332,32 +346,65 @@ export default function AdminActusScreen() {
             ) : null}
 
             {/* Catégorie + Titre */}
-            <View style={{ flexDirection: "row", gap: 10, marginBottom: 10 }}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.label}>Catégorie</Text>
-                <View style={styles.pickerWrap}>
-                  <Picker
-                    selectedValue={categoryValue}
-                    onValueChange={(val) => setCategoryValue(val)}
-                    style={{ color: "#B36A00" }}
+            <View style={{ marginBottom: 10 }}>
+              <View style={styles.categoriesHeaderRow}>
+                <Text style={styles.label}>Catégories</Text>
+                {!!categoryValues.length && (
+                  <TouchableOpacity
+                    onPress={() => setCategoryValues([])}
+                    activeOpacity={0.9}
+                    style={styles.clearCategoryBtn}
                   >
-                    {CATEGORY_META.map((cat, idx) => (
-                      <Picker.Item key={idx} label={cat.label} value={cat.value} />
-                    ))}
-                  </Picker>
-                </View>
+                    <Text style={styles.clearCategoryBtnTxt}>Aucune</Text>
+                  </TouchableOpacity>
+                )}
               </View>
 
-              <View style={{ flex: 2 }}>
-                <Text style={styles.label}>Titre</Text>
-                <TextInput
-                  style={styles.input}
-                  value={form.title}
-                  onChangeText={(t) => setForm((f) => ({ ...f, title: t }))}
-                  placeholder="Titre de l’article"
-                  placeholderTextColor="#9aa0ae"
-                />
+              <View style={styles.categoryRow}>
+                {CATEGORY_META.map((cat) => {
+                  const selected = categoryValues.includes(cat.value);
+                  return (
+                    <TouchableOpacity
+                      key={cat.value}
+                      onPress={() =>
+                        setCategoryValues((prev) =>
+                          prev.includes(cat.value)
+                            ? prev.filter((value) => value !== cat.value)
+                            : [...prev, cat.value]
+                        )
+                      }
+                      activeOpacity={0.9}
+                      style={[
+                        styles.categoryBtn,
+                        selected && {
+                          borderColor: cat.color,
+                          backgroundColor: `${cat.color}22`,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.categoryBtnTxt,
+                          selected && { color: cat.color },
+                        ]}
+                      >
+                        {cat.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
+            </View>
+
+            <View style={{ marginBottom: 10 }}>
+              <Text style={styles.label}>Titre</Text>
+              <TextInput
+                style={styles.input}
+                value={form.title}
+                onChangeText={(t) => setForm((f) => ({ ...f, title: t }))}
+                placeholder="Titre de l’article"
+                placeholderTextColor="#9aa0ae"
+              />
             </View>
 
             {/* Contenu */}
@@ -449,25 +496,49 @@ export default function AdminActusScreen() {
             </Text>
           ) : (
             newsList.map((item) => {
-              const catMeta = CATEGORY_META.find((c) => c.value === item.category);
+              const categories = parseNewsCategoriesWithFallback(item.category, item.title);
+              const rawCategory = String(item.category ?? "").trim();
+
               return (
                 <View key={item.id} style={styles.card}>
                   {!!item.image_url && (
                     <RNImage source={{ uri: item.image_url }} style={styles.cardImg} resizeMode="cover" />
                   )}
-                  {item.category ? (
-                    <View
-                      style={[
-                        styles.badge,
-                        {
-                          borderColor: catMeta?.color ?? "#9aa0ae",
-                          backgroundColor: (catMeta?.color ?? "#9aa0ae") + "22",
-                        },
-                      ]}
-                    >
-                      <Text style={[styles.badgeTxt, { color: catMeta?.color ?? "#9aa0ae" }]}>
-                        {catMeta?.label || item.category}
-                      </Text>
+                  {(categories.length > 0 || rawCategory) ? (
+                    <View style={styles.badgesRow}>
+                      {categories.map((cat) => {
+                        const catMeta = CATEGORY_META.find((c) => c.value === cat);
+                        return (
+                          <View
+                            key={`${item.id}-${cat}`}
+                            style={[
+                              styles.badge,
+                              {
+                                borderColor: catMeta?.color ?? "#9aa0ae",
+                                backgroundColor: (catMeta?.color ?? "#9aa0ae") + "22",
+                              },
+                            ]}
+                          >
+                            <Text style={[styles.badgeTxt, { color: catMeta?.color ?? "#9aa0ae" }]}>
+                              {catMeta?.label || cat}
+                            </Text>
+                          </View>
+                        );
+                      })}
+
+                      {!categories.length && !!rawCategory && (
+                        <View
+                          style={[
+                            styles.badge,
+                            {
+                              borderColor: "#9aa0ae",
+                              backgroundColor: "#9aa0ae22",
+                            },
+                          ]}
+                        >
+                          <Text style={[styles.badgeTxt, { color: "#9aa0ae" }]}>{rawCategory}</Text>
+                        </View>
+                      )}
                     </View>
                   ) : null}
                   <Text style={styles.cardTitleTxt}>{item.title}</Text>
@@ -539,12 +610,41 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   label: { color: "#c7cad1", fontWeight: "800", marginBottom: 6 },
-  pickerWrap: {
-    backgroundColor: "#fff",
-    borderColor: "#FFD197",
-    borderWidth: 1.2,
-    borderRadius: 12,
-    overflow: "hidden",
+  categoriesHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  clearCategoryBtn: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#3b4154",
+    backgroundColor: "#1b1e27",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  clearCategoryBtnTxt: {
+    color: "#cfd3db",
+    fontWeight: "800",
+    fontSize: 12.5,
+  },
+  categoryRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  categoryBtn: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#3b4154",
+    backgroundColor: "#1b1e27",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  categoryBtnTxt: {
+    color: "#cfd3db",
+    fontWeight: "900",
+    fontSize: 13,
   },
   input: {
     backgroundColor: "#fff",
@@ -576,13 +676,18 @@ const styles = StyleSheet.create({
   cardBodyTxt: { color: "#e6e7eb", fontSize: 15, marginTop: 4 },
   cardDateTxt: { color: "#9aa0ae", fontSize: 12.5, marginTop: 6 },
 
+  badgesRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 6,
+  },
   badge: {
     alignSelf: "flex-start",
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 999,
     borderWidth: 1,
-    marginBottom: 6,
   },
   badgeTxt: { fontWeight: "900", fontSize: 12.5 },
 
@@ -605,4 +710,6 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
 });
+
+
 

@@ -11,6 +11,7 @@ import {
   ScrollView,
   StatusBar,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -28,6 +29,7 @@ export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [debug, setDebug] = useState("");
@@ -73,7 +75,7 @@ export default function LoginScreen() {
       const result = await Promise.race<
         { ok: boolean; timeout: false } | { ok: false; timeout: true }
       >([
-        login(cleanEmail, password).then((ok) => ({ ok, timeout: false as const })),
+        login(cleanEmail, password, rememberMe).then((ok) => ({ ok, timeout: false as const })),
         new Promise<{ ok: false; timeout: true }>((resolve) =>
           setTimeout(() => resolve({ ok: false, timeout: true }), 12000),
         ),
@@ -96,7 +98,7 @@ export default function LoginScreen() {
     } finally {
       setLoading(false);
     }
-  }, [email, login, password, router, shake]);
+  }, [email, login, password, rememberMe, router, shake]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -232,6 +234,20 @@ export default function LoginScreen() {
             >
               <Text style={styles.forgotBtnText}>Mot de passe oublié ?</Text>
             </TouchableOpacity>
+
+            <View style={styles.rememberRow}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Icon name="time-outline" size={16} color="#FFB366" />
+                <Text style={styles.rememberText}>Rester connecte sur cet appareil</Text>
+              </View>
+              <Switch
+                value={rememberMe}
+                onValueChange={setRememberMe}
+                disabled={loading}
+                thumbColor={rememberMe ? "#FF9E3A" : "#8D96A8"}
+                trackColor={{ false: "rgba(255,255,255,0.2)", true: "rgba(255,158,58,0.38)" }}
+              />
+            </View>
 
             {!!error && (
               <View style={styles.errorCard}>
@@ -447,6 +463,24 @@ const styles = StyleSheet.create({
   },
   forgotBtnText: {
     color: "#FFB366",
+    fontSize: 12.5,
+    fontWeight: "700",
+  },
+  rememberRow: {
+    marginTop: -2,
+    marginBottom: 10,
+    minHeight: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  rememberText: {
+    color: "#D9DFEA",
     fontSize: 12.5,
     fontWeight: "700",
   },

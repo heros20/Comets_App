@@ -398,6 +398,7 @@ type ParticipatePOST = { ok: boolean; participations: number };
 type Eligibility = {
   eligible: boolean | null;
   category: "Seniors" | "15U" | "12U" | null;
+  source: "players" | "young_players" | "family_members" | null;
 };
 type FamilyMember = {
   id: string;
@@ -728,6 +729,7 @@ export default function MatchsScreen() {
   const [elig, setElig] = useState<Eligibility>({
     eligible: null,
     category: null,
+    source: null,
   });
 
   // Comptes d'inscrits par match (cache locale)
@@ -878,7 +880,7 @@ export default function MatchsScreen() {
   useFocusEffect(
     useCallback(() => {
       if (!admin?.id) {
-        setElig({ eligible: null, category: null });
+        setElig({ eligible: null, category: null, source: null });
         setJoined({});
         setDeclined({});
         setFamilyMembers([]);
@@ -892,7 +894,7 @@ export default function MatchsScreen() {
   useEffect(() => {
     (async () => {
       if (!admin?.id) {
-        setElig({ eligible: null, category: null });
+        setElig({ eligible: null, category: null, source: null });
         setJoined({});
         setDeclined({});
         return;
@@ -906,9 +908,13 @@ export default function MatchsScreen() {
           source: "players" | "young_players" | "family_members" | null;
           category: "Seniors" | "15U" | "12U" | null;
         }>(`/api/matches/eligibility?adminId=${admin.id}${memberQuery}`);
-        setElig({ eligible: !!res.eligible, category: res.category ?? null });
+        setElig({
+          eligible: !!res.eligible,
+          category: res.category ?? null,
+          source: res.source ?? null,
+        });
       } catch {
-        setElig({ eligible: false, category: null });
+        setElig({ eligible: false, category: null, source: null });
       }
       await hydrateJoined();
     })();
@@ -1012,7 +1018,7 @@ export default function MatchsScreen() {
       const baseDate = parseDateValue(match.date) ?? new Date(match.date);
       baseDate.setHours(11, 0, 0, 0);
       const endDate = new Date(baseDate.getTime() + 6 * 60 * 60 * 1000);
-      await Calendar.createEventAsync(defaultCal.id, {
+      const eventId = await Calendar.createEventAsync(defaultCal.id, {
         title: `Match ${match.categorie ? `[${match.categorie}] ` : ""}Comets vs ${resolveTeamName(match.opponent) || match.opponent}`,
         startDate: baseDate,
         endDate,
@@ -1023,7 +1029,11 @@ export default function MatchsScreen() {
         alarms: [{ relativeOffset: -60 }],
         timeZone: "Europe/Paris",
       });
-      Alert.alert("Ajouté !", "Le match a été ajouté dans votre calendrier.");
+      try {
+        await Calendar.openEventInCalendarAsync({ id: eventId });
+      } catch {
+        Alert.alert("Ajoute !", "Le match a ete ajoute dans votre calendrier.");
+      }
     } catch (e: any) {
       Alert.alert("Erreur calendrier", e?.message || "Erreur inconnue.");
     }
@@ -1178,7 +1188,11 @@ export default function MatchsScreen() {
     const catOk =
       !item.categorie ||
       (elig.category !== null && item.categorie === elig.category);
-    const canRespond = elig.eligible === true && catOk;
+    const isMemberSelfNonPlayer =
+      admin?.role === "member" &&
+      selectedMember?.relation === "self" &&
+      elig.source === "family_members";
+    const canRespond = elig.eligible === true && catOk && !isMemberSelfNonPlayer;
     const showParticipationControls = !!admin?.id && canRespond;
     const joinDisabled = isJoined || isPosting || !canRespond;
     const leaveDisabled = isDeclined || isPosting || !canRespond;

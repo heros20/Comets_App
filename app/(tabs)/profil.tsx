@@ -3,6 +3,7 @@
 
 import { useFocusEffect } from "@react-navigation/native";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import {
   Alert,
@@ -190,7 +191,8 @@ const POSITIONS = [
 const ALLOWED_POSITIONS = POSITIONS.map((p) => p.value);
 
 export default function ProfilPlayerScreen() {
-  const { logout, admin } = useAdmin();
+  const { logout, admin, isLoading: isAuthLoading } = useAdmin();
+  const router = useRouter();
 
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
 
@@ -228,6 +230,7 @@ export default function ProfilPlayerScreen() {
 
   // Refetch sur focus (évite profil vide après inactivité)
   const lastFetchRef = useRef<number>(0);
+  const logoutInFlightRef = useRef(false);
 
   const ensureSession = useCallback(async () => {
     // Assure une session valide (evite profil vide si token perime)
@@ -245,12 +248,27 @@ export default function ProfilPlayerScreen() {
     return session?.access_token || null;
   }, []);
 
+  const withSessionHeader = useCallback(
+    (headers: Record<string, string>) => {
+      const out = { ...headers };
+      const sessionToken =
+        typeof admin?.session_token === "string" ? admin.session_token.trim() : "";
+      if (sessionToken) {
+        out["x-admin-session"] = sessionToken;
+      }
+      return out;
+    },
+    [admin?.session_token]
+  );
+
   const refreshFamilyMembers = useCallback(async () => {
     try {
       const token = await ensureSession();
-      const headers: Record<string, string> = token
-        ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
-        : { "Content-Type": "application/json" };
+      const headers = withSessionHeader(
+        token
+          ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+          : { "Content-Type": "application/json" }
+      );
 
       const res = await fetch("https://les-comets-honfleur.vercel.app/api/family/members", {
         headers,
@@ -263,16 +281,18 @@ export default function ProfilPlayerScreen() {
       }
     } catch {}
     setFamilyMembers([]);
-  }, [ensureSession]);
+  }, [ensureSession, withSessionHeader]);
 
   const fetchAll = useCallback(async (initial = false) => {
     if (initial) setLoading(true);
     try {
       const token = await ensureSession();
 
-      const headers: Record<string, string> = token
-        ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
-        : { "Content-Type": "application/json" };
+      const headers = withSessionHeader(
+        token
+          ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+          : { "Content-Type": "application/json" }
+      );
 
       const requestInit: RequestInit = { headers, credentials: "include" };
 
@@ -351,11 +371,20 @@ export default function ProfilPlayerScreen() {
     admin?.last_name,
     admin?.participations,
     ensureSession,
+    withSessionHeader,
   ]);
 
   useEffect(() => {
     fetchAll(true);
   }, [fetchAll]);
+
+  useEffect(() => {
+    if (isAuthLoading) return;
+    if (admin) return;
+    requestAnimationFrame(() => {
+      router.replace("/");
+    });
+  }, [admin, isAuthLoading, router]);
 
   useFocusEffect(
     useCallback(() => {
@@ -484,9 +513,11 @@ export default function ProfilPlayerScreen() {
 
     try {
       const token = await ensureSession();
-      const headers: Record<string, string> = token
-        ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
-        : { "Content-Type": "application/json" };
+      const headers = withSessionHeader(
+        token
+          ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+          : { "Content-Type": "application/json" }
+      );
 
       const res = await fetch("https://les-comets-honfleur.vercel.app/api/family/members", {
         method: "POST",
@@ -522,7 +553,9 @@ export default function ProfilPlayerScreen() {
       setFamilyMessage("");
       try {
         const token = await ensureSession();
-        const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+        const headers = withSessionHeader(
+          token ? { Authorization: `Bearer ${token}` } : {}
+        );
 
         const res = await fetch(
           `https://les-comets-honfleur.vercel.app/api/family/members/${encodeURIComponent(member.id)}`,
@@ -546,7 +579,7 @@ export default function ProfilPlayerScreen() {
         setUnlinkingChildId(null);
       }
     },
-    [ensureSession, refreshFamilyMembers]
+    [ensureSession, refreshFamilyMembers, withSessionHeader]
   );
 
   const handleUnlinkChild = (member: FamilyMember) => {
@@ -599,8 +632,11 @@ export default function ProfilPlayerScreen() {
       }
 
       const token = await ensureSession();
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers.Authorization = `Bearer ${token}`;
+      const headers = withSessionHeader(
+        token
+          ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+          : { "Content-Type": "application/json" }
+      );
 
       const body: any = {
         first_name: form.first_name,
@@ -666,8 +702,11 @@ export default function ProfilPlayerScreen() {
       }
 
       const token = await ensureSession();
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers.Authorization = `Bearer ${token}`;
+      const headers = withSessionHeader(
+        token
+          ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+          : { "Content-Type": "application/json" }
+      );
 
       const res = await fetch("https://les-comets-honfleur.vercel.app/api/me", {
         method: "PATCH",
@@ -713,6 +752,31 @@ export default function ProfilPlayerScreen() {
     });
   };
 
+  const handleLogout = () => {
+    Alert.alert(
+      "Déconnexion",
+      "Souhaites-tu te déconnecter de ton compte sur cet appareil ?",
+      [
+        { text: "Annuler", style: "cancel" },
+        {
+          text: "Se déconnecter",
+          style: "destructive",
+          onPress: async () => {
+            if (logoutInFlightRef.current) return;
+            logoutInFlightRef.current = true;
+            try {
+              await logout();
+            } catch {
+              Alert.alert("Erreur", "Impossible de se déconnecter pour le moment.");
+            } finally {
+              logoutInFlightRef.current = false;
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const handleDelete = async () => {
     Alert.alert(
       "Supprimer le compte",
@@ -723,13 +787,20 @@ export default function ProfilPlayerScreen() {
           text: "Supprimer",
           style: "destructive",
           onPress: async () => {
+            if (logoutInFlightRef.current) return;
+            logoutInFlightRef.current = true;
             try {
               const token = await ensureSession();
-              const headers: Record<string, string> = {};
-              if (token) headers.Authorization = `Bearer ${token}`;
+              const headers = withSessionHeader(
+                token ? { Authorization: `Bearer ${token}` } : {}
+              );
               await fetch("https://les-comets-honfleur.vercel.app/api/me", { method: "DELETE", headers, credentials: "include" });
             } catch {}
-            logout();
+            try {
+              await logout();
+            } finally {
+              logoutInFlightRef.current = false;
+            }
           },
         },
       ]
@@ -814,6 +885,13 @@ const handleDownloadMajeur = () =>
   downloadLocalPdf(DOSSIER_MAJEUR, "dossier_majeur_les_comets.pdf");
 
   if (loading && !showSlowLoading)
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: "#18181C" }}>
+        <StatusBar barStyle="light-content" />
+      </SafeAreaView>
+    );
+
+  if (!isAuthLoading && !admin)
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: "#18181C" }}>
         <StatusBar barStyle="light-content" />
@@ -995,7 +1073,7 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
                     <Text style={styles.progressHelp}>
                       {badge.nextAt === null
                         ? "Palier max atteint"
-                        : `Prochain titre ? ${badge.nextAt} participations`}
+                        : `Prochain titre dans ${badge.nextAt} participations`}
                     </Text>
                   </View>
 
@@ -1011,7 +1089,7 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
                         onPress={() => Linking.openURL(ffbsLink!)}
                         activeOpacity={0.9}
                       >
-                        <Text style={styles.statLinkTxt}>Voir mes stats FFBS ?</Text>
+                        <Text style={styles.statLinkTxt}>Voir mes stats FFBS</Text>
                       </TouchableOpacity>
                     ) : null}
                   </View>
@@ -1048,12 +1126,12 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
             <View style={styles.card}>
               {hasCotisation() ? (
                 <View style={styles.cotisationOk}>
-                  <Text style={styles.cotisationText}>Cotisation payee</Text>
+                  <Text style={styles.cotisationText}>Cotisation payée</Text>
                 </View>
               ) : (
                 <>
                   <View style={styles.cotisationKo}>
-                    <Text style={styles.cotisationText}>Cotisation non payee</Text>
+                    <Text style={styles.cotisationText}>Cotisation non payée</Text>
                   </View>
                   <TouchableOpacity
                     style={styles.payBtn}
@@ -1095,17 +1173,17 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
               )}
             </View>
 
-            {/* Comptes enfants lies */}
+            {/* Comptes enfants liés */}
             <View style={styles.card}>
               <View style={styles.familyHeaderRow}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.sectionTitle}>Comptes enfants lies</Text>
+                  <Text style={styles.sectionTitle}>Comptes enfants liés</Text>
                   <Text style={styles.familySubtitle}>
-                    Liez vos enfants depuis la base jeunes joueurs pour gerer matchs et cotisations.
+                    Liez vos enfants depuis la base jeunes joueurs pour gérer matchs et cotisations.
                   </Text>
                 </View>
                 <View style={styles.familyCountBadge}>
-                  <Text style={styles.familyCountText}>{childMembers.length} lie(s)</Text>
+                  <Text style={styles.familyCountText}>{childMembers.length} lié(s)</Text>
                 </View>
               </View>
 
@@ -1125,7 +1203,7 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
                         {tab}
                       </Text>
                       <Text style={[styles.familyTabMeta, active && styles.familyTabMetaActive]}>
-                        {childCountsByTab[tab]} lie(s) - {availableCountsByTab[tab]} a lier
+                        {childCountsByTab[tab]} lié(s) - {availableCountsByTab[tab]} a lier
                       </Text>
                     </TouchableOpacity>
                   );
@@ -1168,7 +1246,7 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
 
               {youngPlayers.length > 0 && availableYoungPlayers.length === 0 && (
                 <Text style={styles.familyHint}>
-                  Tous les jeunes joueurs disponibles sont deja lies a ce compte.
+                  Tous les jeunes joueurs disponibles sont deja liés a ce compte.
                 </Text>
               )}
               {availableYoungPlayers.length > 0 && visibleAvailableYoungPlayers.length === 0 && (
@@ -1179,10 +1257,10 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
 
               <View style={{ marginTop: 12, gap: 8 }}>
                 {childMembers.length === 0 ? (
-                  <Text style={styles.familyEmptyText}>Aucun enfant lie pour le moment.</Text>
+                  <Text style={styles.familyEmptyText}>Aucun enfant lié pour le moment.</Text>
                 ) : visibleChildMembers.length === 0 ? (
                   <Text style={styles.familyEmptyText}>
-                    Aucun enfant lie dans l onglet {activeYouthTab}.
+                    Aucun enfant lié dans l onglet {activeYouthTab}.
                   </Text>
                 ) : (
                   visibleChildMembers.map((member) => {
@@ -1381,7 +1459,7 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
             <View style={styles.headerModern}>
               <Text style={styles.headerTitle}>Sécurité du compte</Text>
               <Text style={styles.headerSubtitle}>
-                Modifie ton mot de passe et gère la suppression du compte.
+                Modifie ton mot de passe, déconnecte-toi et gère la suppression du compte.
               </Text>
             </View>
 
@@ -1462,15 +1540,24 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
               <TouchableOpacity
                 style={[
                   styles.btn,
-                  styles.btnSave,
-                  (saving || (passwordEdit && (password !== passwordConfirm || !oldPassword))) && styles.btnDisabled,
+                  styles.btnPasswordAction,
+                  !passwordEdit && styles.btnPasswordActionIdle,
+                  (saving || (passwordEdit && (password !== passwordConfirm || !oldPassword || !password))) &&
+                    styles.btnDisabled,
                 ]}
-                onPress={handleChangePassword}
-                disabled={saving || (passwordEdit && (password !== passwordConfirm || !oldPassword))}
+                onPress={passwordEdit ? handleChangePassword : () => setPasswordEdit(true)}
+                disabled={saving || (passwordEdit && (password !== passwordConfirm || !oldPassword || !password))}
               >
-                <Text style={styles.btnSaveText}>
-                  {passwordEdit ? "Mettre à jour le mot de passe" : "Rien à sauvegarder"}
-                </Text>
+                <View style={styles.btnPasswordContent}>
+                  <Icon
+                    name={passwordEdit ? "shield-checkmark-outline" : "create-outline"}
+                    size={18}
+                    color={passwordEdit ? "#0f1014" : "#FFE9D1"}
+                  />
+                  <Text style={[styles.btnPasswordText, !passwordEdit && styles.btnPasswordTextIdle]}>
+                    {passwordEdit ? "Mettre à jour le mot de passe" : "Activer la modification"}
+                  </Text>
+                </View>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1489,6 +1576,11 @@ const Tab = ({ id, label, icon }: { id: TabKey; label: string; icon: string }) =
                 <Text style={styles.btnGhostText}>Annuler</Text>
               </TouchableOpacity>
             </View>
+
+            <TouchableOpacity style={styles.btnLogout} onPress={handleLogout} activeOpacity={0.9}>
+              <Icon name="log-out-outline" size={18} color="#FFD6AB" />
+              <Text style={styles.btnLogoutText}>Se déconnecter</Text>
+            </TouchableOpacity>
 
             {/* Suppression de compte */}
             <TouchableOpacity style={styles.btnDangerOutline} onPress={handleDelete}>
@@ -2038,6 +2130,55 @@ const styles = StyleSheet.create({
 
   btnDisabled: { opacity: 0.6 },
 
+  btnPasswordAction: {
+    backgroundColor: "#FF8200",
+    borderWidth: 1,
+    borderColor: "#FFB366",
+    shadowColor: "#FF8200",
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  btnPasswordActionIdle: {
+    backgroundColor: "rgba(255,130,0,0.16)",
+    borderColor: "rgba(255,130,0,0.48)",
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  btnPasswordContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  btnPasswordText: {
+    color: "#0f1014",
+    fontWeight: "900",
+    fontSize: 15,
+    letterSpacing: 0.2,
+  },
+  btnPasswordTextIdle: {
+    color: "#FFE9D1",
+  },
+
+  btnLogout: {
+    marginTop: 12,
+    minHeight: 46,
+    borderRadius: 12,
+    borderWidth: 1.2,
+    borderColor: "rgba(255,130,0,0.5)",
+    backgroundColor: "rgba(255,130,0,0.14)",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  btnLogoutText: {
+    color: "#FFD6AB",
+    fontWeight: "900",
+    fontSize: 14.5,
+  },
+
   btnDangerOutline: {
     marginTop: 12,
     paddingVertical: 12,
@@ -2048,6 +2189,8 @@ const styles = StyleSheet.create({
   },
   btnDangerOutlineText: { color: "#ff6b6b", fontWeight: "900" },
 });
+
+
 
 
 

@@ -69,6 +69,15 @@ const MODULES: AdminModule[] = [
     domain: "Contenu",
   },
   {
+    id: "comments-moderation",
+    title: "Moderation commentaires",
+    subtitle: "Tri par article",
+    icon: "chatbubbles-outline",
+    route: "/comments-moderation",
+    tone: "#EF4444",
+    domain: "Contenu",
+  },
+  {
     id: "gallery",
     title: "Galerie",
     subtitle: "Ajout et suppression",
