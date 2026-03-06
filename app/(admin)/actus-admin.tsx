@@ -131,6 +131,7 @@ export default function AdminActusScreen() {
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
   const [activeTab, setActiveTab] = useState<"__ALL__" | NewsCategory>("__ALL__");
   const navigation = useNavigation();
 
@@ -174,9 +175,8 @@ export default function AdminActusScreen() {
 
       const result = await ExpoImagePicker.launchImageLibraryAsync({
         mediaTypes: ExpoImagePicker.MediaTypeOptions.Images,
-        quality: 0.8,
-        allowsEditing: true,
-        aspect: [4, 3],
+        quality: 0.9,
+        allowsEditing: false,
       });
       if (result.canceled || !result.assets?.[0]?.uri) return;
 
@@ -267,6 +267,7 @@ export default function AdminActusScreen() {
       setForm(initialForm);
       setCategoryValues([]);
       setEditingId(null);
+      setShowPreview(false);
       fetchNews(activeTab); // refresh avec filtre courant
     } catch (e: any) {
       Alert.alert("Erreur", e?.message || "Erreur lors de l’enregistrement");
@@ -309,8 +310,20 @@ export default function AdminActusScreen() {
     setForm(initialForm);
     setCategoryValues([]);
     setEditingId(null);
+    setShowPreview(false);
     setFormError("");
   }
+
+  const previewCategories: (NewsCategory | "Autres")[] = categoryValues.length
+    ? [...categoryValues]
+    : ["Autres"];
+  const previewTitle = form.title.trim() || "Titre de l article";
+  const previewBody = form.content.trim() || "Le contenu de l article apparaitra ici.";
+  const previewDate = new Date().toLocaleDateString("fr-FR", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
 
   if (!isAdmin) {
     return (
@@ -438,13 +451,24 @@ export default function AdminActusScreen() {
                 <RNImage
                   source={{ uri: form.image_url }}
                   style={styles.preview}
-                  resizeMode="cover"
+                  resizeMode="contain"
                 />
               )}
             </View>
 
             {/* Actions */}
-            <View style={{ flexDirection: "row", gap: 10, marginTop: 14 }}>
+            <View style={{ flexDirection: "row", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+              <TouchableOpacity
+                style={styles.previewBtn}
+                onPress={() => setShowPreview((prev) => !prev)}
+                disabled={loading}
+              >
+                <Icon name="eye-outline" size={16} color="#FFD9B0" />
+                <Text style={styles.previewBtnTxt}>
+                  {showPreview ? "Masquer apercu" : "Previsualiser"}
+                </Text>
+              </TouchableOpacity>
+
               <TouchableOpacity
                 style={styles.primaryBtn}
                 onPress={handleSubmit}
@@ -462,6 +486,57 @@ export default function AdminActusScreen() {
                 </TouchableOpacity>
               )}
             </View>
+
+            {showPreview && (
+              <View style={styles.previewCardWrap}>
+                <Text style={styles.previewTitle}>Apercu Actu Detail</Text>
+
+                <View style={styles.previewBadgesRow}>
+                  {previewCategories.map((cat) => {
+                    const meta = CATEGORY_META.find((c) => c.value === cat);
+                    const color = meta?.color ?? "#FF8200";
+                    const label = meta?.label ?? "Autres";
+                    return (
+                      <View
+                        key={`preview-${cat}`}
+                        style={[
+                          styles.badge,
+                          { borderColor: color, backgroundColor: `${color}22` },
+                        ]}
+                      >
+                        <Text style={[styles.badgeTxt, { color }]}>{label}</Text>
+                      </View>
+                    );
+                  })}
+                  <View style={styles.previewDateChip}>
+                    <Icon name="time-outline" size={13} color="#CBD5E1" />
+                    <Text style={styles.previewDateTxt}>{previewDate}</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.previewHeadline}>
+                  {previewTitle}
+                </Text>
+
+                {!!form.image_url ? (
+                  <View style={styles.previewImageWrap}>
+                    <RNImage
+                      source={{ uri: form.image_url }}
+                      style={styles.previewImage}
+                      resizeMode="cover"
+                    />
+                  </View>
+                ) : (
+                  <View style={styles.previewEmptyImg}>
+                    <Text style={styles.previewEmptyImgTxt}>Aucune image selectionnee.</Text>
+                  </View>
+                )}
+
+                <Text style={styles.previewBody}>
+                  {previewBody}
+                </Text>
+              </View>
+            )}
           </View>
 
           {/* ===== Onglets de filtre (DÉPLACÉS sous le bloc édition) ===== */}
@@ -502,7 +577,7 @@ export default function AdminActusScreen() {
               return (
                 <View key={item.id} style={styles.card}>
                   {!!item.image_url && (
-                    <RNImage source={{ uri: item.image_url }} style={styles.cardImg} resizeMode="cover" />
+                    <RNImage source={{ uri: item.image_url }} style={styles.cardImg} resizeMode="contain" />
                   )}
                   {(categories.length > 0 || rawCategory) ? (
                     <View style={styles.badgesRow}>
@@ -668,10 +743,119 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
   },
   primaryBtnTxt: { color: "#fff", fontWeight: "900", fontSize: 14.5 },
+  previewBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#1B2331",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#3A465C",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    alignSelf: "flex-start",
+  },
+  previewBtnTxt: {
+    color: "#FFD9B0",
+    fontWeight: "900",
+    fontSize: 14,
+  },
   secondaryBtn: { backgroundColor: "#BBB", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 10 },
   secondaryBtnTxt: { color: "#111", fontWeight: "900", fontSize: 14.5 },
 
-  cardImg: { width: "100%", height: 140, borderRadius: 10, backgroundColor: "#22262f", marginBottom: 10 },
+  previewCardWrap: {
+    marginTop: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,130,0,0.24)",
+    backgroundColor: "#151C29",
+    padding: 14,
+  },
+  previewTitle: {
+    color: "#FFB366",
+    fontSize: 13,
+    fontWeight: "900",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    marginBottom: 6,
+  },
+  previewBadgesRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 8,
+    alignItems: "center",
+  },
+  previewDateChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  previewDateTxt: {
+    color: "#CBD5E1",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  previewImageWrap: {
+    width: "100%",
+    height: 214,
+    borderRadius: 16,
+    backgroundColor: "#101623",
+    position: "relative",
+    overflow: "hidden",
+    marginBottom: 10,
+  },
+  previewImage: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  previewEmptyImg: {
+    width: "100%",
+    height: 214,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: "rgba(255,255,255,0.25)",
+    backgroundColor: "rgba(8,12,20,0.45)",
+    marginBottom: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  previewEmptyImgTxt: {
+    color: "#CBD5E1",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  previewHeadline: {
+    marginTop: 6,
+    marginBottom: 10,
+    color: "#EAEEF7",
+    fontSize: 22,
+    lineHeight: 27,
+    fontWeight: "900",
+  },
+  previewBody: {
+    color: "#CFD3DB",
+    fontSize: 15,
+    lineHeight: 22,
+  },
+
+  cardImg: {
+    width: "100%",
+    height: 160,
+    borderRadius: 10,
+    backgroundColor: "#0F141F",
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "#2E3A50",
+  },
   cardTitleTxt: { color: "#eaeef7", fontWeight: "900", fontSize: 17, marginTop: 2 },
   cardBodyTxt: { color: "#e6e7eb", fontSize: 15, marginTop: 4 },
   cardDateTxt: { color: "#9aa0ae", fontSize: 12.5, marginTop: 6 },
@@ -704,10 +888,12 @@ const styles = StyleSheet.create({
   // Preview image
   preview: {
     width: "100%",
-    height: 160,
+    height: 200,
     borderRadius: 12,
-    backgroundColor: "#22262f",
+    backgroundColor: "#0F141F",
     marginTop: 10,
+    borderWidth: 1,
+    borderColor: "#2E3A50",
   },
 });
 
